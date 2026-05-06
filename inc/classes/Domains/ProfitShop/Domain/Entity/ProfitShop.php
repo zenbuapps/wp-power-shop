@@ -25,6 +25,13 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ShopMode;
 final class ProfitShop {
 
 	/**
+	 * 合法的 status 列表
+	 *
+	 * @var string[]
+	 */
+	private const VALID_STATUSES = [ 'publish', 'draft' ];
+
+	/**
 	 * 商品集合（內部以 product_id => OverrideItem 對照表，用於 O(1) lookup 與唯一性檢查）
 	 *
 	 * @var array<int, OverrideItem>
@@ -37,13 +44,14 @@ final class ProfitShop {
 	 * @param int                  $id              賣場 ID
 	 * @param string               $title           賣場標題
 	 * @param string               $slug            賣場 slug
-	 * @param string               $status          賣場狀態（publish/draft/...）
+	 * @param string               $status          賣場狀態（publish/draft）
 	 * @param ShopMode             $mode            賣場模式（page/shortcode）
 	 * @param int                  $partner_term_id 對應的合作夥伴 term_id
 	 * @param ProfitRate           $rate            分潤比例
 	 * @param OverrideItem[]       $items           初始商品集合
 	 * @param array<string, mixed> $settings        其它設定
 	 *
+	 * @throws \DomainException     當 status 不在合法列表時拋出
 	 * @throws ProductAlreadyInShop 當初始 items 中含有重複 product_id 時拋出
 	 */
 	public function __construct(
@@ -57,9 +65,26 @@ final class ProfitShop {
 		array $items = [],
 		public array $settings = []
 	) {
+		self::assert_valid_status( $status );
+
 		$this->items = [];
 		foreach ( $items as $item ) {
 			$this->add_item( $item );
+		}
+	}
+
+	/**
+	 * 驗證 status 是否為合法值
+	 *
+	 * @param string $status 候選 status 字串
+	 *
+	 * @throws \DomainException 當 status 不在 VALID_STATUSES 列表中時拋出
+	 *
+	 * @return void
+	 */
+	private static function assert_valid_status( string $status ): void {
+		if ( ! in_array( $status, self::VALID_STATUSES, true ) ) {
+			throw new \DomainException( "不合法的 ProfitShop status：{$status}" );
 		}
 	}
 

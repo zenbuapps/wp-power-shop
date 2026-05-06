@@ -243,6 +243,26 @@ final class ProfitShopTest extends TestCase {
 	}
 
 	/**
+	 * 建構時 status 不在合法列表（publish/draft）應拋出 \DomainException
+	 *
+	 * @group error
+	 */
+	public function test_construct_throws_when_status_is_invalid(): void {
+		$this->expectException( \DomainException::class );
+		new ProfitShop(
+			id: 1,
+			title: '夏季活動賣場',
+			slug: 'summer-sale',
+			status: 'invalid_xxx',
+			mode: ShopMode::PAGE,
+			partner_term_id: 5,
+			rate: new ProfitRate( 10 ),
+			items: [],
+			settings: [],
+		);
+	}
+
+	/**
 	 * 建立一個基本 ProfitShop（給多個測試共用）
 	 *
 	 * @return ProfitShop

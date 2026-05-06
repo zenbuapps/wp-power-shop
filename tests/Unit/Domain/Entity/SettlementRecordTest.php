@@ -262,6 +262,24 @@ final class SettlementRecordTest extends TestCase {
 	}
 
 	/**
+	 * 建構時 status 不在合法列表（pending/paid/refunded/cancelled）應拋出 \DomainException
+	 *
+	 * @group error
+	 */
+	public function test_construct_throws_when_status_is_invalid(): void {
+		$this->expectException( \DomainException::class );
+		new SettlementRecord(
+			order_item_id: 5678,
+			shop_id: 100,
+			partner_term_id: 5,
+			rate: new ProfitRate( 10 ),
+			actual_price: '799.00',
+			profit_amount: '79.90',
+			status: 'invalid_xxx',
+		);
+	}
+
+	/**
 	 * 建立一個 pending 狀態的 SettlementRecord（給多個測試共用）
 	 *
 	 * @return SettlementRecord

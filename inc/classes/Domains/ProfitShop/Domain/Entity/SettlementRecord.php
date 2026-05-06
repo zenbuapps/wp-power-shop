@@ -32,6 +32,18 @@ final class SettlementRecord {
 	public const STATUS_CANCELLED = 'cancelled';
 
 	/**
+	 * 合法的 status 列表
+	 *
+	 * @var string[]
+	 */
+	private const VALID_STATUSES = [
+		self::STATUS_PENDING,
+		self::STATUS_PAID,
+		self::STATUS_REFUNDED,
+		self::STATUS_CANCELLED,
+	];
+
+	/**
 	 * 建構子
 	 *
 	 * @param int        $order_item_id        訂單品項 ID（line item）
@@ -44,6 +56,8 @@ final class SettlementRecord {
 	 * @param int|null   $settled_at           結算時間（unix timestamp）
 	 * @param int|null   $settled_by           結算操作者 user_id
 	 * @param bool       $is_refund_after_paid 是否為已付款後退款
+	 *
+	 * @throws \DomainException 當 status 不在合法列表時拋出
 	 */
 	public function __construct(
 		public readonly int $order_item_id,
@@ -57,6 +71,22 @@ final class SettlementRecord {
 		public ?int $settled_by = null,
 		public bool $is_refund_after_paid = false
 	) {
+		self::assert_valid_status( $status );
+	}
+
+	/**
+	 * 驗證 status 是否為合法值
+	 *
+	 * @param string $status 候選 status 字串
+	 *
+	 * @throws \DomainException 當 status 不在 VALID_STATUSES 列表中時拋出
+	 *
+	 * @return void
+	 */
+	private static function assert_valid_status( string $status ): void {
+		if ( ! in_array( $status, self::VALID_STATUSES, true ) ) {
+			throw new \DomainException( "不合法的 SettlementRecord status：{$status}" );
+		}
 	}
 
 	/**

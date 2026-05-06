@@ -2,8 +2,8 @@
 /**
  * PartnerSlug ValueObject 單元測試
  *
- * 對應規格：specs/2026-05-06-profit-shop-design.md §2.4、§6.11、§8.5
- * 規範：長度 1–60；regex /^[a-z0-9_-]+$/；保留字黑名單；違反拋 InvalidArgumentException
+ * 對應規格：specs/2026-05-06-profit-shop-design.md §2.4、§6.11、§7.3、§8.5
+ * 規範：長度 1–60；regex /^[a-z0-9_-]+$/；保留字黑名單；違反拋 InvalidPartnerSlug（extends \DomainException）
  *
  * 預期紅燈：Class J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PartnerSlug not found
  */
@@ -12,7 +12,7 @@ declare( strict_types=1 );
 
 namespace Tests\Unit\Domain\ValueObject;
 
-use InvalidArgumentException;
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\InvalidPartnerSlug;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PartnerSlug;
 use PHPUnit\Framework\TestCase;
 
@@ -47,7 +47,7 @@ final class PartnerSlugTest extends TestCase {
 	 * @group error
 	 */
 	public function test_construct_throws_when_empty(): void {
-		$this->expectException( InvalidArgumentException::class );
+		$this->expectException( InvalidPartnerSlug::class );
 		new PartnerSlug( '' );
 	}
 
@@ -57,7 +57,7 @@ final class PartnerSlugTest extends TestCase {
 	 * @group error
 	 */
 	public function test_construct_throws_when_too_long_61_chars(): void {
-		$this->expectException( InvalidArgumentException::class );
+		$this->expectException( InvalidPartnerSlug::class );
 		new PartnerSlug( str_repeat( 'a', 61 ) );
 	}
 
@@ -67,7 +67,7 @@ final class PartnerSlugTest extends TestCase {
 	 * @group security
 	 */
 	public function test_construct_throws_when_contains_uppercase(): void {
-		$this->expectException( InvalidArgumentException::class );
+		$this->expectException( InvalidPartnerSlug::class );
 		new PartnerSlug( 'Jerry' );
 	}
 
@@ -77,7 +77,7 @@ final class PartnerSlugTest extends TestCase {
 	 * @group security
 	 */
 	public function test_construct_throws_when_contains_chinese(): void {
-		$this->expectException( InvalidArgumentException::class );
+		$this->expectException( InvalidPartnerSlug::class );
 		new PartnerSlug( '老師' );
 	}
 
@@ -87,7 +87,7 @@ final class PartnerSlugTest extends TestCase {
 	 * @group security
 	 */
 	public function test_construct_throws_when_contains_emoji(): void {
-		$this->expectException( InvalidArgumentException::class );
+		$this->expectException( InvalidPartnerSlug::class );
 		new PartnerSlug( 'jerry🎉' );
 	}
 
@@ -97,7 +97,7 @@ final class PartnerSlugTest extends TestCase {
 	 * @group security
 	 */
 	public function test_construct_throws_when_reserved_admin(): void {
-		$this->expectException( InvalidArgumentException::class );
+		$this->expectException( InvalidPartnerSlug::class );
 		new PartnerSlug( 'admin' );
 	}
 
@@ -107,7 +107,7 @@ final class PartnerSlugTest extends TestCase {
 	 * @group security
 	 */
 	public function test_construct_throws_when_reserved_root(): void {
-		$this->expectException( InvalidArgumentException::class );
+		$this->expectException( InvalidPartnerSlug::class );
 		new PartnerSlug( 'root' );
 	}
 
@@ -117,7 +117,7 @@ final class PartnerSlugTest extends TestCase {
 	 * @group security
 	 */
 	public function test_construct_throws_when_reserved_profit_report(): void {
-		$this->expectException( InvalidArgumentException::class );
+		$this->expectException( InvalidPartnerSlug::class );
 		new PartnerSlug( 'profit-report' );
 	}
 
