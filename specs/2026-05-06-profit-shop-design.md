@@ -1316,6 +1316,27 @@ jobs:
 
 ---
 
+## 10.1 Plan 階段補充裁決（2026-05-06）
+
+以下決策於 brainstorming 通過後、進 plan 階段時由 planner 提出 spec 缺口、用戶（老大）裁決：
+
+| # | 議題 | 決議 | 影響章節 |
+|---|------|------|----------|
+| Q1 | Refine `dataProvider` key | **沿用 `'power-shop'`**，新端點路徑 hardcode `/wp-json/power-shop/v2/...`（與既有 dashboard 端點一致） | §3.1, §4 |
+| Q2 | UI 上 parent override 改了，已 override 的 variation 是否連動？ | **不連動**。已覆寫的 variation 維持自己的 override；要重置須點「重置 variation override」按鈕 | §3.4 |
+| Q3 | Page 模式 CPT 的 Block Editor 啟用 | **強制 `use_block_editor_for_post_type=true`**。Elementor 由其外掛接管，不另寫 fallback。Classic Editor 環境視同 Block Editor（`gutenberg_can_edit_post_type` 預設行為） | §1, §3 |
+| Q4 | CSV export 編碼與分隔符 | **UTF-8 with BOM、逗號分隔**（中文 Excel 開啟標準作法）。`fputcsv()` 第一行寫 `"\xEF\xBB\xBF"` BOM | §6.9, §3.5 |
+| Q5 | Partner Token TTL 設 0 行為 | **min clamp 60 秒**（後台設定 UI 限制 ≥ 60，伺服器端再驗一次） | §6.3 |
+| Q6 | `_partner_settled_log` 累積膨脹 | **v1 不處理**，列入 v2 範疇（settled log 歸檔機制） | §10 |
+
+> Q6 已加到 §10 v2+ 規劃清單。
+
+## 10.2 v2+ 補項
+
+- `_partner_settled_log` 累積太大時的歸檔機制（按年滾入 `_partner_settled_log_archive_{year}`）
+
+---
+
 ## 11. 待 plan 階段細化
 
 - DI / 依賴注入策略（poor man's DI 細節）
