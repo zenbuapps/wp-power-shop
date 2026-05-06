@@ -1,0 +1,101 @@
+name: PHPUnit Matrix
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'inc/**'
+      - 'tests/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'phpunit.xml.dist'
+      - '.github/workflows/phpunit-matrix.yml'
+      - '.wp-env.json'
+  workflow_dispatch:
+
+concurrency:
+  group: phpunit-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phpunit:
+    name: PHPUnit (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # HPOS 關閉：傳統 post meta 模式，跑全套核心 group，排除 hpos 與 subscription 專屬測試
+          - scenario: with-wc-classic
+            wc: '1'
+            hpos: '0'
+            subscriptions: '0'
+            phpunit_args: '--group smoke --group happy --group error --group edge --group security --exclude-group hpos,subscription'
+          # HPOS 開啟：新版自訂訂單表，跑全套核心 group，排除 classic-only 與 subscription 專屬測試
+          - scenario: with-wc-hpos
+            wc: '1'
+            hpos: '1'
+            subscriptions: '0'
+            phpunit_args: '--group smoke --group happy --group error --group edge --group security --exclude-group classic-only,subscription'
+          # Subscriptions：付費外掛無法在 CI 安裝，僅驗證 skipIfSubscriptionsMissing 正確 skip
+          - scenario: with-subscriptions
+            wc: '1'
+            hpos: '1'
+            subscriptions: '1'
+            phpunit_args: '--group subscription'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Pre-create uploads directory
+        run: |
+          mkdir -p wp-content/uploads
+          chmod -R 777 wp-content/uploads
+
+      - name: Start wp-env
+        run: |
+          for i in 1 2 3; do
+            npx wp-env start && break || sleep 10
+          done
+
+      - name: Install WooCommerce (if needed)
+        if: matrix.wc == '1'
+        run: |
+          npx wp-env run tests-cli -- bash -c "wp plugin install woocommerce --activate --allow-root || true"
+
+      - name: Enable HPOS
+        if: matrix.hpos == '1'
+        run: |
+          npx wp-env run tests-cli -- bash -c "wp option update woocommerce_custom_orders_table_enabled yes"
+
+      - name: Install WC Subscriptions (if needed)
+        if: matrix.subscriptions == '1'
+        run: |
+          echo "WC Subscriptions 是付費外掛，本 CI 僅驗證 skipIfSubscriptionsMissing 正確 skip"
+          echo "實際 subscription 測試應於有授權的環境執行"
+
+      - name: Run PHPUnit
+        run: |
+          npx wp-env run tests-cli -- bash -c "cd /var/www/html/wp-content/plugins/power-shop && vendor/bin/phpunit ${{ matrix.phpunit_args }} --testdox --colors=never"
+
+      - name: Stop wp-env
+        if: always()
+        run: npx wp-env stop || true

@@ -18,7 +18,7 @@
 		"wp-content/uploads": "./tests/e2e/.uploads"
 	},
 	"lifecycleScripts": {
-		"afterStart": "npx wp-env run cli --env-cwd=wp-content/plugins/power-shop -- composer install --no-interaction 2>/dev/null || true; npx wp-env run cli -- wp option update blogname PowerShopE2E && npx wp-env run cli -- wp option update blogdescription E2ETesting && npx wp-env run cli -- wp rewrite structure /%postname%/ && npx wp-env run cli -- wp rewrite flush && npx wp-env run cli -- wp language core install zh_TW && npx wp-env run cli -- wp site switch-language zh_TW"
+		"afterStart": "npx wp-env run cli --env-cwd=wp-content/plugins/power-shop -- composer install --no-interaction 2>/dev/null || true; npx wp-env run cli -- wp option update blogname PowerShopE2E && npx wp-env run cli -- wp option update blogdescription E2ETesting && npx wp-env run cli -- wp rewrite structure /%postname%/ && npx wp-env run cli -- wp rewrite flush && npx wp-env run cli -- wp language core install zh_TW && npx wp-env run cli -- wp site switch-language zh_TW && npx wp-env run cli -- wp option update woocommerce_custom_orders_table_enabled no && npx wp-env run tests-cli -- wp option update woocommerce_custom_orders_table_enabled no"
 	},
 	"testsPort": 8900
 }
