@@ -46,6 +46,30 @@ pnpm release:major
 8. **Always** use `WP::sanitize_text_field_deep()` on all REST request params
 9. **Don't** remove the Enqueue Guard (`General::in_url(['page=power-shop'])`)
 
+## Profit Shop Domain（v1 開發中）
+
+> 全新「分潤賣場」系統，與舊版 legacy 一頁商店共存。設計文件：`specs/2026-05-06-profit-shop-design.md`
+
+**Phase 1（Domain 層）已完工**（commits `cbd0522` / `8359918`）：
+
+| 層 | 內容 | 路徑 |
+|----|------|------|
+| ValueObject | PriceOverride / ProfitRate / PartnerSlug / InflatedCount / ShopMode | `inc/classes/Domains/ProfitShop/Domain/ValueObject/` |
+| Entity | OverrideItem / ProfitShop / SettlementRecord | `inc/classes/Domains/ProfitShop/Domain/Entity/` |
+| Service | PriceCalculator（fallback chain）/ ProfitCalculator / RoundingStrategy interface | `inc/classes/Domains/ProfitShop/Domain/Service/` |
+| Repository Interface | ProfitShopRepository / PartnerRepository / SettlementRepository | `inc/classes/Domains/ProfitShop/Domain/Repository/` |
+| DTO | ProductSnapshot / PartnerSnapshot / FilterCriteria | `inc/classes/Domains/ProfitShop/Domain/Snapshot\|Criteria/` |
+| Exception | 8 個 final class extends \DomainException | `inc/classes/Domains/ProfitShop/Domain/Exception/` |
+
+**Domain 層約定**：
+- 純 PHP，不依賴 WP / WC 函式（DDD 純度）
+- 無 SingletonTrait（Domain 不該單例化）
+- Repository 是 Interface，實作在 Phase 2 Infrastructure 層
+- 例外統一 `extends \DomainException`，Application 層可一網打盡
+- Test：`tests/Unit/Domain/**/*.php`（純 PHP，不啟 WP）
+
+**Phase 2 預告**：Infrastructure 層（CptProfitShopRepository、CartHooks、OrderHooks 等）+ Application UseCase + REST V2Api。
+
 ## Specs
 
 Complete specs live in `specs/` using AIBDD Discovery multi-view architecture. See `specs/README.md` for the full index.

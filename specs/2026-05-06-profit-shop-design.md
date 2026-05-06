@@ -1328,6 +1328,7 @@ jobs:
 | Q4 | CSV export 編碼與分隔符 | **UTF-8 with BOM、逗號分隔**（中文 Excel 開啟標準作法）。`fputcsv()` 第一行寫 `"\xEF\xBB\xBF"` BOM | §6.9, §3.5 |
 | Q5 | Partner Token TTL 設 0 行為 | **min clamp 60 秒**（後台設定 UI 限制 ≥ 60，伺服器端再驗一次） | §6.3 |
 | Q6 | `_partner_settled_log` 累積膨脹 | **v1 不處理**，列入 v2 範疇（settled log 歸檔機制） | §10 |
+| Q7 | PartnerSlug 例外類型 | **InvalidPartnerSlug extends \DomainException**（Reviewer M-1 修正）。Domain 層所有例外統一走 DomainException 體系，便於 Application 層 catch | §6.7, §7.3 |
 
 > Q6 已加到 §10 v2+ 規劃清單。
 
@@ -1338,6 +1339,8 @@ jobs:
 ---
 
 ## 11. 待 plan 階段細化
+
+> **進度更新（2026-05-06）**：Phase 1 Domain 層已完工。詳見 commits `cbd0522` + `8359918` + Major fix。Test：111 tests passing。
 
 - DI / 依賴注入策略（poor man's DI 細節）
 - 各 UseCase 的具體 method signature
