@@ -39,7 +39,7 @@ final class ProfitShopTest extends TestCase {
 		$this->assertSame( 1, $shop->id );
 		$this->assertSame( '夏季活動賣場', $shop->title );
 		$this->assertSame( 'summer-sale', $shop->slug );
-		$this->assertSame( 'publish', $shop->status );
+		$this->assertSame( 'publish', $shop->status() );
 		$this->assertSame( ShopMode::PAGE, $shop->mode );
 		$this->assertSame( 5, $shop->partner_term_id );
 		$this->assertSame( 10, $shop->rate->value() );

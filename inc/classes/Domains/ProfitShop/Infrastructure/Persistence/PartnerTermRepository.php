@@ -168,6 +168,32 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 	}
 
 	/**
+	 * 刪除 Partner（含 termmeta cleanup）
+	 *
+	 * 注意：wp_delete_term() 會連帶刪除該 term 的所有 termmeta（WP 內建行為），
+	 * 因此不需手動清理 _partner_password / _partner_contact_email 等 meta。
+	 *
+	 * @param int $term_id Partner term ID
+	 *
+	 * @throws PersistenceFailure 當 wp_delete_term 失敗或 term 不存在時拋出
+	 *
+	 * @return void
+	 */
+	public function delete( int $term_id ): void {
+		$result = \wp_delete_term( $term_id, TaxonomyRegistrar::TAXONOMY );
+
+		if ( \is_wp_error( $result ) ) {
+			throw new PersistenceFailure(
+				"刪除分潤夥伴 term {$term_id} 失敗：" . $result->get_error_message()
+			);
+		}
+
+		if ( false === $result || 0 === $result ) {
+			throw new PersistenceFailure( "分潤夥伴 term {$term_id} 不存在或刪除失敗" );
+		}
+	}
+
+	/**
 	 * 從 WP_Term + termmeta 重建 PartnerSnapshot
 	 *
 	 * @param \WP_Term $term 來源 term

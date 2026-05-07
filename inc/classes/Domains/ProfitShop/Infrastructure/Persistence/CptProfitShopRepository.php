@@ -86,7 +86,7 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 			'post_type'   => CptRegistrar::POST_TYPE,
 			'post_title'  => $shop->title,
 			'post_name'   => $shop->slug,
-			'post_status' => $shop->status,
+			'post_status' => $shop->status(),
 		];
 
 		if ( 0 === $shop->id ) {

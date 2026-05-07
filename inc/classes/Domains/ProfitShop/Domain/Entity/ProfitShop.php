@@ -39,6 +39,16 @@ final class ProfitShop {
 	public array $items;
 
 	/**
+	 * 賣場狀態（publish/draft）
+	 *
+	 * 設為 protected 確保外部只能透過 change_status() mutator 變更，
+	 * 避免繞過 invariant 檢查直接寫入非法狀態。
+	 *
+	 * @var string
+	 */
+	protected string $status;
+
+	/**
 	 * 建構子
 	 *
 	 * @param int                  $id              賣場 ID
@@ -58,7 +68,7 @@ final class ProfitShop {
 		public readonly int $id,
 		public string $title,
 		public string $slug,
-		public string $status,
+		string $status,
 		public ShopMode $mode,
 		public int $partner_term_id,
 		public ProfitRate $rate,
@@ -66,11 +76,35 @@ final class ProfitShop {
 		public array $settings = []
 	) {
 		self::assert_valid_status( $status );
+		$this->status = $status;
 
 		$this->items = [];
 		foreach ( $items as $item ) {
 			$this->add_item( $item );
 		}
+	}
+
+	/**
+	 * 取得當前狀態
+	 *
+	 * @return string 當前 status 字串（'publish' | 'draft'）
+	 */
+	public function status(): string {
+		return $this->status;
+	}
+
+	/**
+	 * 變更狀態（publish ↔ draft）
+	 *
+	 * @param string $new_status 新狀態（必須為 VALID_STATUSES 之一）
+	 *
+	 * @throws \DomainException 當 new_status 不在合法列表時拋出
+	 *
+	 * @return void
+	 */
+	public function change_status( string $new_status ): void {
+		self::assert_valid_status( $new_status );
+		$this->status = $new_status;
 	}
 
 	/**

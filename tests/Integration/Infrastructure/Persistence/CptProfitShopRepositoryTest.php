@@ -294,15 +294,15 @@ final class CptProfitShopRepositoryTest extends TestCase {
 
 		$loaded = $this->repo->find( $id );
 		$this->assertNotNull( $loaded );
-		$this->assertSame( 'publish', $loaded->status );
+		$this->assertSame( 'publish', $loaded->status() );
 
-		// 切換到 draft（透過 Entity 的 unpublish() 或直接修改 status，視 Entity API）
-		$loaded->status = 'draft';
+		// 切換到 draft（透過 Entity 的 change_status() API，status 已改為 protected）
+		$loaded->change_status( 'draft' );
 		$this->repo->save( $loaded );
 
 		$reloaded = $this->repo->find( $id );
 		$this->assertNotNull( $reloaded );
-		$this->assertSame( 'draft', $reloaded->status, 'status 應切換為 draft' );
+		$this->assertSame( 'draft', $reloaded->status(), 'status 應切換為 draft' );
 
 		// 確認 meta 完整保留（rate / partner / items 不應因 status 切換而消失）
 		$this->assertSame( 20, $reloaded->rate->value() );

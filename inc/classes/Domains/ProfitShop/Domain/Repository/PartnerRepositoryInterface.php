@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace J7\PowerShop\Domains\ProfitShop\Domain\Repository;
 
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\PersistenceFailure;
 use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\PartnerSnapshot;
 
 /**
@@ -64,4 +65,18 @@ interface PartnerRepositoryInterface {
 	 * @return bool 密碼正確回傳 true
 	 */
 	public function verify_password( int $term_id, string $plain_password ): bool;
+
+	/**
+	 * 刪除 Partner（含 termmeta cleanup）
+	 *
+	 * 注意：呼叫端應先透過 is_in_use() 檢查，避免刪除仍綁定賣場的 Partner。
+	 * wp_delete_term 會自動清除所有 termmeta，無須額外處理。
+	 *
+	 * @param int $term_id Partner term ID
+	 *
+	 * @throws PersistenceFailure 當 wp_delete_term 失敗或 term 不存在時拋出
+	 *
+	 * @return void
+	 */
+	public function delete( int $term_id ): void;
 }
