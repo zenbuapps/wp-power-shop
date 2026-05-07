@@ -30,6 +30,9 @@ import {
 	ProductAttributes,
 	Summary,
 	OneShop,
+	ProfitShopList,
+	ProfitShopEdit,
+	ProfitShopCreate,
 } from '@/pages/admin'
 import { resources } from '@/resources'
 
@@ -119,6 +122,12 @@ function App() {
 						<Route path="marketing">
 							<Route index element={<ProductList />} />
 							<Route path="one-shop" element={<OneShop />} />
+						</Route>
+
+						<Route path="profit-shop">
+							<Route index element={<ProfitShopList />} />
+							<Route path="create" element={<ProfitShopCreate />} />
+							<Route path="edit/:id" element={<ProfitShopEdit />} />
 						</Route>
 
 						<Route path="analytics" element={<Analytics />} />

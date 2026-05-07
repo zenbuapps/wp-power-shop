@@ -6,6 +6,7 @@ import {
 	UserOutlined,
 	MailOutlined,
 	TagsOutlined,
+	ShopOutlined,
 } from '@ant-design/icons'
 import { ResourceProps } from '@refinedev/core'
 import { Tag } from 'antd'
@@ -122,6 +123,17 @@ export const resources: ResourceProps[] = [
 					</span>
 				</>
 			),
+		},
+	},
+	{
+		parentName: 'marketing',
+		name: 'profit-shop',
+		list: '/profit-shop',
+		create: '/profit-shop/create',
+		edit: '/profit-shop/edit/:id',
+		meta: {
+			label: '分潤賣場',
+			icon: <ShopOutlined />,
 		},
 	},
 	{
