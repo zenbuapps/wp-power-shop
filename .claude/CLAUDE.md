@@ -47,6 +47,7 @@ pnpm release:major
 9. **Don't** remove the Enqueue Guard (`General::in_url(['page=power-shop'])`)
 10. **Don't** 在 ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings 用 `useTable` / `useForm`（後端 `{code, data}` 與 antd-toolkit dataProvider shape 不相容）—— 用 `useCustom` / `useCustomMutation` 並明確指定 `dataProviderName: 'power-shop'`
 11. **Partner self-service portal** 是**獨立 SPA bundle**（mount 點 `#profit_partner_portal`，URL `/profit-report/{slug}/`），與 admin SPA 完全隔離。Auth 走 cookie + sessionStorage metadata（永不存 token）；不用 Refine / dataProvider，直接 axios + `useCustom`/`useCustomMutation`；不打包 admin（grep `App1` / `Refine` 0 命中為驗收）。
+12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**（**非 React**）。原因：customer-facing + SEO（自然流量重點）+ 不破壞 WC cart / checkout 既有流程。AddToCart 用 **query string `profit_shop_id`** + WC `woocommerce_add_cart_item_data` filter 在 cart_item_data 注入分潤標記，再交給 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -54,7 +55,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B 完工 → 下一步 Phase 4-C（賣場前台 + AddToCart 整合）
+**目前狀態**：Phase 4-A + 4-B + 4-C 完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端）
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -176,16 +177,33 @@ pnpm release:major
 - 不動 admin SPA 任何檔案 / 6 個 admin dataProvider 配置
 - pnpm build / lint / tsc baseline 維持，composer lint 全綠
 
-### Phase 4-C 預告（待辦）
+### Phase 4-C（賣場前台 + AddToCart 端到端整合）已完工（commits `2d6a76a` / `f813e07`）
 
-**下一階段：分潤賣場前台 + AddToCart 整合**
+| Batch | Commit | 範圍 | 檔案 |
+|-------|--------|------|------|
+| 4-C1 | `2d6a76a` | 賣場前台 PHP renderer + Theme 整合 template：URL `/profit-shop/{slug}/`（`RewriteRules::SHOP_QUERY_VAR='profit_shop_slug'` / `SHOP_REWRITE_PREFIX='profit-shop'` 常數，priority 'top'）+ `ProfitShopRenderer`（`template_redirect` priority 9，DI 注入 `ProfitShopRepositoryInterface`，draft 預覽走 `edit_post($shop->id)` 對特定 post ownership 檢查，二輪修 HIGH-1 從 `edit_posts`）+ `find_by_slug` 補上 Repository（雙保險 trash 過濾）+ `templates/profit-shop-front.php`（走 `get_header` / `get_footer`，與 partner portal 完全脫離 theme 不同；商品 grid + simple form / variable+grouped link 雙路徑 add-to-cart + WC `<del>` / `<ins>` 原價特價 + 全 escape）+ `<title>` / `<link rel='canonical'>` SEO meta + `remove_action wp_head rel_canonical / _wp_render_title_tag` 防雙 canonical / 雙 title | 7 檔（+433） |
+| 4-C2 | `f813e07` | AddToCart Hook + Cart UI 分潤標記：`Infrastructure/WooCommerce/AddToCartHook`（**priority 5，早於** Phase 3-D `CartPriceOverrideHook` priority 10）從 query string `profit_shop_id` 注入 cart_item_data；**三道閘門縱深防偽造**：(1) shop 存在 (2) `status='publish'` (3) `product_id ∈ shop->items()` O(1) lookup；只讀 `$_GET + $_POST`（**排除 `$_COOKIE`** 攻擊面，security M-1 修）；`ctype_digit` 純數字檢查（拒 `'01'` / `'+1'` / 浮點 / 負數）；short-circuit「上游已帶則 return」防 Phase 3-D IT regression；`is_admin && !wp_doing_ajax` 不掛 hook + `error_log` 過濾 `\r\n\t`。`CartItemMetaDisplay`（`woocommerce_get_item_data` filter，**一次涵蓋 mini-cart / cart page / checkout**，shop 已刪靜默不顯示但仍可結帳；URL 用 `RewriteRules::SHOP_REWRITE_PREFIX` DRY 統一來源，wordpress M-1 修；`target='_blank' rel='noopener'` 防 reverse tabnabbing）。`Loader.php` 註冊順序：4-C1 ProfitShopRenderer → 4-C2 AddToCartHook (5) → 3-D CartPriceOverrideHook (10) → CartItemMetaDisplay (999) | 3 檔（+308） |
+
+**Phase 4-C 完工要點**：
+- 端到端流程：customer 訪問 `/profit-shop/{slug}/` → 渲染商品 grid → 點加購（form action `home_url('/')` 或 permalink + `add_query_arg('profit_shop_id', ...)`） → WC add-to-cart → AddToCartHook (priority 5) 三閘門驗證並注入 cart_item_data → CartPriceOverrideHook (priority 10) 寫 4 筆 `_profit_*` meta + HMAC sign → CartItemMetaDisplay 顯示「來自賣場 XXX」 → CartPriceOverrideHook (priority 999) 結帳前驗章 + `set_price` → Order 完成 → `OrderItemSettlementRepository` 寫 partner 分潤紀錄
+- 4 大攻擊情境驗證：偽造 shop_id（find null → return unchanged）/ 偽造 product_id 不在 shop（product_in_shop 拒）/ 拿正版 shop 套未授權商品（product_in_shop 拒）/ cart session 後手動改（兩 filter 同 request 同步串接，無 race）
+- DRY 統一：所有 URL 前綴用 `RewriteRules::SHOP_REWRITE_PREFIX` 單一來源
+- composer lint 146/146 全綠；既有 4-A / 4-B / Phase 3-D / 3-E 完全 0 regression
+- 不引入新 npm / composer 套件
+
+### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 
 優先順序：
-1. **分潤賣場前台**：`/profit-shop/{slug}/` 路由顯示 partner 專屬商品列表（含 PriceCalculator fallback chain）
-2. **AddToCart 前端整合**：cart_item_data 注入 4 筆 `_profit_*` meta + signature 由後端簽發後夾帶（後端 CartPriceOverrideHook 已就緒）
+1. **regenerate-password 撤銷舊 token**（password_changed_at 比對機制部分已於 Phase 3-D Batch 2 落地；Partner 自助修密碼 endpoint 仍待）
+2. **Partner 自助修密碼**（需後端新 endpoint，Phase 4-B / 4-C 都不做）
 3. **'power-shop' dataProvider thin wrapper**（Phase 4-A1 自決踩坑紀錄遺留）：包 `{code, data}` 讓未來頁面能用 useTable / useForm
-4. **賣場前台技術選型 brainstorming**（PHP page template vs React）+ Cart UI 顯示分潤標記
-5. **Partner 自助修密碼**（需後端新 endpoint，Phase 4-B 不做）
+4. **賣場前台 SEO 強化**：`pre_get_document_title` filter（與 SEO plugin 整合，4-C1 m-3）/ Open Graph / structured data
+5. **賣場前台 IP-based rate-limit**（4-C1 security LOW-1，跨 `/profit-shop/*/` URL 防爬）
+6. **賣場前台快取效能**（4-C1 security LOW-3：publish 賣場對未登入者送對 CDN 友善 headers）
+7. **rate-limit 5/15min 改 3 次**（reviewer L-3，產品決策層）
+8. **token 三條讀取路徑收斂**（reviewer M-5，目前已 PHPDoc 化但未刪路徑）
+9. **賣場前台 inline style 抽 CSS file**（4-C1 m-10）+ `img loading='lazy'`（m-6）等 NIT 微優化
+10. **`ProfitShop::has_item(int): bool` Domain method**（4-C2 INFO-2 DDD 重構，目前由 AddToCartHook 自己 foreach）
 
 ### Reviewer 累積的「未來補強建議」（非 blocking）
 

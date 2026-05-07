@@ -99,6 +99,28 @@ Phase 3-E（slug 即時驗證，1 個）：
 - partner_token 從 `X-Partner-Token` / `Authorization: Bearer` / `Cookie` 取，驗證後寫入 `$request->_partner_term_id`（內部欄位前綴 `_` 避免被 sanitize）
 - Partner Reports callback **永不從 query string 讀 partner_term_id**（防範圍隔離繞過）
 
+**Profit Shop 前台 URL（非 REST，Phase 4-B + 4-C 對比）：**
+
+| URL pattern | Phase | 對象 | 渲染方式 | 說明 |
+|-------------|-------|------|----------|------|
+| `/profit-report/{slug}/` | 4-B | **partner-facing**（cookie auth） | 獨立 SPA bundle，PHP `PartnerPortalRenderer` 印獨立 HTML 骨架（**不走 theme**） | partner self-service portal（KPI / Trend / Settlements） |
+| `/profit-shop/{slug}/` | 4-C1 | **customer-facing**（unauthenticated） | PHP page template + `get_header` / `get_footer`（**走 theme**） | 賣場前台商品列表，給終端買家瀏覽下單 |
+
+兩條 URL 路線**完全不同**，不要混用渲染策略。query var：`profit_partner_report` vs `profit_shop_slug`，由 `RewriteRules` 同檔註冊但互斥。
+
+**AddToCart 整合（Phase 4-C2，非 REST endpoint，是 WC filter hook）：**
+
+加購商品需帶 `?profit_shop_id={id}` 才會啟用分潤定價：
+
+| 商品類型 | 帶法 |
+|----------|------|
+| simple product | template 內 `<form action="<?php echo esc_url( home_url( '/' ) ); ?>" method="post">` 放 `<input type="hidden" name="profit_shop_id" value="...">` 與 WC `add-to-cart` |
+| variable / grouped | template 用 `permalink + add_query_arg('profit_shop_id', $shop_id)` 連到單品頁，由 WC 既有變體選購流程帶入 |
+
+後端 `AddToCartHook`（priority 5）只讀 `$_GET + $_POST`（**不讀 `$_COOKIE`**），三道閘門驗證後注入 cart_item_data，再由 Phase 3-D `CartPriceOverrideHook`（priority 10 / 999）簽章與套價。詳細 hook 串聯流程見 `architecture.rule.md`「Add-to-Cart 端到端流程」。
+
+---
+
 **Partner Login IP 偵測信任邊界（Phase 3-D T-3 + reviewer M-1）**：
 - `LoginRateLimiter` per-IP 維度的 IP 來源為 `$_SERVER['REMOTE_ADDR']`，**不解析 `X-Forwarded-For`**（避免 header 偽造繞鎖）
 - 若部署在 reverse proxy 後方（Cloudflare / nginx LB / AWS ALB），`REMOTE_ADDR` 會是 proxy IP 而非真實客戶端 IP，造成同一 proxy 後方所有用戶共享同一 IP 計數

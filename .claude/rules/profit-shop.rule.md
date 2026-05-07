@@ -260,6 +260,8 @@ Phase 3-D + 3-E 新增測試：
 | Phase 4-B1（Partner portal Skeleton：PartnerPortalRenderer + Vite multi-entry + Auth + Login）| `bc3ea5c` |
 | Phase 4-B2（Partner portal Dashboard 殼：DateRangeFilter + KPI 4 卡 + LoadingScreen + ErrorBoundary）| `7e40969` |
 | Phase 4-B3（Partner portal Trend + Settlements + 收尾：echarts callback ref + apiClient baseURL + manifest fallback）| `23e76e9` |
+| Phase 4-C1（賣場前台 PHP renderer + Theme 整合 template：URL `/profit-shop/{slug}/` + `find_by_slug` + SEO meta）| `2d6a76a` |
+| Phase 4-C2（AddToCart Hook + Cart UI 分潤標記：priority 5 三閘門 + CartItemMetaDisplay + DRY `SHOP_REWRITE_PREFIX`）| `f813e07` |
 
 設計與決策來源：
 - `specs/2026-05-06-profit-shop-design.md`（含 Q1-Q6 plan 階段決策、§4 endpoint、§6.11 slug 衝突、§7 例外對映）
@@ -472,3 +474,117 @@ partner 在瀏覽器訪問 /profit-report/{slug}/
           → UseCase 從 caller 取（永不從 query string）
         → 裸 payload 回前端（不裹 {code, data}）
 ```
+
+### 12.8 賣場前台 + AddToCart 整合（Phase 4-C）
+
+賣場前台是給**終端買家**逛商品下單的 customer-facing 頁面，與 partner portal SPA（4-B）走完全不同的渲染路線。架構流程圖見 `architecture.rule.md`「賣場前台」與「Add-to-Cart 端到端流程」章節。
+
+#### URL 與渲染
+
+| 項 | 值 |
+|----|----|
+| URL | `/profit-shop/{slug}/`（Phase 4-C1 RewriteRules 註冊，priority `'top'`） |
+| 常數 | `RewriteRules::SHOP_QUERY_VAR = 'profit_shop_slug'` / `SHOP_REWRITE_PREFIX = 'profit-shop'` |
+| Query var | `profit_shop_slug = $slug`（雙保險 `(string) cast` + `sanitize_title`） |
+| PHP renderer | `Infrastructure/WordPress/ProfitShopRenderer`（`template_redirect` priority 9，與 PartnerPortalRenderer 同層；query var 互斥不衝突） |
+| Repository | DI 注入 `ProfitShopRepositoryInterface::find_by_slug(string): ?ProfitShop`（4-C1 新增方法，雙保險 trash 過濾） |
+| Theme | **走 theme**（`get_header` / `get_footer`），與 partner portal 完全脫離 theme 不同 |
+| Template | `Infrastructure/WordPress/templates/profit-shop-front.php`（純 PHP，無 React，無 Tailwind） |
+| 框架 | 純 PHP page template；customer-facing + SEO 重點 + 不破壞 WC cart / checkout 既有流程 |
+
+#### Status 三態 + Draft 預覽 capability
+
+| Status | 行為 |
+|--------|------|
+| `publish` | 對外可見 |
+| `draft` | `current_user_can('edit_post', $shop->id)` 才允許預覽（**對特定 post id 的 ownership 檢查**，不是 `edit_posts`） |
+| trashed / 不存在 | 404 + `status_header(404)` + exit |
+
+⚠ 不要把 capability 從 `edit_post($id)` 改回 `edit_posts`：powershop CPT `capability_type='post'`，`edit_posts` 對 author 全通過會違反 least-privilege 與 V2Api admin endpoint `manage_woocommerce` 的一致性（4-C1 security HIGH-1 二輪修正紀錄）。
+
+#### SEO meta 注入（防雙 canonical / 雙 title）
+
+```php
+remove_action('wp_head', 'rel_canonical');             // 防雙 canonical
+remove_action('wp_head', '_wp_render_title_tag', 1);   // 防 theme title-tag 雙 title
+add_action('wp_head', /* 注入自訂 <title> + <link rel='canonical'> */);
+```
+
+`<title>` 格式：`{shop_name}｜{partner_name} 的分潤賣場 - {site_name}`。與 SEO plugin 整合（`pre_get_document_title` filter）目前在 Phase 5+ 順手清單（4-C1 m-3）。
+
+#### 商品列表（雙路徑加購）
+
+| 商品類型 | template 渲染方式 | 加購機制 |
+|----------|-------------------|----------|
+| simple product | `<form action="<?php echo esc_url( home_url( '/' ) ); ?>" method="post">` + WC `add-to-cart` hidden + `<input type="hidden" name="profit_shop_id" value="...">` | form post 帶 `profit_shop_id` |
+| variable / variable-subscription | permalink + `add_query_arg('profit_shop_id', $shop_id)` 連到單品頁 | URL query string 帶 `profit_shop_id`，由 WC 變體選購流程繼承 |
+| grouped | 同上（permalink + add_query_arg） | 同上 |
+
+原價 / 特價用 WC 慣例 `<del>` / `<ins>`；全部輸出走 `esc_html` / `esc_attr` / `esc_url`（`wc_price` / `wc_get_image` 由 WC 自身 escape）。
+
+#### 三道閘門縱深防偽造（Phase 4-C2 AddToCartHook 核心）
+
+`Infrastructure/WooCommerce/AddToCartHook`（**priority 5**，**早於** Phase 3-D `CartPriceOverrideHook` 的 priority 10）從 query string 注入 `cart_item_data['profit_shop_id']`：
+
+```
+① $shop = ProfitShopRepositoryInterface::find($shop_id)
+   未找到 → return $cart_item_data unchanged
+
+② $shop->status() === 'publish'
+   非 publish → return unchanged（draft 預覽不應洩漏到客戶 cart）
+
+③ $product_id ∈ array_map(fn($item) => $item->product_id(), $shop->items())
+   不在 shop 商品列表 → return unchanged
+```
+
+| 攻擊情境 | 防禦 |
+|----------|------|
+| 偽造任意 shop_id | ① find null → return unchanged |
+| 偽造 product_id 不在 shop | ③ product_in_shop 拒 |
+| 拿正版 publish shop 套未授權商品 | ③ 同上 |
+| cart session 後手動改 meta | priority 999 驗章失敗 fallback 原價 |
+
+#### Priority 串聯（5 / 10 / 999）
+
+WP filter 依 priority 排序執行；同一個 request 的串接順序為：
+
+```
+woocommerce_add_cart_item_data
+   ┌─ priority 5  → AddToCartHook（4-C2）            ：注入 profit_shop_id
+   └─ priority 10 → CartPriceOverrideHook (3-D)       ：寫 _profit_* meta + HMAC sign
+
+woocommerce_get_item_data
+   └─ default     → CartItemMetaDisplay（4-C2）       ：UI 顯示「來自賣場 XXX」
+
+woocommerce_before_calculate_totals
+   └─ priority 999 → CartPriceOverrideHook (3-D)       ：hash_equals 驗章 + set_price
+```
+
+新增 cart-related hook 時**必須**確認 priority 不會破壞既有串接：例如新 hook 想在「驗證後讀取分潤 meta」必須掛在 999 之後；想在「寫入前再加自訂欄位」必須掛在 5 與 10 之間。
+
+#### `$_GET` + `$_POST` 取值（排除 `$_COOKIE` 攻擊面）
+
+`AddToCartHook` 從 query string 取 `profit_shop_id` 時**只讀 `$_GET + $_POST`**（4-C2 security M-1 二輪修正：原為 `$_REQUEST` 包含 `$_COOKIE`，導致攻擊者可種 cookie 偽造分潤）：
+
+```php
+$raw = $_GET['profit_shop_id'] ?? $_POST['profit_shop_id'] ?? null;
+// ❌ 不要：$_REQUEST['profit_shop_id'] ?? null
+```
+
+加上 `is_array` / `wp_unslash` / `sanitize_text_field` / `ctype_digit` 嚴格純數字檢查（拒 `'01'` / `'+1'` / 浮點 / 負數）+ `(int)` cast。
+
+#### Short-circuit「上游已帶則 return」
+
+`AddToCartHook` 開頭即檢查 `isset($cart_item_data['profit_shop_id'])`，若上游（例如 IT 直接呼 hook、或第三方 plugin 預先帶入）已塞了就 `return $cart_item_data`，不重複驗證/覆寫——防 Phase 3-D `CartPriceOverrideHookTest`（直接測試 hook 不經 query string）regression。
+
+#### Cart UI 顯示一個 filter 涵蓋三處
+
+`Infrastructure/WooCommerce/CartItemMetaDisplay::filter_get_item_data` 掛 `woocommerce_get_item_data`：WC 設計上**這個 filter 同時**被 mini-cart widget / cart page / checkout page 觸發，所以**只要掛一個 filter 就涵蓋全部**，不需重複 hook。
+
+- shop 已刪 → 靜默不顯示（cart 仍可結帳，3-D 寫入的 4 筆 `_profit_*` meta + signature 已固化）
+- `target='_blank' rel='noopener'` 防 reverse tabnabbing
+- `esc_url(home_url('/' . RewriteRules::SHOP_REWRITE_PREFIX . '/' . $slug . '/'))` 確保 URL prefix DRY，**不**自己定義新常數（4-C2 wordpress M-1 修正）
+
+#### DRY：URL prefix 統一用 `RewriteRules::SHOP_REWRITE_PREFIX`
+
+凡是要組 `/profit-shop/{slug}/` URL 的地方（CartItemMetaDisplay、未來的 ProfitShopRenderer 內部組 canonical 等），**必須**從 `RewriteRules::SHOP_REWRITE_PREFIX` 取，不要 hardcode 字串 `'profit-shop'`，避免日後改前綴時遺漏。
