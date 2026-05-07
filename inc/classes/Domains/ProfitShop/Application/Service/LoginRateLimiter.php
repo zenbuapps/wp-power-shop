@@ -34,18 +34,27 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
  */
 final class LoginRateLimiter {
 
-	private const KEY_PREFIX    = 'ps_partner_login_fail_';
-	private const KEY_PREFIX_IP = 'ps_partner_login_fail_ip_';
+	private const KEY_PREFIX = 'ps_partner_login_fail_';
+
+	/**
+	 * IP key prefix（v2：升級為 hash_hmac + wp_salt('auth')，與 v1 自然分離）
+	 *
+	 * V1（hash('sha256', $ip)）transient 自然過期後不再使用，無資料遷移需求.
+	 */
+	private const KEY_PREFIX_IP = 'ps_partner_login_fail_ip_v2_';
 
 	/**
 	 * 建構子
 	 *
-	 * 採 nominal interface（TransientStoreInterface / ClockInterface / EmailNotifierInterface）；
-	 * Production 由 WpTransientStore / SystemClock / WpAdminEmailNotifier 注入，測試由 fake / 匿名 class 實作介面。
+	 * 採 nominal interface（TransientStoreInterface / ClockInterface / EmailNotifierInterface
+	 * / SaltProviderInterface）；
+	 * Production 由 WpTransientStore / SystemClock / WpAdminEmailNotifier / WpSaltProvider 注入，
+	 * 測試由 fake / 匿名 class 實作介面。
 	 *
 	 * @param TransientStoreInterface $transients     Transient 儲存（提供 set/get/delete）.
 	 * @param ClockInterface          $clock          時鐘（提供 now(): int）.
 	 * @param EmailNotifierInterface  $email          Email 通知（提供 notify(string,string,string)）.
+	 * @param SaltProviderInterface   $salt_provider  Salt 提供器（IP hash key；reviewer M-2）.
 	 * @param int                     $max_attempts   失敗次數上限（含）.
 	 * @param int                     $window_seconds 視窗秒數（預設 900 = 15 分鐘）.
 	 */
@@ -53,6 +62,7 @@ final class LoginRateLimiter {
 		private readonly TransientStoreInterface $transients,
 		private readonly ClockInterface $clock,
 		private readonly EmailNotifierInterface $email,
+		private readonly SaltProviderInterface $salt_provider,
 		private readonly int $max_attempts = 5,
 		private readonly int $window_seconds = 900
 	) {}
@@ -122,7 +132,7 @@ final class LoginRateLimiter {
 				\error_log( // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 					sprintf(
 						'[power-shop][audit] partner-lockout ip-hash=%s count=%d',
-						hash( 'sha256', $normalized_ip ),
+						$this->audit_ip_hash( $normalized_ip ),
 						$ip_new_count
 					)
 				);
@@ -161,7 +171,7 @@ final class LoginRateLimiter {
 			\error_log( // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 				sprintf(
 					'[power-shop][audit] partner-lockout-ip-only ip-hash=%s count=%d',
-					hash( 'sha256', $normalized_ip ),
+					$this->audit_ip_hash( $normalized_ip ),
 					$ip_new_count
 				)
 			);
@@ -298,14 +308,30 @@ final class LoginRateLimiter {
 	}
 
 	/**
-	 * IP 維度 transient key（sha256 hash 防 PII 落地）
+	 * IP 維度 transient key（hash_hmac + wp_salt('auth')；reviewer M-2）
+	 *
+	 * 升級理由（vs Phase 3-D 早期 hash('sha256', $ip)）：
+	 *   - 純 sha256 對固定 IPv4 字串 (10^32 級熵) 可離線快速反推
+	 *   - hash_hmac 配合 wp_salt 後，attacker 即使 dump transient 也無法以
+	 *     字典攻擊還原原始 IP（key 是 wp_salt 控管的高熵秘密）
 	 *
 	 * @param string $ip 已驗證合法的 IP 字串
 	 *
 	 * @return string
 	 */
 	private function key_for_ip( string $ip ): string {
-		return self::KEY_PREFIX_IP . hash( 'sha256', $ip );
+		return self::KEY_PREFIX_IP . hash_hmac( 'sha256', $ip, $this->salt_provider->get( 'auth' ) );
+	}
+
+	/**
+	 * 計算 audit log 用的 IP hash（與 key_for_ip 同 hash 演算法保證一致性）
+	 *
+	 * @param string $ip 已驗證合法的 IP 字串
+	 *
+	 * @return string
+	 */
+	private function audit_ip_hash( string $ip ): string {
+		return hash_hmac( 'sha256', $ip, $this->salt_provider->get( 'auth' ) );
 	}
 
 	/**

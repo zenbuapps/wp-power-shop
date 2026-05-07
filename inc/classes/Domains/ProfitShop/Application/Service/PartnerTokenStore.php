@@ -35,6 +35,15 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Repository\PartnerRepositoryInterface
 final class PartnerTokenStore {
 
 	/**
+	 * HMAC domain prefix（reviewer LOW-T2-1）
+	 *
+	 * 將 token 與其他 hash_hmac 用途（例如 cart price signature）以前綴隔離，
+	 * 避免共用 wp_salt('auth') 時跨協議碰撞——即使兩種用途都用同一把 salt key，
+	 * domain prefix 保證 hash output 命名空間不重疊.
+	 */
+	private const HMAC_DOMAIN = 'partner-token:v1';
+
+	/**
 	 * 建構子
 	 *
 	 * 採 nominal interface DI（禁鴨子型別 object）；Production 由 V2Api factory 注入：
@@ -127,7 +136,19 @@ final class PartnerTokenStore {
 		$issued_at  = (int) $payload['issued_at'];
 
 		// password rotation 撤銷比對（spec §6.3）
-		$password_changed_at = $this->partners->get_password_changed_at( $partner_id );
+		// fail-closed：DB 異常一律視為驗證失敗（reviewer LOW-T2-2）.
+		// 若 partner repo 拋（例如 DB 連線失敗），不該讓 token 「順利通過」造成繞過撤銷邏輯.
+		try {
+			$password_changed_at = $this->partners->get_password_changed_at( $partner_id );
+		} catch ( \Throwable $e ) {
+			\error_log( // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				sprintf(
+					'[ProfitShop][partner-token] DB error in verify: %s',
+					str_replace( [ "\r", "\n", "\t" ], ' ', $e->getMessage() )
+				)
+			);
+			return null;
+		}
 		if ( null !== $password_changed_at && $issued_at < $password_changed_at ) {
 			return null;
 		}
@@ -158,6 +179,10 @@ final class PartnerTokenStore {
 	 * @return string
 	 */
 	private function hash_token( string $token ): string {
-		return hash_hmac( 'sha256', $token, $this->salt_provider->get( 'auth' ) );
+		return hash_hmac(
+			'sha256',
+			self::HMAC_DOMAIN . '|' . $token,
+			$this->salt_provider->get( 'auth' )
+		);
 	}
 }

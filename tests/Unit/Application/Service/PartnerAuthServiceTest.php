@@ -35,6 +35,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
 use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\PartnerSnapshot;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\FixedClock;
+use Tests\Support\FixedSaltProvider;
 use Tests\Support\InMemoryTransientStore;
 use Tests\Support\SpyEmailNotifier;
 use Tests\Unit\Application\Fakes\InMemoryPartnerRepository;
@@ -62,6 +63,7 @@ final class PartnerAuthServiceTest extends TestCase {
 			transients: $this->transients,
 			clock: $this->clock,
 			email: $this->email,
+			salt_provider: new FixedSaltProvider(),
 			max_attempts: 5,
 			window_seconds: 900,
 		);

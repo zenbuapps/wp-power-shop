@@ -339,7 +339,17 @@ final class V2Api extends ApiBase {
 	}
 
 	/**
-	 * 從 Header / Cookie 取出 partner token
+	 * 從 request 中取出 partner token（三條讀取路徑，優先級鏈）
+	 *
+	 * 優先級（高 → 低）：
+	 *   1. Header 'X-Partner-Token'                        - SPA 直接帶 token（最常見、最直接）
+	 *   2. Header 'Authorization: Bearer {token}'           - REST API 通用慣例
+	 *   3. Cookie 'profit_partner_token'                    - 瀏覽器自動帶（fallback）
+	 *
+	 * 三選一即可。多帶以第一個有效者為準。client 可任選一條，
+	 * 但官方 SPA 推薦走 X-Partner-Token（與 X-WP-Nonce 對稱、不依賴 cookie 設定）.
+	 *
+	 * 不刪除任何路徑（向後相容）.
 	 *
 	 * @param \WP_REST_Request $request Request.
 	 * @phpstan-param \WP_REST_Request<array<string, mixed>> $request
@@ -816,6 +826,21 @@ final class V2Api extends ApiBase {
 	 */
 	public function post_profit_partners_with_id_regenerate_password_callback( $request ): \WP_REST_Response {
 		try {
+			// admin nonce 檢查（reviewer follow-up T-4.1）：除既有 manage_options capability，
+			// 額外要求 X-WP-Nonce 防 CSRF——防範 admin 開著瀏覽器被誘騙呼叫此端點，
+			// 在 admin 不知情下重置 partner 密碼.
+			// （Refine SPA 已自動帶 X-WP-Nonce header，此 nonce 與既有設計對齊）
+			$nonce = (string) $request->get_header( 'x_wp_nonce' );
+			if ( ! \wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+				return new \WP_REST_Response(
+					[
+						'code'    => 'rest_forbidden',
+						'message' => '缺少有效的 admin nonce',
+					],
+					403
+				);
+			}
+
 			$id = (int) $request->get_param( 'id' );
 
 			$useCase  = new RegeneratePartnerPasswordUseCase( partnerRepo: PartnerTermRepository::instance() );
@@ -823,13 +848,20 @@ final class V2Api extends ApiBase {
 
 			// Partner 系列端點回應直接是 payload（與 admin endpoint 的 {code, data} 結構不同），
 			// 對齊 spec §4.4 / §4.5 partner SPA 的呼叫慣例 + 測試合約。
-			return new \WP_REST_Response(
+			$response = new \WP_REST_Response(
 				[
 					'partner_id' => $id,
 					'password'   => $plain_pw,
 				],
 				200
 			);
+
+			// 強制不快取（reviewer follow-up T-4.2）：
+			// 防範密碼明文被 proxy / browser 快取造成洩漏.
+			$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate' );
+			$response->header( 'Pragma', 'no-cache' );
+
+			return $response;
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}
@@ -861,6 +893,18 @@ final class V2Api extends ApiBase {
 			/** @var string|false $validated */
 			$validated = '' === $ip_raw ? false : filter_var( $ip_raw, FILTER_VALIDATE_IP );
 			$ip        = false === $validated ? null : (string) $validated;
+
+			/**
+			 * Filter the resolved client IP for partner login rate-limit.
+			 *
+			 * 預設取 $_SERVER['REMOTE_ADDR']（不解析 X-Forwarded-For 避免 header 偽造繞鎖）.
+			 * 部署於 reverse proxy / Cloudflare 後方時，可透過此 filter 注入經 trust proxy
+			 * 白名單驗證後的真實 client IP（reviewer M-1）.
+			 *
+			 * @param string|null      $ip      已 filter_var FILTER_VALIDATE_IP 驗證過的 IP，無效為 null.
+			 * @param \WP_REST_Request $request 當前 REST request.
+			 */
+			$ip = \apply_filters( 'power_shop_partner_login_client_ip', $ip, $request );
 
 			$useCase = new LoginPartnerUseCase(
 				auth: self::make_partner_auth_service(),
@@ -1051,6 +1095,7 @@ final class V2Api extends ApiBase {
 			transients: WpTransientStore::instance(),
 			clock: SystemClock::instance(),
 			email: WpAdminEmailNotifier::instance(),
+			salt_provider: new WpSaltProvider(),
 			max_attempts: 5,
 			window_seconds: 900,
 		);
@@ -1100,7 +1145,8 @@ final class V2Api extends ApiBase {
 			}
 		}
 
-		$page     = isset( $params['page'] ) ? max( 1, (int) $params['page'] ) : 1;
+		// page 上限 cap（reviewer LOW-T5-2）：避免極大 page 造成 OFFSET 巨大 query 拖庫.
+		$page     = isset( $params['page'] ) ? max( 1, min( 10000, (int) $params['page'] ) ) : 1;
 		$per_page = isset( $params['per_page'] ) ? max( 1, min( 100, (int) $params['per_page'] ) ) : 20;
 
 		return new FilterCriteria(

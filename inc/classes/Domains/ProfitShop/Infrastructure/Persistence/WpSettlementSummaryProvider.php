@@ -124,9 +124,10 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 
 		global $wpdb;
 
-		[ $where_extra_sql, $where_extra_args ] = self::build_extra_where( $criteria, $status_whitelist );
-
-		$is_hpos = self::is_hpos_enabled();
+		// 共用 is_hpos 一次計算傳入 helper，避免 hot path 多次呼叫
+		// class_exists + WC OrderUtil（reviewer wordpress MAJOR-1）.
+		$is_hpos                                = self::is_hpos_enabled();
+		[ $where_extra_sql, $where_extra_args ] = self::build_extra_where( $criteria, $status_whitelist, $is_hpos );
 
 		// 主 SQL：以 partner meta 為錨點 JOIN 出每筆 settlement 的 amount / status / actual_price
 		// 再 GROUP BY status 拿到 profit_paid / profit_pending / profit_refunded
@@ -222,6 +223,10 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 	/**
 	 * 取得指定 partner 的時間序列
 	 *
+	 * 注意：本 query 假設每個 order_item 只有一筆 _settlement_status meta（INNER JOIN 1:1）.
+	 * 若未來 settlement 流程改為一個 line item 對多筆狀態記錄，COUNT(DISTINCT order_item_id)
+	 * 會雙重計算——需改為 COUNT(DISTINCT (order_item_id, settlement_id)) 或調整 schema.
+	 *
 	 * @param int            $partner_term_id partner term ID（鎖死）
 	 * @param FilterCriteria $criteria        過濾條件
 	 * @param string         $interval        粒度（day/week/month）
@@ -243,9 +248,8 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 
 		global $wpdb;
 
-		[ $where_extra_sql, $where_extra_args ] = self::build_extra_where( $criteria, $status_whitelist );
-
-		$is_hpos = self::is_hpos_enabled();
+		$is_hpos                                = self::is_hpos_enabled();
+		[ $where_extra_sql, $where_extra_args ] = self::build_extra_where( $criteria, $status_whitelist, $is_hpos );
 
 		$sql_join_orders = $is_hpos
 		? "INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id"
@@ -334,9 +338,8 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 
 		global $wpdb;
 
-		[ $where_extra_sql, $where_extra_args ] = self::build_extra_where( $criteria, $status_whitelist );
-
-		$is_hpos = self::is_hpos_enabled();
+		$is_hpos                                = self::is_hpos_enabled();
+		[ $where_extra_sql, $where_extra_args ] = self::build_extra_where( $criteria, $status_whitelist, $is_hpos );
 
 		$sql_join_orders = $is_hpos
 		? "INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id"
@@ -428,10 +431,12 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 	 *
 	 * @param FilterCriteria $criteria         過濾條件
 	 * @param string[]       $status_whitelist 已通過白名單的 settlement status
+	 * @param bool           $is_hpos          是否 HPOS（由 caller 一次計算傳入，避免 hot path
+	 *                                         多次呼叫 OrderUtil；reviewer wordpress MAJOR-1）
 	 *
 	 * @return array{0: string, 1: array<int, mixed>} [extra SQL, extra args]
 	 */
-	private static function build_extra_where( FilterCriteria $criteria, array $status_whitelist ): array {
+	private static function build_extra_where( FilterCriteria $criteria, array $status_whitelist, bool $is_hpos ): array {
 		$sql_parts = [];
 		$args      = [];
 
@@ -467,7 +472,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 		}
 
 		// date_start / date_end 過濾（注入合法 DATETIME 字串）
-		$date_col = self::is_hpos_enabled() ? 'o.date_created_gmt' : 'o.post_date_gmt';
+		$date_col = $is_hpos ? 'o.date_created_gmt' : 'o.post_date_gmt';
 
 		if ( null !== $criteria->date_start ) {
 			$sql_parts[] = "AND {$date_col} >= %s";
@@ -499,6 +504,12 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 	}
 
 	/**
+	 * 9999-12-31 23:59:59 UTC，作為 timestamp 上限避免 gmdate 對極端值
+	 * （如 PHP_INT_MAX）回傳意義不明字串（reviewer LOW-T5-2）.
+	 */
+	private const MAX_TIMESTAMP = 253402300799;
+
+	/**
 	 * 將 unix timestamp 安全地序列化成 SQL DATETIME 字串
 	 *
 	 * @param int $timestamp unix timestamp
@@ -510,6 +521,9 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 		if ( $timestamp < 0 ) {
 			$timestamp = 0;
 		}
+		if ( $timestamp > self::MAX_TIMESTAMP ) {
+			$timestamp = self::MAX_TIMESTAMP;
+		}
 		// gmdate 對於極大的 timestamp（如 PHP_INT_MAX）會回傳意義不明字串，
 		// 但仍然是受 prepare 保護的字串，不會構成 SQL injection；查詢結果為 0 命中是預期行為。
 		$out = gmdate( 'Y-m-d H:i:s', $timestamp );
@@ -519,12 +533,18 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 	/**
 	 * 將數值字串格式化為兩位小數
 	 *
+	 * 對非數字輸入採 fail-fast：直接回 '0.00'，避免 bcadd 在某些 PHP 版本對非數字字串
+	 * 拋警告或回不可預期值（reviewer wordpress MAJOR-2）.
+	 *
 	 * @param string $value 候選數值字串（可能來自 SUM(...) 結果）
 	 *
 	 * @return string 兩位小數字串
 	 */
 	private static function format_money( string $value ): string {
 		if ( '' === $value ) {
+			return '0.00';
+		}
+		if ( ! is_numeric( $value ) ) {
 			return '0.00';
 		}
 		// bcadd 同時可標準化精度

@@ -43,6 +43,7 @@ use J7\PowerShop\Domains\ProfitShop\Application\Service\LoginRateLimiter;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\FixedClock;
+use Tests\Support\FixedSaltProvider;
 use Tests\Support\InMemoryTransientStore;
 use Tests\Support\SpyEmailNotifier;
 
@@ -67,6 +68,7 @@ final class LoginRateLimiterIpDimensionTest extends TestCase {
 			transients: $this->transients,
 			clock: $this->clock,
 			email: $this->email,
+			salt_provider: new FixedSaltProvider(),
 			max_attempts: $max_attempts,
 			window_seconds: $window_seconds,
 		);

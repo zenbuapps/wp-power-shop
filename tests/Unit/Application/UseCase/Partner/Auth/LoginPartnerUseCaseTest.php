@@ -141,6 +141,7 @@ final class LoginPartnerUseCaseTest extends TestCase {
 			transients: $this->transients,
 			clock: $this->clock,
 			email: $this->email,
+			salt_provider: new FixedSaltProvider(),
 			max_attempts: 5,
 			window_seconds: 900,
 		);
