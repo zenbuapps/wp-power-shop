@@ -48,11 +48,53 @@ applyTo: "**/*.{php,ts,tsx}"
 │  │                    PHP Backend                           │ │
 │  │  ┌──────────┐  ┌───────────┐  ┌─────────────────────┐ │ │
 │  │  │Bootstrap │→ │ Admin     │  │ Domains/Loader      │ │ │
-│  │  │          │  │ Entry.php │  │  └→ Report V2Api    │ │ │
-│  │  └──────────┘  └───────────┘  └─────────────────────┘ │ │
+│  │  │          │  │ Entry.php │  │  ├→ Report V2Api    │ │ │
+│  │  └──────────┘  └───────────┘  │  └→ ProfitShop\     │ │ │
+│  │                                │      Loader (sub)   │ │ │
+│  │                                └─────────────────────┘ │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+### Profit Shop Domain（4-layer DDD，詳見 `profit-shop.rule.md`）
+
+```
+inc/classes/Domains/ProfitShop/
+│
+├── Domain/                          # 純 PHP，禁依賴 WP / WC
+│   ├── ValueObject/                 # PriceOverride / ProfitRate / PartnerSlug / InflatedCount / ShopMode / SlugConflict
+│   ├── Entity/                      # OverrideItem / ProfitShop（status invariant）/ SettlementRecord
+│   ├── Service/                     # PriceCalculator / ProfitCalculator / RoundingStrategy interface
+│   ├── Repository/                  # ProfitShopRepository / PartnerRepository / SettlementRepository（Interface only）
+│   ├── Snapshot/, Criteria/         # ProductSnapshot / PartnerSnapshot / FilterCriteria
+│   └── Exception/                   # 18 個 final extends \DomainException（PartnerNotFound、SlugConflict、TooManyAttempts...）
+│
+├── Application/                     # 編排業務流程，依賴 Domain + Port interface
+│   ├── DTO/                         # 12 個 immutable readonly DTO（PartnerInput / ProfitShopInput / KpiReport...）
+│   ├── Service/                     # 11 個 Service：4 Port interface + 4 Service 實裝 + 3 Auth/Rate-limit
+│   │                                #   - Port: ProductLookup / SlugConflictLookup / TransientStore / Clock /
+│   │                                #     EmailNotifier / SettlementSummaryProvider / SettingsRepository / ItemValidator
+│   │                                #   - 實裝: ItemValidator / SlugConflictDetector / SettingsRepository /
+│   │                                #     ProductSnapshotProvider / PartnerAuthService / PartnerTokenStore / LoginRateLimiter
+│   └── UseCase/                     # 25 個 UseCase
+│       ├── Shop/                    #   8 個（CRUD + publish/unpublish/duplicate）
+│       ├── Partner/                 #   5 admin CRUD + 4 Auth + 3 Report
+│       ├── Migration/               #   2 個（list legacy / import）
+│       └── Settings/                #   3 個（get / update / reset）
+│
+├── Infrastructure/                  # 唯一可呼叫 WP / WC API 的層
+│   ├── Persistence/                 # CptProfitShopRepository / PartnerTermRepository /
+│   │                                #   OrderItemSettlementRepository / LegacyOnePageShopRepository /
+│   │                                #   WpSettlementSummaryProvider
+│   ├── WordPress/                   # CptRegistrar / TaxonomyRegistrar / RewriteRules /
+│   │                                #   RewriteRulesFlusher / WpProductLookup / WpSlugConflictLookup /
+│   │                                #   WpTransientStore / SystemClock / WpAdminEmailNotifier
+│   └── Rest/                        # ExceptionMapper（Domain Exception → HTTP）+ V2Api（25 endpoint）
+│
+└── Loader.php                       # ProfitShop sub-loader，由 Domains\Loader 註冊
+```
+
+依賴方向：`Presentation → Application → Domain ← Infrastructure`（Infrastructure 實作 Domain Repository / Application Port interface）。
 
 ---
 
@@ -68,7 +110,10 @@ plugin.php
               │   ├→ add_action('admin_menu', ...) # 註冊 admin 頁面
               │   └→ add_action('admin_bar_menu', ...) # Admin bar「電商系統」
               └→ Domains\Loader::instance()  # 載入所有 Domain API
-                  └→ Report\Dashboard\Core\V2Api::instance() # REST API 註冊
+                  ├→ Report\Dashboard\Core\V2Api::instance() # 既有報表 REST API
+                  └→ ProfitShop\Loader::instance()           # Profit Shop sub-loader
+                      ├→ Infrastructure/WordPress/CptRegistrar / TaxonomyRegistrar / RewriteRules
+                      └→ Infrastructure/Rest/V2Api::instance() # 25 個 endpoint
 ```
 
 ### 前端載入流程

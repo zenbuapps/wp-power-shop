@@ -48,6 +48,51 @@ applyTo: "**/*.php"
 | POST | `customers/{id}/notes` | 新增顧客備註 |
 | GET | `customers/{id}/notes` | 顧客備註列表 |
 
+**Profit Shop 端點（`/wp-json/power-shop/`，namespace 共用，由 `Domains/ProfitShop/Infrastructure/Rest/V2Api.php` 註冊）：**
+
+> 詳細架構與 auth 規範見 `.claude/rules/profit-shop.rule.md`。
+> Permission 共三類：`null`（Powerhouse 預設認證 = `manage_woocommerce`）、`admin_only`（`manage_options`）、`partner_token`（X-Partner-Token / Bearer / Cookie）、`public`。
+
+Phase 3-B（Admin CRUD，17 個）：
+
+| Method | 端點 | Permission | 說明 |
+|--------|------|------------|------|
+| GET | `profit-shops` | default | 賣場列表 |
+| POST | `profit-shops` | default | 建立賣場 |
+| GET | `profit-shops/{id}` | default | 取得賣場 |
+| PUT | `profit-shops/{id}` | default | 更新賣場 |
+| DELETE | `profit-shops/{id}` | default | 刪除賣場（trash） |
+| POST | `profit-shops/{id}/publish` | default | 上架 |
+| POST | `profit-shops/{id}/unpublish` | default | 下架 |
+| POST | `profit-shops/{id}/duplicate` | default | 複製 |
+| GET | `profit-partners` | default | 分潤夥伴列表 |
+| POST | `profit-partners` | **admin_only** | 建立夥伴（涉密碼） |
+| GET | `profit-partners/{id}` | default | 取得夥伴 |
+| PUT | `profit-partners/{id}` | **admin_only** | 更新夥伴（涉密碼） |
+| DELETE | `profit-partners/{id}` | **admin_only** | 刪除夥伴（is_in_use 預檢） |
+| GET | `profit-migration/legacy-shops` | admin_only | 列舉可遷入的 legacy 一頁商店 |
+| POST | `profit-migration/import` | admin_only | 匯入 legacy 商店（強制 partner_term_id） |
+| GET | `profit-settings` | admin_only | 取得全域設定 |
+| PUT | `profit-settings` | admin_only | 更新設定（含 SlugConflictDetector + flush_rules） |
+| POST | `profit-settings/reset` | admin_only | 還原預設值 |
+
+Phase 3-C（Partner Auth + Reports，7 個）：
+
+| Method | 端點 | Permission | 說明 |
+|--------|------|------------|------|
+| POST | `profit-partners/{id}/regenerate-password` | **admin_only** | 重新產生密碼（12 字元 wp_generate_password） |
+| POST | `partner-auth/login` | **public** | Partner 登入；Set-Cookie HttpOnly/Secure/SameSite=Lax/Path=/wp-json/power-shop/ |
+| POST | `partner-auth/logout` | **public** | 登出（idempotent，Cookie Max-Age=0） |
+| GET | `partner-auth/me` | **partner_token** | 取得當前 partner 資訊 |
+| GET | `partner-reports/kpi` | **partner_token** | KPI 報表（partner_term_id 鎖死於 token） |
+| GET | `partner-reports/trend` | **partner_token** | 趨勢報表（partner_term_id 鎖死於 token） |
+| GET | `partner-reports/settlements` | **partner_token** | 結算列表（partner_term_id 鎖死於 token） |
+
+**Profit Shop API 慣例差異**：
+- Partner endpoint **不裹** `{code, data}`，body 直接是 payload（spec §4.4）
+- partner_token 從 `X-Partner-Token` / `Authorization: Bearer` / `Cookie` 取，驗證後寫入 `$request->_partner_term_id`（內部欄位前綴 `_` 避免被 sanitize）
+- Partner Reports callback **永不從 query string 讀 partner_term_id**（防範圍隔離繞過）
+
 **WooCommerce 端點（`/wp-json/wc/v3/`）：**
 
 | Method | 端點 | 說明 |
