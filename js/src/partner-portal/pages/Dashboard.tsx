@@ -1,18 +1,31 @@
 /**
- * Partner Portal Dashboard（最小 placeholder）
+ * Partner Portal Dashboard
  *
- * Phase 4-B1.3 僅提供登入後的最小可見頁面，
- * 真正的 KPI / 趨勢 / 結算列表將在 Phase 4-B2 / 4-B3 補完。
+ * Phase 4-B2 範圍：
+ * - Partner header（partner_name + 登出按鈕）
+ * - DateRangeFilter（state 在 Dashboard 階層，避免 KPI / Trend 不同步）
+ * - KpiSummary（4 張卡）
+ * - Trend / Settlements 仍 placeholder（4-B3 補）
+ * - 整個內容用 ErrorBoundary 包住，避免 KPI 元件出錯炸掉整頁
  */
 
 import { Alert, Button, Card, Space, Typography } from 'antd'
-import { memo } from 'react'
+import { memo, useState } from 'react'
 
 import { useAuth } from '../auth/useAuth'
+import {
+	DateRangeFilter,
+	getDefaultDateRange,
+	type TDateRange,
+} from '../components/DateRangeFilter'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 
-/** Dashboard 元件（Phase 4-B1.3 placeholder） */
+import { KpiSummary } from './KpiSummary'
+
+/** Dashboard 元件 */
 const DashboardComponent = () => {
 	const { partner, logout } = useAuth()
+	const [range, setRange] = useState<TDateRange>(() => getDefaultDateRange())
 
 	return (
 		<div
@@ -22,39 +35,51 @@ const DashboardComponent = () => {
 				padding: 24,
 			}}
 		>
-			<Card>
-				<div
-					style={{
-						display: 'flex',
-						justifyContent: 'space-between',
-						alignItems: 'center',
-						flexWrap: 'wrap',
-						gap: 12,
-					}}
-				>
-					<Typography.Title level={3} style={{ margin: 0 }}>
-						歡迎，{partner?.partner_name ?? ''}
-					</Typography.Title>
-					<Space>
-						<Button onClick={() => void logout()}>登出</Button>
-					</Space>
-				</div>
-				{partner?.contact_email && (
-					<Typography.Paragraph
-						type="secondary"
-						style={{ marginTop: 8, marginBottom: 0 }}
-					>
-						聯絡信箱：{partner.contact_email}
-					</Typography.Paragraph>
-				)}
-			</Card>
-			<div style={{ height: 16 }} />
-			<Alert
-				type="info"
-				showIcon
-				message="儀表板開發中"
-				description="KPI / 趨勢 / 結算列表將於 Phase 4-B2 與 4-B3 陸續上線。"
-			/>
+			<ErrorBoundary>
+				<Space direction="vertical" size={16} style={{ width: '100%' }}>
+					<Card>
+						<div
+							style={{
+								display: 'flex',
+								justifyContent: 'space-between',
+								alignItems: 'center',
+								flexWrap: 'wrap',
+								gap: 12,
+							}}
+						>
+							<div>
+								<Typography.Title level={3} style={{ margin: 0 }}>
+									歡迎，{partner?.partner_name ?? ''}
+								</Typography.Title>
+								{partner?.contact_email && (
+									<Typography.Paragraph
+										type="secondary"
+										style={{ marginTop: 4, marginBottom: 0 }}
+									>
+										聯絡信箱：{partner.contact_email}
+									</Typography.Paragraph>
+								)}
+							</div>
+							<Space>
+								<Button onClick={() => void logout()}>登出</Button>
+							</Space>
+						</div>
+					</Card>
+
+					<Card title="期間">
+						<DateRangeFilter value={range} onChange={setRange} />
+					</Card>
+
+					<KpiSummary dateStart={range.date_start} dateEnd={range.date_end} />
+
+					<Alert
+						type="info"
+						showIcon
+						message="趨勢與結算列表開發中"
+						description="趨勢圖表與結算紀錄將於 Phase 4-B3 上線。"
+					/>
+				</Space>
+			</ErrorBoundary>
 		</div>
 	)
 }

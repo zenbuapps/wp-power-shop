@@ -12,28 +12,13 @@
  * - status === 'authenticated' → 渲染受保護內容
  */
 
-import { Spin } from 'antd'
 import { memo, type PropsWithChildren } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 
 import { useAuth } from './auth/useAuth'
+import { LoadingScreen } from './components/LoadingScreen'
 import { Dashboard } from './pages/Dashboard'
 import { Login } from './pages/Login'
-
-/** 載入畫面 */
-const LoadingScreen = memo(() => (
-	<div
-		style={{
-			display: 'flex',
-			alignItems: 'center',
-			justifyContent: 'center',
-			minHeight: '60vh',
-		}}
-	>
-		<Spin size="large" tip="載入中..." />
-	</div>
-))
-LoadingScreen.displayName = 'LoadingScreen'
 
 /** 路由守門元件 */
 const AuthGate = memo(({ children }: PropsWithChildren) => {
