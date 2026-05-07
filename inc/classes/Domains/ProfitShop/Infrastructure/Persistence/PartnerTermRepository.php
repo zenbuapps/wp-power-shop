@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence;
 
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\PersistenceFailure;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\PartnerRepositoryInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\PartnerSnapshot;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PartnerSlug;
@@ -73,7 +74,7 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 	 *
 	 * @return int term ID
 	 *
-	 * @throws \RuntimeException 當 wp_insert_term / wp_update_term 失敗時拋出
+	 * @throws PersistenceFailure 當 wp_insert_term / wp_update_term 失敗時拋出
 	 */
 	public function save( PartnerSnapshot $partner, ?string $plain_password = null ): int {
 		if ( 0 === $partner->term_id ) {
@@ -94,14 +95,14 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 		}
 
 		if ( \is_wp_error( $result ) ) {
-			throw new \RuntimeException(
+			throw new PersistenceFailure(
 				'儲存分潤夥伴失敗：' . $result->get_error_message()
 			);
 		}
 
 		$term_id = (int) ( $result['term_id'] ?? 0 );
 		if ( $term_id <= 0 ) {
-			throw new \RuntimeException( '儲存分潤夥伴失敗：未取得有效 term id' );
+			throw new PersistenceFailure( '儲存分潤夥伴失敗：未取得有效 term id' );
 		}
 
 		// 寫入 contact_email（null 視為清空）。

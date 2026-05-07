@@ -9,6 +9,7 @@ namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence;
 
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\OverrideItem;
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\ProfitShop;
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\PersistenceFailure;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\InflatedCount;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PriceOverride;
@@ -44,9 +45,14 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 	/**
 	 * 依 ID 取得賣場
 	 *
+	 * 對於 trashed 賣場（post_status = 'trash'）一律回 null：
+	 * 雖然 ProfitShop::VALID_STATUSES 不含 'trash'，但 wp_trash_post() 會把 post_status
+	 * 寫入 'trash'，若直接 hydrate 將拋 InvalidStatusTransition。在 Repository 層提前
+	 * 過濾，可保 caller（V2Api / UseCase）不需處理「資料還在 DB 但已被視為刪除」的曖昧狀態。
+	 *
 	 * @param int $id 賣場 ID
 	 *
-	 * @return ProfitShop|null 找不到或非 powershop CPT 時回傳 null
+	 * @return ProfitShop|null 找不到、非 powershop CPT、或已 trashed 時回傳 null
 	 */
 	public function find( int $id ): ?ProfitShop {
 		$post = \get_post( $id );
@@ -56,6 +62,10 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 		}
 
 		if ( CptRegistrar::POST_TYPE !== $post->post_type ) {
+			return null;
+		}
+
+		if ( 'trash' === $post->post_status ) {
 			return null;
 		}
 
@@ -69,14 +79,14 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 	 *
 	 * @return int 賣場 ID
 	 *
-	 * @throws \RuntimeException 當 wp_insert_post / wp_update_post 失敗時拋出
+	 * @throws PersistenceFailure 當 wp_insert_post / wp_update_post 失敗時拋出
 	 */
 	public function save( ProfitShop $shop ): int {
 		$post_data = [
-			'post_type'    => CptRegistrar::POST_TYPE,
-			'post_title'   => $shop->title,
-			'post_name'    => $shop->slug,
-			'post_status'  => $shop->status,
+			'post_type'   => CptRegistrar::POST_TYPE,
+			'post_title'  => $shop->title,
+			'post_name'   => $shop->slug,
+			'post_status' => $shop->status,
 		];
 
 		if ( 0 === $shop->id ) {
@@ -87,14 +97,14 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 		}
 
 		if ( \is_wp_error( $post_id ) ) {
-			throw new \RuntimeException(
+			throw new PersistenceFailure(
 				'儲存分潤賣場失敗：' . $post_id->get_error_message()
 			);
 		}
 
 		$post_id = (int) $post_id;
 		if ( $post_id <= 0 ) {
-			throw new \RuntimeException( '儲存分潤賣場失敗：未取得有效 post id' );
+			throw new PersistenceFailure( '儲存分潤賣場失敗：未取得有效 post id' );
 		}
 
 		$this->persist_meta( $post_id, $shop );
@@ -203,12 +213,14 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 			$shop->items()
 		);
 
-		// wp_slash 防止 update_post_meta stripslash 後反序列化失敗。
-		$items_json    = (string) \wp_json_encode( $items_payload );
-		$settings_json = (string) \wp_json_encode( $shop->settings );
+		// JSON 內不含 magic-quote 字元（單/雙引號、NUL、反斜線會被 json_encode 自行 escape），
+		// 因此不需 wp_slash 包裹。改加 JSON_UNESCAPED_UNICODE 讓中文以原字元儲存，
+		// 提升 DB 可讀性並降低 _profit_shop_items 占用空間。
+		$items_json    = (string) \wp_json_encode( $items_payload, JSON_UNESCAPED_UNICODE );
+		$settings_json = (string) \wp_json_encode( $shop->settings, JSON_UNESCAPED_UNICODE );
 
-		\update_post_meta( $post_id, self::META_ITEMS, \wp_slash( $items_json ) );
-		\update_post_meta( $post_id, self::META_SETTINGS, \wp_slash( $settings_json ) );
+		\update_post_meta( $post_id, self::META_ITEMS, $items_json );
+		\update_post_meta( $post_id, self::META_SETTINGS, $settings_json );
 	}
 
 	/**

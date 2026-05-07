@@ -10,6 +10,8 @@ namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress;
 /**
  * 註冊 /profit-report/{partner-slug}/ rewrite rule + query var
  *
+ * 同時負責偵測 CPT rewrite slug 與 report slug 的變更並觸發 flush rewrite rules。
+ *
  * 對應規格：specs/2026-05-06-profit-shop-design.md §3.8
  *
  * Phase 2 僅註冊 rewrite + query var；template_include 載入前台版型留待 Phase 6 Frontend 實作。
@@ -77,7 +79,10 @@ final class RewriteRules {
 	}
 
 	/**
-	 * 從 wp_options 讀取 report slug，找不到則使用預設值
+	 * 從 wp_options 讀取 report slug，找不到或不合法時 fallback 到預設值
+	 *
+	 * 經過 \sanitize_title() 過濾，避免 wp_options 被注入非法字元（空白、html、控制字元等）
+	 * 影響 rewrite system。sanitize 後若為空字串，亦 fallback 到預設。
 	 *
 	 * @return string report slug
 	 */
@@ -92,27 +97,44 @@ final class RewriteRules {
 			return self::DEFAULT_REPORT_SLUG;
 		}
 
-		return $slug;
+		$sanitized = \sanitize_title( $slug );
+		return '' === $sanitized ? self::DEFAULT_REPORT_SLUG : $sanitized;
 	}
 
 	/**
-	 * 偵測 report slug 是否異動，若有異動則 flush rewrite rules
+	 * 偵測 report slug 或 CPT rewrite slug 是否異動，若有異動則 flush rewrite rules
 	 *
-	 * 設定頁更新後應呼叫此方法。為避免每次請求都 flush，僅在 slug 與上次 flush 不同時才執行。
+	 * 設定頁更新後應呼叫此方法。為避免每次請求都 flush，僅在任一 slug 與上次套用不同時才執行。
+	 *
+	 * 同時檢查兩個 slug 的原因：rewrite rules 註冊牽涉到 CPT（permalink）與報表 rewrite，
+	 * 任一變更都需要重新生成 rules。共用同一機制可避免兩端重複 flush。
 	 *
 	 * @return void
 	 */
 	public static function flush_rules_if_needed(): void {
-		$current_slug = self::get_report_slug();
-		$applied_slug = \get_option( self::APPLIED_SLUG_OPTION, '' );
+		$current_report_slug = self::get_report_slug();
+		$applied_report_slug = (string) \get_option( self::APPLIED_SLUG_OPTION, '' );
 
-		if ( $current_slug === $applied_slug ) {
+		$current_cpt_slug = CptRegistrar::get_rewrite_slug();
+		$applied_cpt_slug = (string) \get_option( CptRegistrar::APPLIED_SLUG_OPTION, '' );
+
+		$report_changed = $current_report_slug !== $applied_report_slug;
+		$cpt_changed    = $current_cpt_slug !== $applied_cpt_slug;
+
+		if ( ! $report_changed && ! $cpt_changed ) {
 			return;
 		}
 
-		// 重新註冊 rule，確保最新 slug 已加入 rewrite 系統。
+		// 重新註冊 report rule，確保最新 slug 已加入 rewrite 系統。
+		// CPT rewrite 由 CptRegistrar::register() 在 init priority 11 處理，此處只需 flush。
 		self::register();
 		\flush_rewrite_rules( false );
-		\update_option( self::APPLIED_SLUG_OPTION, $current_slug, false );
+
+		if ( $report_changed ) {
+			\update_option( self::APPLIED_SLUG_OPTION, $current_report_slug, false );
+		}
+		if ( $cpt_changed ) {
+			\update_option( CptRegistrar::APPLIED_SLUG_OPTION, $current_cpt_slug, false );
+		}
 	}
 }

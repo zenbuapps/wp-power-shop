@@ -40,6 +40,10 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 
 	/**
 	 * Order itemmeta keys
+	 *
+	 * 註：_override_regular_price / _override_sale_price / _override_signup_fee 為 write-only，
+	 * 由 Phase 4 OrderHooks 在訂單建立時填入，本 Repository 不直接讀回 Entity（spec §2.5）。
+	 * 暫不刪除常數宣告，待 Phase 4 接管後直接套用。
 	 */
 	private const META_SHOP_ID           = '_profit_shop_id';
 	private const META_PARTNER_TERM_ID   = '_profit_partner_term_id';
@@ -52,6 +56,29 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 	private const META_SETTLEMENT_STATUS = '_settlement_status';
 	private const META_SETTLED_AT        = '_settled_at';
 	private const META_SETTLED_BY        = '_settled_by';
+
+	/**
+	 * 排除於結算查詢的訂單狀態清單
+	 *
+	 * Cancelled / failed / trash / auto-draft 訂單對結算金額無意義，必須過濾掉，
+	 * 否則 partner / shop 的結算金額會被「無效訂單」污染。
+	 *
+	 * 注意：保留 'wc-pending'（spec §6.6 視為合法的「待付款待結算」狀態）。
+	 *
+	 * 同時涵蓋 wc- prefix 與 raw（HPOS 不一定帶 prefix）兩種寫法，
+	 * 確保 HPOS on/off 兩套 SQL 都能正確過濾。
+	 *
+	 * @var string[]
+	 */
+	private const EXCLUDED_ORDER_STATUSES = [
+		'trash',
+		'wc-trash',
+		'wc-failed',
+		'wc-cancelled',
+		'failed',
+		'cancelled',
+		'auto-draft',
+	];
 
 	/**
 	 * 依 order_item_id 取得結算記錄
@@ -102,7 +129,23 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 				settled_by: $settled_by,
 				is_refund_after_paid: false
 			);
-		} catch ( \Throwable $e ) {
+		} catch ( \DomainException $e ) {
+			// 資料毀損（如 status 不在 VALID_STATUSES、rate 異常等）：
+			// 不要 crash 整個請求，但必須留下 ERROR 級別 log 讓營運可發現。
+			// 僅 catch DomainException——\Error/\TypeError 等真正的 fatal 應炸出去由 PHP 處理。
+			\J7\WpUtils\Classes\WC::logger(
+				sprintf(
+					'OrderItemSettlement hydrate failed for order_item_id=%d: %s',
+					$order_item_id,
+					$e->getMessage()
+				),
+				'error',
+				[
+					'order_item_id' => $order_item_id,
+					'shop_id'       => $shop_id,
+				],
+				'profit_shop'
+			);
 			return null;
 		}
 	}
@@ -173,7 +216,14 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 	/**
 	 * 透過 wc_order_itemmeta 取得符合單一 meta_key/meta_value 的 order_item_id 列表
 	 *
-	 * Phase 2 僅實作 LIMIT/OFFSET，date/status 過濾留待 Phase 3。
+	 * 排除已 cancelled/failed/trash/auto-draft 訂單的 line item，避免 partner / shop
+	 * 結算金額被無效訂單污染。實作上動態判斷 HPOS 開關：
+	 *
+	 * - HPOS off：JOIN wp_posts ON wp_posts.ID = order_items.order_id
+	 * - HPOS on ：JOIN {wp_orders} ON wp_orders.id = order_items.order_id
+	 *
+	 * 兩種路徑都使用 $wpdb->prepare + placeholder，不拼 SQL 字串。
+	 * Phase 2 僅實作 LIMIT/OFFSET + status 排除；date 過濾留待 Phase 3。
 	 *
 	 * @param string         $meta_key   meta key（_profit_partner_term_id 或 _profit_shop_id）
 	 * @param int            $meta_value meta 值
@@ -188,18 +238,40 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 		$page     = max( 1, $criteria->page );
 		$offset   = ( $page - 1 ) * $per_page;
 
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$is_hpos = self::is_hpos_enabled();
+
+		// 動態組 placeholder：N 個排除狀態 → '%s,%s,...,%s'
+		$status_placeholders = implode( ',', array_fill( 0, count( self::EXCLUDED_ORDER_STATUSES ), '%s' ) );
+
+		if ( $is_hpos ) {
+			$sql = "SELECT oim.order_item_id
+				FROM {$wpdb->prefix}woocommerce_order_itemmeta oim
+				INNER JOIN {$wpdb->prefix}woocommerce_order_items oi ON oi.order_item_id = oim.order_item_id
+				INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id
+				WHERE oim.meta_key = %s AND oim.meta_value = %s
+				AND o.status NOT IN ({$status_placeholders})
+				ORDER BY oim.order_item_id DESC
+				LIMIT %d OFFSET %d";
+		} else {
+			$sql = "SELECT oim.order_item_id
+				FROM {$wpdb->prefix}woocommerce_order_itemmeta oim
+				INNER JOIN {$wpdb->prefix}woocommerce_order_items oi ON oi.order_item_id = oim.order_item_id
+				INNER JOIN {$wpdb->posts} p ON p.ID = oi.order_id
+				WHERE oim.meta_key = %s AND oim.meta_value = %s
+				AND p.post_status NOT IN ({$status_placeholders})
+				ORDER BY oim.order_item_id DESC
+				LIMIT %d OFFSET %d";
+		}
+
+		$args = array_merge(
+			[ $meta_key, (string) $meta_value ],
+			self::EXCLUDED_ORDER_STATUSES,
+			[ $per_page, $offset ]
+		);
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared
 		$rows = $wpdb->get_col(
-			$wpdb->prepare(
-				"SELECT order_item_id FROM {$wpdb->prefix}woocommerce_order_itemmeta
-				WHERE meta_key = %s AND meta_value = %s
-				ORDER BY order_item_id DESC
-				LIMIT %d OFFSET %d",
-				$meta_key,
-				(string) $meta_value,
-				$per_page,
-				$offset
-			)
+			$wpdb->prepare( $sql, $args ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		);
 		// phpcs:enable
 
@@ -208,6 +280,18 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 		}
 
 		return array_map( 'intval', $rows );
+	}
+
+	/**
+	 * 判斷當前環境是否啟用 HPOS（custom orders table）
+	 *
+	 * @return bool 啟用 HPOS 回傳 true，否則 false
+	 */
+	private static function is_hpos_enabled(): bool {
+		if ( ! class_exists( \Automattic\WooCommerce\Utilities\OrderUtil::class ) ) {
+			return false;
+		}
+		return \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
 	}
 
 	/**

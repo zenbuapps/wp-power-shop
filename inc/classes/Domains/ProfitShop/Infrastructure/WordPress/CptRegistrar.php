@@ -14,6 +14,9 @@ namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress;
  *
  * - 後台 UI 走 React SPA（不註冊 metabox）。
  * - rewrite slug 從 wp_options `power_shop_profit_settings.rewrite_slug` 讀取，預設 `powershop`。
+ * - `show_in_rest = false`：本 plugin 走自家 `power-shop` REST namespace（V2Api），
+ *   不需要 wp/v2 通用 REST，避免 author+ 經由 `/wp-json/wp/v2/powershop/...`
+ *   繞過 `manage_woocommerce` 權限檢查。完整 capability 對應交由 Phase 3 V2Api。
  */
 final class CptRegistrar {
 
@@ -33,6 +36,11 @@ final class CptRegistrar {
 	 * 預設 rewrite slug
 	 */
 	public const DEFAULT_REWRITE_SLUG = 'powershop';
+
+	/**
+	 * 上次套用的 rewrite slug 暫存 option key（用於偵測 slug 變更後 flush）
+	 */
+	public const APPLIED_SLUG_OPTION = 'power_shop_profit_applied_cpt_slug';
 
 	/**
 	 * Constructor
@@ -77,8 +85,9 @@ final class CptRegistrar {
 			'publicly_queryable' => true,
 			'show_ui'            => true,
 			'show_in_menu'       => false, // 後台 UI 走 React SPA，不掛在原生選單。
-			'show_in_rest'       => true,
-			'rest_base'          => self::POST_TYPE,
+			// show_in_rest = false：避免 author+ 經由 wp/v2/powershop 繞過 V2Api 權限檢查。
+			// 自家 REST API 走 power-shop namespace（Phase 3 V2Api 處理）。
+			'show_in_rest'       => false,
 			'has_archive'        => false,
 			'hierarchical'       => false,
 			'menu_icon'          => 'dashicons-money-alt',
@@ -94,7 +103,10 @@ final class CptRegistrar {
 	}
 
 	/**
-	 * 從 wp_options 讀取 rewrite slug，找不到則使用預設值
+	 * 從 wp_options 讀取 rewrite slug，找不到或不合法時 fallback 到預設值
+	 *
+	 * 經過 \sanitize_title() 過濾，避免 wp_options 被注入非法字元（空白、html、控制字元等）
+	 * 影響 rewrite system。sanitize 後若為空字串，亦 fallback 到預設。
 	 *
 	 * @return string rewrite slug
 	 */
@@ -109,6 +121,7 @@ final class CptRegistrar {
 			return self::DEFAULT_REWRITE_SLUG;
 		}
 
-		return $slug;
+		$sanitized = \sanitize_title( $slug );
+		return '' === $sanitized ? self::DEFAULT_REWRITE_SLUG : $sanitized;
 	}
 }
