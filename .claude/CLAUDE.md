@@ -45,6 +45,7 @@ pnpm release:major
 7. **Always** register new REST API classes in `Domains\Loader`
 8. **Always** use `WP::sanitize_text_field_deep()` on all REST request params
 9. **Don't** remove the Enqueue Guard (`General::in_url(['page=power-shop'])`)
+10. **Don't** 在 ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings 用 `useTable` / `useForm`（後端 `{code, data}` 與 antd-toolkit dataProvider shape 不相容）—— 用 `useCustom` / `useCustomMutation` 並明確指定 `dataProviderName: 'power-shop'`
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -52,7 +53,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 3-D + Phase 3-E 完工 → 下一步 Phase 4（前端 SPA 整合：商家後台 React 頁面 + 分潤夥伴前台 hash router）
+**目前狀態**：Phase 4-A 完工（商家後台 React CRUD UI 全套上線）→ 下一步 Phase 4-B（Partner self-service portal + 分潤賣場前台）
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -136,14 +137,31 @@ pnpm release:major
 | T-11 OpenAPI 同步 | `specs/api/api.yml` 從 1996 行擴增至 2940+ 行：26 個 Profit Shop endpoint（Phase 3-A/B/C/E 全收）+ 21 個 component schemas + 3 個 securitySchemes（`PartnerToken` / `PartnerBearer` / `PartnerCookie`）+ partner endpoint 裸 payload 標註 + partner-reports 三 endpoint description 鎖死「禁從 query string 讀 partner_term_id」 | `specs/api/api.yml` |
 | 測試 | 9 method（ValidateSlugUseCaseTest，FakeSlugConflictDetector）+ 紅燈 IT 7 method（待 wp-env 跑） | `tests/Unit/Application/UseCase/Shop/` |
 
-### Phase 4 預告（待辦）
+### Phase 4-A（商家後台 React CRUD UI）已完工（commits `1c1e3b9` / `883edc9` / `6610548`）
 
-**下一階段：前端 SPA 整合 + Frontend** —— 後端 26 個 endpoint 全部就緒、OpenAPI 同步完成，進入前端開發。
+| Batch | Commit | 範圍 | 檔案 |
+|-------|--------|------|------|
+| 4-A1 | `1c1e3b9` | ProfitShop CRUD（List / Edit / Create）+ SlugInput 即時驗證（debounce + useCustom enabled 切換）+ profitShopExceptionMapper（12 種 code → 友善繁中訊息）+ Q1 落坑紀錄（後端 `{code, data}` 不相容 antd-toolkit dataProvider，改 useCustom / useCustomMutation） | 12 檔（+1175 行） |
+| 4-A2 | `883edc9` | Partner CRUD（List / Edit / Create + PartnerForm + PartnerSelector）+ RegeneratePasswordButton ⚠ HIGH-RISK（明文僅 useState、5 min auto-clear、Modal closable=false / maskClosable=false / keyboard=false、navigator.clipboard 無 fallback）+ ItemsEditor（OverrideItem 列表編輯，dedupe）+ ShopActionsButtons（publish / unpublish / duplicate）+ ProfitShopForm 升級（partner_term_id → PartnerSelector、items → ItemsEditor）；reviewer + security 雙審 PASS | 18 檔（+1490 行） |
+| 4-A3 | `6610548` | ProfitMigration（List + ImportModal ⚠ HIGH-RISK 4 道閘門）+ ProfitSettings（單頁 + ResetButton ⚠ HIGH-RISK 自包 mutation）+ OneShop 改造為雙入口（新版 / 舊版 wp-admin）+ 三輪 reviewer 累積 9 條順手清單清完（含 LOW-1 統一補 `dataProviderName: 'power-shop'` 30+ 處、LOW-2 Input.Password 預設 mask + 5 min timer 補 setPwdVisible(false) bugfix）；reviewer + security 雙審 PASS | 18 檔（+945 行） |
+
+**Phase 4-A 完工要點**：
+- 4 個 resource：ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings（全部掛在 marketing parent）
+- 共用工具：`utils/profitShopExceptionMapper.ts`（12 種 ErrorCode → 友善繁中訊息）
+- HIGH-RISK 元件 3 個：RegeneratePasswordButton（明文密碼）/ ImportModal（不可逆 import）/ ResetButton（不可逆 reset）
+- 防 refetch 覆寫 pattern：`filledIdRef` + `queryOptions.refetchOnWindowFocus: false`（4-A1 起沿用）
+- ProfitSettings：`filledRef` + `lastFilledSettingsRef` 雙保險（首次填表 + reset 後 server 變動自動重填）
+- npx tsc --noEmit baseline 不變，pnpm lint 全綠，既有 SPA（Product / Order / Users）零 regression
+
+### Phase 4-B 預告（待辦）
+
+**下一階段：Partner self-service portal + 分潤賣場前台**
 
 優先順序：
-1. **商家後台 React 頁面**：Profit Shop 列表 / 編輯（雙 mode toggle）/ Partner CRUD / Migration 視圖 / Settings 表單
-2. **分潤夥伴前台**：`/profit-report/{slug}/` 路由 + Login 頁 + Dashboard（KPI / Trend / Settlements 三 widget）
-3. **AddToCart 前端整合**：cart_item_data 注入 4 筆 `_profit_*` meta + signature 由後端簽發後夾帶
+1. **分潤夥伴前台**：`/profit-report/{slug}/` 路由 + Login 頁 + Dashboard（KPI / Trend / Settlements 三 widget）
+2. **分潤賣場前台**：自定 `/profit-shop/{slug}/` 路由顯示 partner 專屬商品列表（含 PriceCalculator fallback chain）
+3. **AddToCart 前端整合**：cart_item_data 注入 4 筆 `_profit_*` meta + signature 由後端簽發後夾帶（後端 CartPriceOverrideHook 已就緒）
+4. **'power-shop' dataProvider thin wrapper**（Phase 4-A1 自決踩坑紀錄遺留）：包 `{code, data}` 讓未來頁面能用 useTable / useForm
 
 ### Reviewer 累積的「未來補強建議」（非 blocking）
 

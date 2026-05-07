@@ -254,7 +254,98 @@ Phase 3-D + 3-E 新增測試：
 | Phase 3-D Batch 3（RateLimiter +per-IP + Cart Hook）| `4e1c780` |
 | Phase 3-D Batch 4（V2Api 整合 + 11 條安全強化）| `3b36a2a` |
 | Phase 3-E（validate-slug + ExceptionMapper 解封 + OpenAPI 同步）| `0660fc7` |
+| Phase 4-A1（ProfitShop CRUD UI + SlugInput + ExceptionMapper）| `1c1e3b9` |
+| Phase 4-A2（Partner CRUD + RegeneratePasswordButton + ItemsEditor + ShopActionsButtons）| `883edc9` |
+| Phase 4-A3（Migration + Settings + OneShop 改造 + 9 條順手清單收尾）| `6610548` |
 
 設計與決策來源：
 - `specs/2026-05-06-profit-shop-design.md`（含 Q1-Q6 plan 階段決策、§4 endpoint、§6.11 slug 衝突、§7 例外對映）
 - 各 commit message 內附 reviewer / acceptance-evaluator 結論與順手清單
+
+---
+
+## 12. 前端 SPA 架構（Phase 4-A）
+
+商家後台 React CRUD UI，4 個 resource 對應 4 個 page module，全部掛在 `marketing` parent 下。詳細元件結構與目錄樹見 `react.rule.md` §6.5。
+
+### 12.1 Resource 路由
+
+| Resource | 路由 | Page Module |
+|----------|------|-------------|
+| `profit-shop` | `/profit-shop` / `/create` / `/edit/:id` | `pages/admin/ProfitShop/` |
+| `profit-partner` | `/profit-partner` / `/create` / `/edit/:id` | `pages/admin/ProfitPartner/` |
+| `profit-migration` | `/profit-migration` | `pages/admin/ProfitMigration/` |
+| `profit-settings` | `/profit-settings` | `pages/admin/ProfitSettings/` |
+
+### 12.2 useCustom 取代 useTable / useForm
+
+後端 V2Api 統一回 `{code, message, data}`，與 antd-toolkit 預設 dataProvider 預期的 WordPress REST API shape（`x-wp-total` header、payload 直接是 array / object）**不相容**。
+
+**規範：**
+- 4 個 profit-* resource **不**使用 `useTable` / `useForm`
+- 改用 `useCustom` / `useCustomMutation`，手動讀 `result.data.data`
+- 仍須明確指定 `dataProviderName: 'power-shop'`（含元件層 useCustom 如 `SlugInput`）
+- Refine 仍提供 `<List>` / `<Edit>` / `<Create>` UI shell + `useInvalidate` 做快取失效
+
+未來若改用 `useTable` / `useForm`，需先為 `'power-shop'` dataProvider 寫 thin wrapper 拆解 `{code, data}`。屬於 Phase 4-B 自選改造項。
+
+### 12.3 dataProviderName: 'power-shop' 統一規範
+
+所有打 profit-* endpoint 的 `useCustom` / `useCustomMutation`（包含元件層的 `SlugInput`、`PartnerSelector`、`ItemsEditor` 內部查詢）**必須**明示 `dataProviderName: 'power-shop'`。Phase 4-A3 的 LOW-1 已對 30+ 處統一補齊，並寫入 CLAUDE.md Common Pitfall #10。
+
+### 12.4 不可逆操作的 4 道閘門 / 二次確認模式
+
+ProfitMigration `ImportModal` 與 ProfitSettings `ResetButton` 屬不可逆操作，採以下模式：
+
+**ImportModal（IMPORT）4 道閘門**：
+1. List 列每 row 的 `Import` 按鈕：`importable=false` 時 `disabled` + tooltip 顯示原因
+2. Modal 開啟後 `canSubmit` 仍雙檢 `importable`（防 cache stale）
+3. PartnerSelector 必選（強制 partner_term_id）
+4. IMPORT 二次確認（typed confirmation 或 confirm dialog）
+
+**ResetButton（RESET）紀律**：
+- 自包 mutation（不外洩通用 `useReset` hook，避免誤用於其他頁面）
+- RESET 二次確認 + Modal `maskClosable=false` + `keyboard=false`（強制走確認按鈕）
+- 失敗保留 state；成功 `useInvalidate` 觸發父頁 content-diff 自動重填
+
+兩個元件都用 `Modal closable=false` / `maskClosable=false` / `keyboard=false` 強制使用者走確認按鈕，避免誤觸 ESC / mask click 自動關閉視為「同意」。
+
+### 12.5 HIGH-RISK 元件的安全紀律
+
+#### RegeneratePasswordButton（明文密碼僅展示一次）
+
+8 條紀律（4-A2 master self-check + reviewer / security 雙審 PASS）：
+
+1. 明文新密碼僅在元件 `useState` —— **不**進 cache / storage / log / Jotai / Context / Redux
+2. 5 分鐘 `setTimeout` auto-clear + unmount cleanup（4-A3 補 `setPwdVisible(false)`，否則下次開 modal 殘留 visible=true）
+3. Modal `closable=false` + `maskClosable=false` + `keyboard=false`（強制走確認按鈕）
+4. `navigator.clipboard.writeText` —— **不**fallback `document.execCommand('copy')`
+5. response 型別守衛：`'password' in payload && typeof payload.password === 'string'`
+6. error case **不**顯示舊密碼（清空 state）
+7. Edit 主表單 submit payload **不**含 password（要改密碼必須走 RegeneratePasswordButton）
+8. Input.Password 預設 mask（`visibilityToggle.visible` 由 state 控制，初始 `false`）
+
+#### ImportModal / ResetButton
+
+見 §12.4。
+
+### 12.6 防 refetch 覆寫使用者編輯 Pattern
+
+React Query `refetchOnWindowFocus`（預設 true）會讓 `record` reference 變化 → `useEffect(() => form.setFieldsValue(record), [record])` 觸發 → 使用者打字到一半被覆蓋。
+
+**對策（4-A1 起 Edit 頁面共用）：**
+
+```tsx
+const filledIdRef = useRef<number | null>(null)
+
+useEffect(() => {
+  if (record && record.id !== filledIdRef.current) {
+    form.setFieldsValue(record)
+    filledIdRef.current = record.id
+  }
+}, [record, form])
+
+// 雙保險：對應的 useCustom 加 queryOptions: { refetchOnWindowFocus: false }
+```
+
+**ProfitSettings 加強版（4-A3）**：因為 reset 會讓 server 內容變動但 page 不重新 mount，不能光靠 `filledIdRef`（settings 沒有 id）。改用 `lastFilledSettingsRef` 做 content-diff：reset 後內容變動時重填，單純 refetch 同內容時不覆寫使用者編輯。
