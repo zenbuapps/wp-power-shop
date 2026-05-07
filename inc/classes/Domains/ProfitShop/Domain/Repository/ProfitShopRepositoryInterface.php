@@ -52,4 +52,17 @@ interface ProfitShopRepositoryInterface {
 	 * @return ProfitShop[]
 	 */
 	public function find_by_partner( int $term_id ): array;
+
+	/**
+	 * 列出全部賣場（含 publish 與 draft，排除 trash）
+	 *
+	 * 對應 spec §4.1 GET /profit-shops 列表端點。
+	 *
+	 * ⚠️ 警告：此方法無分頁，會載入所有賣場並對每筆做 O(n) meta hydrate（N+1 query）。
+	 *          適用於資料量 < 200 的後台 admin list。超過此規模請改用後續 phase 將要新增的
+	 *          paginate( int $page, int $per_page, FilterCriteria $criteria )。
+	 *
+	 * @return ProfitShop[]
+	 */
+	public function all(): array;
 }

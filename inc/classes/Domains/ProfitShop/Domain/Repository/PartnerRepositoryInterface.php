@@ -79,4 +79,17 @@ interface PartnerRepositoryInterface {
 	 * @return void
 	 */
 	public function delete( int $term_id ): void;
+
+	/**
+	 * 列出全部 Partner（id 升冪排序）
+	 *
+	 * 對應 spec §4.2 GET /profit-partners 列表端點。
+	 *
+	 * ⚠️ 警告：此方法無分頁，會載入所有 Partner 並對每筆做 O(n) termmeta hydrate（N+1 query）。
+	 *          適用於資料量 < 200 的後台 admin list。超過此規模請改用後續 phase 將要新增的
+	 *          paginate( int $page, int $per_page, FilterCriteria $criteria )。
+	 *
+	 * @return PartnerSnapshot[]
+	 */
+	public function all(): array;
 }

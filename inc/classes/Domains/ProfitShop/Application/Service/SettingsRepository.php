@@ -1,8 +1,6 @@
 <?php
 /**
- * 全域設定 Repository Service（Phase 3-A 骨架）
- *
- * @phpcs:disable Squiz.Commenting.FunctionComment.InvalidNoReturn
+ * 全域設定 Repository（wp_options 實作）
  */
 
 declare(strict_types=1);
@@ -12,27 +10,33 @@ namespace J7\PowerShop\Domains\ProfitShop\Application\Service;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\SettingsDto;
 
 /**
- * Profit Shop 全域設定的讀寫
+ * Profit Shop 全域設定的 wp_options 實作
  *
- * 對應規格：specs/2026-05-06-profit-shop-design.md §6.5
+ * 對應規格：specs/2026-05-06-profit-shop-design.md §4.8、§6.5
  *
- * 預定責任（Phase 3-B 實作）：
- * - 以 wp_options 儲存設定
- * - 提供 SettingsDto 抽象避免散在代碼中的 get_option() / update_option()
- *
- * Phase 3-A 僅交付骨架；method body 拋 BadMethodCallException。
+ * 與 RewriteRules / CptRegistrar 共用同一個 OPTIONS_KEY = 'power_shop_profit_settings'，
+ * 確保 PUT /profit-settings 後，後續 RewriteRules::flush_rules_if_needed() 能讀到最新值。
  */
-final class SettingsRepository {
+final class SettingsRepository implements SettingsRepositoryInterface {
+
+	use \J7\WpUtils\Traits\SingletonTrait;
+
+	/**
+	 * 全站設定的 wp_options key（與 RewriteRules / CptRegistrar 一致）
+	 */
+	public const OPTIONS_KEY = 'power_shop_profit_settings';
 
 	/**
 	 * 取得當前設定
 	 *
-	 * @throws \BadMethodCallException Phase 3-A 尚未實作
-	 *
-	 * @return SettingsDto
+	 * @return SettingsDto 找不到 / 未設定時回傳預設 DTO
 	 */
 	public function get(): SettingsDto {
-		throw new \BadMethodCallException( __METHOD__ . ' — TODO Phase 3-B' );
+		$raw = \get_option( self::OPTIONS_KEY, [] );
+		if ( ! is_array( $raw ) ) {
+			$raw = [];
+		}
+		return SettingsDto::from_array( $raw );
 	}
 
 	/**
@@ -40,11 +44,21 @@ final class SettingsRepository {
 	 *
 	 * @param SettingsDto $dto 待儲存的設定 DTO
 	 *
-	 * @throws \BadMethodCallException Phase 3-A 尚未實作
-	 *
 	 * @return void
 	 */
 	public function save( SettingsDto $dto ): void {
-		throw new \BadMethodCallException( __METHOD__ . ' — TODO Phase 3-B' );
+		\update_option( self::OPTIONS_KEY, $dto->to_array(), false );
+	}
+
+	/**
+	 * 還原為預設值（直接刪除 option key）
+	 *
+	 * 後續 get() 找不到 option 時會自動 fallback 到 SettingsDto::from_array( [] )，
+	 * 取得 spec 定義的預設值。比起 save( from_array([]) ) 的行為等價但意圖更明確。
+	 *
+	 * @return void
+	 */
+	public function reset(): void {
+		\delete_option( self::OPTIONS_KEY );
 	}
 }

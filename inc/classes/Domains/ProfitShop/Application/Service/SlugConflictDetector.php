@@ -1,8 +1,6 @@
 <?php
 /**
- * Slug 衝突偵測 Service（Phase 3-A 骨架）
- *
- * @phpcs:disable Squiz.Commenting.FunctionComment.InvalidNoReturn
+ * Slug 衝突偵測 Service
  */
 
 declare(strict_types=1);
@@ -14,29 +12,90 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\SlugConflict;
 /**
  * 偵測賣場 slug 是否與既有資源衝突
  *
- * 對應規格：specs/2026-05-06-profit-shop-design.md §6.1
+ * 對應規格：specs/2026-05-06-profit-shop-design.md §6.11
  *
- * 預定責任（Phase 3-B 實作）：
- * - 檢查既有 ProfitShop CPT 的 post_name
- * - 檢查 WC product 的 post_name
- * - 檢查 WP page 的 post_name
- * - 回傳 SlugConflict[]（空陣列代表無衝突）
+ * 透過 SlugConflictLookupInterface 解耦 WP / WC 依賴，
+ * 單元測試可注入 anonymous class implements SlugConflictLookupInterface 模擬五類衝突。
  *
- * Phase 3-A 僅交付骨架；method body 拋 BadMethodCallException。
+ * Test 對應：
+ *   tests/Unit/Application/Service/SlugConflictDetectorTest.php
  */
-final class SlugConflictDetector {
+final class SlugConflictDetector implements SlugConflictDetectorInterface {
+
+	/**
+	 * 建構子
+	 *
+	 * 採 SlugConflictLookupInterface 注入（型別安全）：
+	 *   - 生產實作：WpSlugConflictLookup（呼叫 WP / WC 函式）
+	 *   - 單元測試：anonymous class implements SlugConflictLookupInterface
+	 *
+	 * @param SlugConflictLookupInterface $lookup Slug 衝突查找抽象
+	 */
+	public function __construct(
+		private readonly SlugConflictLookupInterface $lookup
+	) {}
 
 	/**
 	 * 偵測指定 slug 在指定 context 下的衝突
 	 *
 	 * @param string $slug    待檢查 slug
-	 * @param string $context 檢查情境（machine code）
+	 * @param string $context 檢查情境（machine code，例如 'profit_shop_slug'）
 	 *
-	 * @throws \BadMethodCallException Phase 3-A 尚未實作
-	 *
-	 * @return SlugConflict[]
+	 * @return SlugConflict[] 空陣列代表無衝突
 	 */
 	public function detect( string $slug, string $context ): array {
-		throw new \BadMethodCallException( __METHOD__ . ' — TODO Phase 3-B' );
+		$conflicts = [];
+
+		$wp_label = $this->lookup->is_wp_reserved( $slug );
+		if ( null !== $wp_label ) {
+			$conflicts[] = new SlugConflict(
+				conflict_kind: 'wp_reserved',
+				conflicting_slug: $slug,
+				conflicting_id: null,
+				conflicting_label: $wp_label
+			);
+		}
+
+		$wc_label = $this->lookup->is_wc_page_slug( $slug );
+		if ( null !== $wc_label ) {
+			$conflicts[] = new SlugConflict(
+				conflict_kind: 'wc_page',
+				conflicting_slug: $slug,
+				conflicting_id: null,
+				conflicting_label: $wc_label
+			);
+		}
+
+		$cpt = $this->lookup->find_conflicting_cpt( $slug );
+		if ( null !== $cpt ) {
+			$conflicts[] = new SlugConflict(
+				conflict_kind: 'cpt',
+				conflicting_slug: $slug,
+				conflicting_id: (int) ( $cpt[0] ?? 0 ),
+				conflicting_label: (string) ( $cpt[1] ?? '' )
+			);
+		}
+
+		$page = $this->lookup->find_conflicting_page( $slug );
+		if ( null !== $page ) {
+			$conflicts[] = new SlugConflict(
+				conflict_kind: 'page',
+				conflicting_slug: $slug,
+				conflicting_id: (int) ( $page[0] ?? 0 ),
+				conflicting_label: (string) ( $page[1] ?? '' )
+			);
+		}
+
+		$rewrite = $this->lookup->find_conflicting_rewrite( $slug );
+		if ( null !== $rewrite ) {
+			$conflicts[] = new SlugConflict(
+				conflict_kind: 'rewrite',
+				conflicting_slug: $slug,
+				conflicting_id: null,
+				conflicting_label: $rewrite
+			);
+		}
+
+		return $conflicts;
 	}
 }

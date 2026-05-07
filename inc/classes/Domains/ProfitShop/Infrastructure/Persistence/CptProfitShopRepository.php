@@ -124,6 +124,35 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 	}
 
 	/**
+	 * 列出全部賣場（含 publish 與 draft，排除 trash）
+	 *
+	 * @return ProfitShop[]
+	 */
+	public function all(): array {
+		$query = new \WP_Query(
+			[
+				'post_type'      => CptRegistrar::POST_TYPE,
+				'post_status'    => [ 'publish', 'draft' ],
+				'posts_per_page' => -1,
+				'fields'         => 'ids',
+				'no_found_rows'  => true,
+				'orderby'        => 'ID',
+				'order'          => 'ASC',
+			]
+		);
+
+		$shops = [];
+		foreach ( $query->posts as $post_id ) {
+			$shop = $this->find( (int) $post_id );
+			if ( null !== $shop ) {
+				$shops[] = $shop;
+			}
+		}
+
+		return $shops;
+	}
+
+	/**
 	 * 找出某 partner 旗下的所有賣場
 	 *
 	 * @param int $term_id Partner term ID

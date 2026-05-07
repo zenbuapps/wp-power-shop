@@ -194,6 +194,39 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 	}
 
 	/**
+	 * 列出全部 Partner（id 升冪排序）
+	 *
+	 * @return PartnerSnapshot[]
+	 */
+	public function all(): array {
+		$terms = \get_terms(
+			[
+				'taxonomy'   => TaxonomyRegistrar::TAXONOMY,
+				'hide_empty' => false,
+				'orderby'    => 'term_id',
+				'order'      => 'ASC',
+			]
+		);
+
+		if ( \is_wp_error( $terms ) || ! is_array( $terms ) ) {
+			return [];
+		}
+
+		$partners = [];
+		foreach ( $terms as $term ) {
+			if ( ! $term instanceof \WP_Term ) {
+				continue;
+			}
+			$snapshot = $this->hydrate_from_term( $term );
+			if ( null !== $snapshot ) {
+				$partners[] = $snapshot;
+			}
+		}
+
+		return $partners;
+	}
+
+	/**
 	 * 從 WP_Term + termmeta 重建 PartnerSnapshot
 	 *
 	 * @param \WP_Term $term 來源 term

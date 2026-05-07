@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace J7\PowerShop\Domains\ProfitShop;
 
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRules;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
@@ -17,7 +18,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
  * 對應規格：specs/2026-05-06-profit-shop-design.md §1.4、§1.5
  *
  * Phase 2：註冊 CPT / Taxonomy / Rewrite Rules。
- * Phase 3+ 將陸續加上 V2Api、Cart hooks、Order hooks 等。
+ * Phase 3-B：加上 V2Api（profit-shops / profit-partners / profit-migration / profit-settings）。
  */
 final class Loader {
 
@@ -28,5 +29,6 @@ final class Loader {
 		CptRegistrar::instance();
 		TaxonomyRegistrar::instance();
 		RewriteRules::instance();
+		V2Api::instance();
 	}
 }
