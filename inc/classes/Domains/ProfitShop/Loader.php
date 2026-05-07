@@ -12,6 +12,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepo
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\CartPriceOverrideHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\PartnerPortalRenderer;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRules;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSaltProvider;
@@ -24,6 +25,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSaltProvider;
  * Phase 2：註冊 CPT / Taxonomy / Rewrite Rules。
  * Phase 3-B：加上 V2Api（profit-shops / profit-partners / profit-migration / profit-settings）。
  * Phase 3-D：加上 CartPriceOverrideHook（前台 cart 價格防竄改）。
+ * Phase 4-B1：加上 PartnerPortalRenderer（前台 /profit-report/{slug}/ HTML 骨架輸出）。
  */
 final class Loader {
 
@@ -34,6 +36,7 @@ final class Loader {
 		CptRegistrar::instance();
 		TaxonomyRegistrar::instance();
 		RewriteRules::instance();
+		PartnerPortalRenderer::instance();
 		V2Api::instance();
 
 		// Phase 3-D：前台 cart 價格 override hook（最高風險：影響真實訂單金額）

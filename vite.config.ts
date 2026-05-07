@@ -23,8 +23,14 @@ export default defineConfig({
 		// liveReload(__dirname + '/**/*.php'), // Optional, if you want to reload page on php changed
 
 		v4wp({
-			input: 'js/src/main.tsx', // Optional, defaults to 'src/main.js'.
-			outDir: 'js/dist', // Optional, defaults to 'dist'.
+			// Multi-entry：admin SPA 與 partner self-service portal 共用同一個 build pipeline。
+			// 使用 array 形式可保持 manifest key 為原始 entry path（既有 PHP enqueue 不需改動）。
+			// Phase 4-B1.2：partner portal 入口為 mock，由 4-B1.3 react-master 接續實作主體。
+			input: [
+				'js/src/main.tsx',
+				'js/src/partner-portal/main.tsx',
+			],
+			outDir: 'js/dist',
 		}),
 	],
 
