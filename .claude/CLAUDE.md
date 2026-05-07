@@ -46,6 +46,7 @@ pnpm release:major
 8. **Always** use `WP::sanitize_text_field_deep()` on all REST request params
 9. **Don't** remove the Enqueue Guard (`General::in_url(['page=power-shop'])`)
 10. **Don't** 在 ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings 用 `useTable` / `useForm`（後端 `{code, data}` 與 antd-toolkit dataProvider shape 不相容）—— 用 `useCustom` / `useCustomMutation` 並明確指定 `dataProviderName: 'power-shop'`
+11. **Partner self-service portal** 是**獨立 SPA bundle**（mount 點 `#profit_partner_portal`，URL `/profit-report/{slug}/`），與 admin SPA 完全隔離。Auth 走 cookie + sessionStorage metadata（永不存 token）；不用 Refine / dataProvider，直接 axios + `useCustom`/`useCustomMutation`；不打包 admin（grep `App1` / `Refine` 0 命中為驗收）。
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -53,7 +54,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A 完工（商家後台 React CRUD UI 全套上線）→ 下一步 Phase 4-B（Partner self-service portal + 分潤賣場前台）
+**目前狀態**：Phase 4-A + 4-B 完工 → 下一步 Phase 4-C（賣場前台 + AddToCart 整合）
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -153,15 +154,38 @@ pnpm release:major
 - ProfitSettings：`filledRef` + `lastFilledSettingsRef` 雙保險（首次填表 + reset 後 server 變動自動重填）
 - npx tsc --noEmit baseline 不變，pnpm lint 全綠，既有 SPA（Product / Order / Users）零 regression
 
-### Phase 4-B 預告（待辦）
+### Phase 4-B（Partner self-service portal，獨立 SPA）已完工（commits `bc3ea5c` / `7e40969` / `23e76e9`）
 
-**下一階段：Partner self-service portal + 分潤賣場前台**
+| Batch | Commit | 範圍 | 檔案 |
+|-------|--------|------|------|
+| 4-B1 | `bc3ea5c` | Partner portal Skeleton：PartnerPortalRenderer（PHP `template_redirect` priority 9，攔 query var `profit_partner_report`，partner term 不存在 → 404，存在 → 輸出**獨立** HTML 骨架，**不**走 `get_header` / `wp_head` / `get_footer`）+ Vite multi-entry（v4wp `input: string[]` 同時打 admin 與 partner-portal 兩個 bundle）+ Auth 系統（axios `withCredentials` + 401 interceptor + sessionStorage 只存 metadata 不存 token + AuthContext status 三態 + 跨 partner 雙保險：`status='loading'` masking + partner 物件遮蔽 null）+ Login 頁（rate-limit `Retry-After` parse + cooldown 倒數 + `partnerExceptionMapper` fallback 到 admin `profitShopExceptionMapper`） | 15 檔（+990） |
+| 4-B2 | `7e40969` | Partner portal Dashboard 殼：DateRangeFilter（5 preset：本月 / 上月 / 近 7 天 / 近 30 天 / 自訂，dayjs + Segmented + RangePicker）+ KPI 4 卡（總銷售 / 待結算 / 已結算 / 已退款，mobile stack）+ LoadingScreen + ErrorBoundary（**partner-portal 唯一 class component**）+ `api/reports.ts`（`fetchKpi`，**partner_term_id 永不出現在 query**，後端 token 鎖死）+ `useKpi` typed `useQuery<TKpiOutput, AxiosError>` | 8 檔（+571） |
+| 4-B3 | `23e76e9` | Partner portal Trend + Settlements + 收尾：TrendChart（echarts 折線圖，**callback ref pattern** 取代 `useRef` + `useEffect` 解決 reviewer C-1 race condition）+ SettlementsTable（desktop / mobile 響應式 + status filter + `formatAmount`）+ `useTrend` / `useSettlements`（typed `useQuery`）+ `apiClient` baseURL 內建（`readPartnerEnv` 純函式，免每次傳 `apiUrl`）+ `useAuth.ts` 拆兩層 re-export 簡化（直接 import `AuthContext`）+ Vite manifest fallback（PartnerPortalRenderer `render_maintenance` 503 + `nocache_headers`，防 manifest 缺 entry 看到空白頁）；reviewer 二輪 PASS（C-1 echarts init / m-1 echarts chunk dedup 自承不準 / m-2 / n-3 全清） | 14 檔（+~840） |
+
+**Phase 4-B 完工要點**：
+- 完整 partner self-service portal：`/profit-report/{slug}/` URL + 獨立 SPA bundle（mount 點 `#profit_partner_portal`，與 admin 完全隔離）
+- HashRouter（與 admin 一致，避免 BrowserRouter 與 RewriteRules 衝突）+ Login + Dashboard（KPI / Trend / Settlements 三 widget）
+- HTTP-only cookie auth + sessionStorage metadata（**永不存 token**，XSS 防護）
+- 跨 partner 雙保險（status `'loading'` 而非 `'authenticated'` + partner 物件 mismatch 遮蔽 null）
+- 401 interceptor 在 React tree 之外（`window.location.hash` 跳轉，`isLoginPage` 防迴圈）
+- rate-limit 倒數 UX（`Retry-After` header parse + 防呆 NaN / negative）
+- echarts callback ref pattern（reviewer C-1 教訓：dispose race + ref attach timing）
+- Vite manifest fallback maintenance 503（reviewer L-3 修補）
+- partner bundle 隔離驗收：grep `App1` / `Refine` / `@refinedev` / `dataProviderName` / `wc-rest` / `wp-rest` / `X-WP-Nonce` 全部 0 命中
+- 不引入新 npm 套件（複用 admin 既有 antd / react-query / axios / antd-toolkit `simpleDecrypt` / dayjs / echarts）
+- 不動 admin SPA 任何檔案 / 6 個 admin dataProvider 配置
+- pnpm build / lint / tsc baseline 維持，composer lint 全綠
+
+### Phase 4-C 預告（待辦）
+
+**下一階段：分潤賣場前台 + AddToCart 整合**
 
 優先順序：
-1. **分潤夥伴前台**：`/profit-report/{slug}/` 路由 + Login 頁 + Dashboard（KPI / Trend / Settlements 三 widget）
-2. **分潤賣場前台**：自定 `/profit-shop/{slug}/` 路由顯示 partner 專屬商品列表（含 PriceCalculator fallback chain）
-3. **AddToCart 前端整合**：cart_item_data 注入 4 筆 `_profit_*` meta + signature 由後端簽發後夾帶（後端 CartPriceOverrideHook 已就緒）
-4. **'power-shop' dataProvider thin wrapper**（Phase 4-A1 自決踩坑紀錄遺留）：包 `{code, data}` 讓未來頁面能用 useTable / useForm
+1. **分潤賣場前台**：`/profit-shop/{slug}/` 路由顯示 partner 專屬商品列表（含 PriceCalculator fallback chain）
+2. **AddToCart 前端整合**：cart_item_data 注入 4 筆 `_profit_*` meta + signature 由後端簽發後夾帶（後端 CartPriceOverrideHook 已就緒）
+3. **'power-shop' dataProvider thin wrapper**（Phase 4-A1 自決踩坑紀錄遺留）：包 `{code, data}` 讓未來頁面能用 useTable / useForm
+4. **賣場前台技術選型 brainstorming**（PHP page template vs React）+ Cart UI 顯示分潤標記
+5. **Partner 自助修密碼**（需後端新 endpoint，Phase 4-B 不做）
 
 ### Reviewer 累積的「未來補強建議」（非 blocking）
 

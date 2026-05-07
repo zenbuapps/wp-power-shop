@@ -257,6 +257,9 @@ Phase 3-D + 3-E 新增測試：
 | Phase 4-A1（ProfitShop CRUD UI + SlugInput + ExceptionMapper）| `1c1e3b9` |
 | Phase 4-A2（Partner CRUD + RegeneratePasswordButton + ItemsEditor + ShopActionsButtons）| `883edc9` |
 | Phase 4-A3（Migration + Settings + OneShop 改造 + 9 條順手清單收尾）| `6610548` |
+| Phase 4-B1（Partner portal Skeleton：PartnerPortalRenderer + Vite multi-entry + Auth + Login）| `bc3ea5c` |
+| Phase 4-B2（Partner portal Dashboard 殼：DateRangeFilter + KPI 4 卡 + LoadingScreen + ErrorBoundary）| `7e40969` |
+| Phase 4-B3（Partner portal Trend + Settlements + 收尾：echarts callback ref + apiClient baseURL + manifest fallback）| `23e76e9` |
 
 設計與決策來源：
 - `specs/2026-05-06-profit-shop-design.md`（含 Q1-Q6 plan 階段決策、§4 endpoint、§6.11 slug 衝突、§7 例外對映）
@@ -264,9 +267,9 @@ Phase 3-D + 3-E 新增測試：
 
 ---
 
-## 12. 前端 SPA 架構（Phase 4-A）
+## 12. 前端 SPA 架構（Phase 4-A + 4-B）
 
-商家後台 React CRUD UI，4 個 resource 對應 4 個 page module，全部掛在 `marketing` parent 下。詳細元件結構與目錄樹見 `react.rule.md` §6.5。
+兩個獨立的 React SPA bundle：商家後台 admin SPA（4-A）+ Partner self-service portal（4-B）。前者掛在 `admin.php?page=power-shop`，後者掛在 `/profit-report/{slug}/`。詳細元件結構與目錄樹見 `react.rule.md` §6.5（admin Profit Shop 系列）與 §6.6（Partner Portal）。
 
 ### 12.1 Resource 路由
 
@@ -349,3 +352,123 @@ useEffect(() => {
 ```
 
 **ProfitSettings 加強版（4-A3）**：因為 reset 會讓 server 內容變動但 page 不重新 mount，不能光靠 `filledIdRef`（settings 沒有 id）。改用 `lastFilledSettingsRef` 做 content-diff：reset 後內容變動時重填，單純 refetch 同內容時不覆寫使用者編輯。
+
+### 12.7 Partner Portal Bundle（Phase 4-B，獨立 SPA）
+
+Partner self-service portal 是與 admin SPA 完全隔離的另一支 React bundle，由 PHP `PartnerPortalRenderer` 在前台渲染。詳細目錄與安全紀律見 `react.rule.md` §6.6；架構流程圖與初始化路徑見 `architecture.rule.md` 的 partner portal 章節。
+
+#### URL 與渲染
+
+| 項 | 值 |
+|----|----|
+| URL | `/profit-report/{slug}/`（Phase 2 RewriteRules 註冊） |
+| Query var | `profit_partner_report = $slug`（雙保險 `(string) cast` + `sanitize_title`） |
+| PHP renderer | `Infrastructure/WordPress/PartnerPortalRenderer`（`template_redirect` priority 9，早於 theme 的 `template_include`） |
+| Mount 點 | `<div id="profit_partner_portal"></div>` |
+| Entry | `js/src/partner-portal/main.tsx` |
+| Vite 配置 | multi-entry `input: ['js/src/main.tsx', 'js/src/partner-portal/main.tsx']` |
+| 環境變數 | `window.power_shop_partner_data.env`（SimpleEncrypt 加密：`SITE_URL` / `API_URL` / `KEBAB` / `SLUG`，**無 nonce**） |
+| Theme | **完全脫離**，不走 `get_header` / `wp_head` / `get_footer` / `wp_footer`；自己印 HTML 骨架 |
+
+不存在 → `render_404()` + `status_header(404)` + `exit`。Vite manifest 缺 entry → `render_maintenance()` 503 + `nocache_headers` + `exit`（Phase 4-B3 reviewer L-3 fallback）。
+
+#### 隔離邊界
+
+partner bundle **不**打包 admin 的任何模組。隔離驗收（4-B 必過）：
+
+```bash
+# build 後對 partner main entry chunk grep
+grep -E 'App1|Refine|@refinedev|dataProviderName|wc-rest|wp-rest|X-WP-Nonce' partner-main.js
+# 應全部 0 命中
+```
+
+若有命中代表誤 import 了 admin 模組，須拆 import path（不從 `@/` 跨入 admin tree）。
+
+#### Auth：cookie + sessionStorage metadata（不存 token）
+
+| 機制 | 紀律 |
+|------|------|
+| 認證載體 | HTTP-only cookie（後端 `partner-auth/login` 用 `Set-Cookie` 簽發；HttpOnly + Secure + SameSite=Lax + Path=/wp-json/power-shop/） |
+| 前端 axios | `withCredentials: true`（讓 cookie 自動帶上） |
+| Token 儲存 | **永不**進 localStorage / sessionStorage / cookie 主動讀寫；前端**讀不到** token（XSS 防護） |
+| sessionStorage | 只存 metadata：`partner_id` / `partner_name` / `partner_slug` / `expires_at`，`session.read()` shape 防呆 |
+| 401 interceptor | 在 React tree 之外，`window.location.hash = '#/login'` 跳轉，`isLoginPage` 防迴圈 |
+| Logout | **永遠 local cleanup**（清 sessionStorage + react-query cache + 跳 login）即使 API 失敗 |
+
+#### 跨 partner 雙保險（reviewer M-1 4-B1 必修）
+
+URL slug 與 sessionStorage 中的 `partner_slug` 不一致時（攻擊者直接打開另一個 partner 的 URL），AuthContext 必須**雙保險**遮蔽：
+
+```ts
+// AuthContext.tsx
+const isMismatch = urlSlug !== session?.partner_slug
+
+const status = isMismatch ? 'loading' : (session ? 'authenticated' : 'guest')
+                  // ↑ 不是 'authenticated'，避免短暫渲染舊 partner 資料
+const partner = isMismatch ? null : session
+                  // ↑ 雙保險：即使下游元件誤 render，partner 也是 null
+
+useEffect(() => {
+  if (isMismatch) {
+    handleLogout()           // 清 session + 跳 login
+    notification.warning(...) // 通知
+  }
+}, [isMismatch])
+```
+
+兩道防線缺一不可：只靠 `status` 防短暫渲染；只靠 `partner=null` 在 `useEffect` 觸發前 status 仍可能是 `'authenticated'`。
+
+#### rate-limit 倒數（Retry-After header parse）
+
+Login 失敗 429 時，後端回 `Retry-After` header（秒數）。前端 `utils/retryAfter.ts`：
+
+- 防呆 `NaN` / negative / 非數字 → 預設 cooldown=0
+- cooldown timer 倒數秒數，期間 button `disabled`
+- 倒數歸零自動釋放
+- error 訊息走 `mapPartnerException`（`too_many_attempts` / `unauthorized` 額外訊息 + fallback admin `profitShopExceptionMapper` 12 種 code）
+
+#### echarts callback ref pattern（reviewer C-1 教訓，4-B3）
+
+❌ `useRef` + `useEffect` init echarts → mount 時 ref 還沒 attach DOM，`echarts.init` 失敗或 dispose race。
+
+✅ callback ref：在 DOM mount/unmount 那一瞬被觸發，沒有時序間隙。
+
+```tsx
+const chartRef = useCallback((node: HTMLDivElement | null) => {
+  if (!node) {
+    chartInstanceRef.current?.dispose()
+    chartInstanceRef.current = null
+    return
+  }
+  chartInstanceRef.current = echarts.init(node)
+  chartInstanceRef.current.setOption(option)
+}, [option])
+```
+
+#### 不引入 Refine / dataProvider
+
+partner bundle **不**用 Refine v4 / 6 個 admin dataProvider。直接 axios `apiClient`（`baseURL` 內建）+ react-query 原生 `useQuery` / `useMutation`。
+
+`api/reports.ts` 的 `fetchKpi` / `fetchTrend` / `fetchSettlements` 是 thin wrapper，**partner_term_id 永不出現在 query**（後端 token 鎖死，spec §7 invariant + 本檔 §7「partner_term_id 鎖死於 token」）。
+
+#### 資料流
+
+```
+partner 在瀏覽器訪問 /profit-report/{slug}/
+  → PHP PartnerPortalRenderer 渲染獨立 HTML（mount 點 + 加密 env）
+  → partner-portal/main.tsx mount React SPA
+  → AuthProvider 從 sessionStorage 讀 metadata + 比對 URL slug
+    ├─ guest / mismatch → /login（rate-limit 倒數 + cooldown）
+    │   └─ login 成功 → 後端 Set-Cookie HttpOnly + 回 metadata
+    │       → sessionStorage 寫入 metadata（不存 token）
+    │       → router 跳 /dashboard
+    └─ authenticated → /dashboard
+        → useKpi / useTrend / useSettlements
+        → axios apiClient（withCredentials + cookie 自動帶）→
+        → /wp-json/power-shop/partner-reports/{kpi,trend,settlements}
+        → V2Api partner_token_permission 從 cookie 取出 token
+          → PartnerTokenStore::verify 還原 partner_term_id
+          → 寫入 $request->_partner_term_id
+          → UseCase 從 caller 取（永不從 query string）
+        → 裸 payload 回前端（不裹 {code, data}）
+```

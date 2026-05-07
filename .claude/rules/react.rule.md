@@ -343,6 +343,150 @@ ProfitSettings 額外加 `lastFilledSettingsRef`（content-diff 比對）：rese
 
 ---
 
+## 6.6 Partner Portal 前端架構（Phase 4-B）
+
+Partner self-service portal 是與 admin 完全隔離的獨立 SPA。目錄、entry、tooling、安全紀律皆與 admin SPA 不同。
+
+### 目錄結構
+
+```
+js/src/partner-portal/
+├── main.tsx                    # Entry：QueryClientProvider + ConfigProvider + HashRouter + AuthProvider
+├── App.tsx                     # Routes + AuthGate（guest → /login，auth → /dashboard）
+├── api/
+│   ├── client.ts               # axios instance（withCredentials + 401 interceptor + baseURL 內建）
+│   └── reports.ts              # fetchKpi / fetchTrend / fetchSettlements wrappers（partner_term_id 永不出現在 query）
+├── auth/
+│   ├── api.ts                  # login / logout / fetchMe wrappers
+│   ├── session.ts              # sessionStorage helper（只存 metadata，shape 防呆）
+│   └── AuthContext.tsx         # status 三態 + 跨 partner 雙保險（從 4-B3 起 useAuth 直接 import）
+├── components/
+│   ├── DateRangeFilter.tsx     # 5 preset + 自訂 RangePicker（dayjs + Segmented）
+│   ├── ErrorBoundary.tsx       # ⚠ 唯一 class component（React framework limit）
+│   └── LoadingScreen.tsx       # Spin + minHeight 60vh
+├── hooks/
+│   ├── usePartnerEnv.ts        # 解密 window.power_shop_partner_data.env
+│   ├── useKpi.ts               # typed useQuery<TKpiOutput, AxiosError>
+│   ├── useTrend.ts
+│   └── useSettlements.ts
+├── pages/
+│   ├── Login.tsx               # rate-limit 倒數 + autoComplete + SLUG 自動帶入 disabled
+│   ├── Dashboard.tsx           # KPI 4 卡 + TrendChart + SettlementsTable
+│   ├── TrendChart.tsx          # echarts callback ref pattern（reviewer C-1 教訓）
+│   └── SettlementsTable.tsx    # desktop / mobile 響應式 + status filter
+└── utils/
+    ├── retryAfter.ts           # 解析 Retry-After header（防呆 NaN / negative / 非數字）
+    └── partnerExceptionMapper.ts # partner-specific 訊息 + fallback admin profitShopExceptionMapper
+```
+
+### Vite multi-entry 配置
+
+```typescript
+// vite.config.ts
+v4wp({
+  input: ['js/src/main.tsx', 'js/src/partner-portal/main.tsx'],
+  outDir: 'js/dist',
+})
+```
+
+採 array 形式（manifest key 保持原始 path，PHP enqueue 不需改動）。否決方案：
+- 兩個 v4wp instance：dev server 衝突
+- rollup `input` 物件命名：manifest key 變化會破 admin enqueue
+
+### 共用工具：partnerExceptionMapper
+
+```ts
+// utils/partnerExceptionMapper.ts
+export const mapPartnerException = (error: unknown): string => {
+  // 1. partner-specific code: too_many_attempts / unauthorized 額外訊息（含 Retry-After 倒數）
+  // 2. fallback: admin profitShopExceptionMapper 的 12 種 ErrorCode
+  // 3. fallback: error.message
+  // 4. fallback: '發生未知錯誤'
+}
+```
+
+### Auth flow 安全紀律
+
+| 項 | 紀律 |
+|----|------|
+| Token 儲存 | **永不**進 localStorage / sessionStorage / cookie 主動讀寫；HTTP-only cookie 由後端簽發，前端僅 axios `withCredentials: true` |
+| sessionStorage | 只存 metadata（`partner_id` / `partner_name` / `partner_slug` / `expires_at`），`session.read()` 帶 shape 防呆（JSON parse / 缺欄位 → null） |
+| 跨 partner 偵測 | URL slug ≠ session partner_slug 時：`status` 設 `'loading'`（非 `'authenticated'`，避免短暫渲染舊 partner 資料），`partner` 物件遮蔽為 `null`（雙保險），`useEffect` 觸發 logout + notification |
+| 401 interceptor | 在 React tree **之外**，用 `window.location.hash = '#/login'` 跳轉，`isLoginPage` 檢查防迴圈 |
+| Logout | **永遠 local cleanup**（清 sessionStorage + react-query cache + 跳 login）即使 API 失敗 |
+| Login form | autoComplete `username` / `current-password`、SLUG 從 URL 自動帶入並 `disabled` 防 typo、雙擊保護（`submitting` state + button `loading` + `disabled`） |
+| rate-limit UX | 解析 `Retry-After` header → cooldown timer 倒數秒數，期間 button disabled |
+
+### echarts callback ref pattern（reviewer C-1 教訓）
+
+❌ 錯誤：`useRef` + `useEffect` init echarts —— 元件 mount 時 ref 還沒 attach DOM，echarts init 失敗或 dispose race。
+
+✅ 正確：callback ref pattern：
+
+```tsx
+const chartRef = useCallback((node: HTMLDivElement | null) => {
+  if (!node) {
+    // unmount：dispose
+    chartInstanceRef.current?.dispose()
+    chartInstanceRef.current = null
+    return
+  }
+  // mount：init
+  chartInstanceRef.current = echarts.init(node)
+  chartInstanceRef.current.setOption(option)
+}, [option])
+
+return <div ref={chartRef} style={{ width: '100%', height: 300 }} />
+```
+
+callback ref 在 DOM mount/unmount 那一瞬被觸發，沒有 useRef + useEffect 的時序間隙，也避免 dispose race。
+
+### apiClient baseURL 內建（4-B3 重構）
+
+```ts
+// api/client.ts
+import axios from 'axios'
+import { readPartnerEnv } from '../hooks/usePartnerEnv'
+
+const env = readPartnerEnv()
+export const apiClient = axios.create({
+  baseURL: env.API_URL,         // partner endpoint base，已含 /wp-json/power-shop
+  withCredentials: true,         // 帶 HTTP-only cookie
+  timeout: 30000,
+})
+```
+
+`readPartnerEnv` 是**純函式**（不是 React hook，不依賴 component context），可在 React tree 之外 init 模組級 axios instance。免每次傳 `apiUrl` 參數。
+
+### HIGH-RISK 元件
+
+| 元件 | 風險 | 紀律 |
+|------|------|------|
+| `Login.tsx` | rate-limit 倒數錯誤可能讓 partner 看到「永遠 disabled」 | `retryAfter.ts` 防呆 NaN / negative / 非數字 → 預設 cooldown=0 |
+| `AuthContext.tsx` | 跨 partner race window | 雙保險：`status='loading'`（避免短暫渲染舊 partner 資料） + `partner` 物件 null masking + `useEffect` 觸發 logout |
+| `TrendChart.tsx` | echarts dispose race / SSR ref 為 null | callback ref pattern + 數值 sanitize（`parseFloat` + `Number.isNaN` fallback） |
+
+### 不打包 admin（隔離驗收）
+
+partner bundle 必須完全獨立，build 後 grep 以下關鍵字應**全部 0 命中**：
+
+```bash
+# 在 js/dist/ 的 partner main entry chunk
+grep -E 'App1|Refine|@refinedev|dataProviderName|wc-rest|wp-rest|X-WP-Nonce' partner-main.js
+```
+
+若有命中代表誤 import 了 admin 模組，須拆 import path（不要從 `@/` 跨入 admin tree）。
+
+### Bundle Size 觀察
+
+| Bundle | 4-B3 size | gzip | 備註 |
+|--------|-----------|------|------|
+| partner main entry | 27 KB | 9.83 KB | 從 4-B1 的 6.4 KB / 3.0 KB 成長（多了 echarts setOption + KPI / Trend / Settlements 邏輯） |
+| echarts vendor chunk | 1.25 MB | 414 KB | partner 自家 chunk；admin 也用 echarts 但**目前未 dedup**（reviewer 4-B3 自承），Phase 5 可考慮 vite `manualChunks` |
+| admin main entry | 3.5 MB | — | 包含 App1 / Refine / 全 6 個 dataProvider |
+
+---
+
 ## 7. Dashboard 開發
 
 ### useDashboard Hook Pattern

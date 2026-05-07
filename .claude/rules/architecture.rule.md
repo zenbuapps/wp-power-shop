@@ -72,6 +72,59 @@ applyTo: "**/*.{php,ts,tsx}"
 └──────────────────────────────────────────────────────────────┘
 ```
 
+### Partner self-service portal（Phase 4-B，獨立 SPA）
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│             WordPress Frontend（非 admin）                    │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  /profit-report/{slug}/   （RewriteRules + query var    │ │
+│  │                            profit_partner_report）       │ │
+│  │  ┌───────────────────────────────────────────────────┐  │ │
+│  │  │   Partner Portal SPA (#profit_partner_portal)      │  │ │
+│  │  │  ┌────────┐  ┌──────────┐  ┌────────────────┐   │  │ │
+│  │  │  │ Login  │  │Dashboard │  │ TrendChart     │   │  │ │
+│  │  │  │ (rate- │  │ (KPI 4   │  │  (echarts,     │   │  │ │
+│  │  │  │  limit │  │  cards)  │  │  callback ref) │   │  │ │
+│  │  │  │  倒數) │  │          │  │                │   │  │ │
+│  │  │  └────────┘  └──────────┘  └────────────────┘   │  │ │
+│  │  │  ┌────────────────────────────────────────────┐  │  │ │
+│  │  │  │      SettlementsTable                       │  │  │ │
+│  │  │  │   (desktop / mobile 響應式)                 │  │  │ │
+│  │  │  └────────────────────────────────────────────┘  │  │ │
+│  │  └───────────────────────────────────────────────────┘  │ │
+│  │       HashRouter + AuthContext + axios apiClient        │ │
+│  │  ── 不打包 admin / 不依賴 Refine / 不用 dataProvider ──│ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                           │                                   │
+│                  HTTP-only Cookie auth                        │
+│       sessionStorage metadata 只存 partner_id/name/slug       │
+│                  （永不存 token，XSS 防護）                   │
+│                           │                                   │
+│                  /wp-json/power-shop/                         │
+│                    partner-auth/* + partner-reports/*         │
+│                           │                                   │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │   Phase 3-C V2Api endpoint（partner_token permission）   │ │
+│  │   partner_term_id 鎖死於 token，永不從 query string 取  │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Admin SPA vs Partner Portal SPA 對比：**
+
+| 維度 | Admin SPA | Partner Portal SPA |
+|------|-----------|--------------------|
+| URL | `admin.php?page=power-shop` | `/profit-report/{slug}/` |
+| Mount 點 | `#power_shop` | `#profit_partner_portal` |
+| Entry | `js/src/main.tsx` → `App1.tsx` | `js/src/partner-portal/main.tsx` → `App.tsx` |
+| Vite | multi-entry（`input: string[]`） | multi-entry，產出獨立 bundle |
+| PHP 渲染 | `Admin\Entry::render_page()` | `PartnerPortalRenderer::maybe_render`（`template_redirect` priority 9） |
+| Auth | WP nonce（`X-WP-Nonce`） | HTTP-only cookie + sessionStorage metadata |
+| 框架 | Refine + 6 個 dataProvider | 純 axios + react-query（無 dataProvider） |
+| Theme | 走 admin chrome | **完全脫離 theme**（不走 `get_header` / `wp_head` / `get_footer`，避免 admin bar / theme CSS / 其他 plugin 注入污染） |
+| 隔離驗收 | — | `grep App1 \| Refine \| @refinedev` 0 命中 |
+
 ### Profit Shop Domain（4-layer DDD，詳見 `profit-shop.rule.md`）
 
 ```
@@ -139,8 +192,42 @@ plugin.php
                   ├→ Report\Dashboard\Core\V2Api::instance() # 既有報表 REST API
                   └→ ProfitShop\Loader::instance()           # Profit Shop sub-loader
                       ├→ Infrastructure/WordPress/CptRegistrar / TaxonomyRegistrar / RewriteRules
+                      ├→ Infrastructure/WordPress/PartnerPortalRenderer::instance() # Phase 4-B，partner portal mount 點
                       ├→ Infrastructure/WooCommerce/CartPriceOverrideHook::instance() # Phase 3-D，admin context guard
                       └→ Infrastructure/Rest/V2Api::instance() # 26 個 endpoint
+```
+
+### Partner Portal 載入流程（Phase 4-B）
+
+```
+HTTP request: /profit-report/{slug}/
+  └→ WordPress query parsing → query var profit_partner_report = $slug
+      └→ template_redirect priority 9（早於 theme 的 template_include）
+          └→ PartnerPortalRenderer::maybe_render
+              ├→ 雙保險 sanitize: query var → (string) cast → sanitize_title()
+              ├→ get_term_by('slug', $slug, 'profit_partner')
+              ├→ 不存在 → render_404() + status_header(404) → exit
+              ├→ Vite manifest 缺 entry → render_maintenance() 503 + nocache_headers + exit（reviewer L-3 fallback）
+              └→ 存在 → render_portal():
+                  ├→ Vite\enqueue_asset(plugin_dir/js/dist, 'js/src/partner-portal/main.tsx')
+                  ├→ wp_localize_script('power-shop-partner-portal', 'power_shop_partner_data', [...])
+                  │   └→ env: SimpleEncrypt::encrypt({ SITE_URL, API_URL, KEBAB, SLUG })
+                  │       （**無 nonce**，partner 不用 wp_rest nonce）
+                  ├→ 輸出獨立 HTML 骨架（自己印 <!doctype html><html><head>...</head><body>）
+                  │   ── 不走 get_header / wp_head / get_footer / wp_footer ──
+                  │   ── 完全脫離 theme：避免 admin bar / theme CSS / 其他 plugin 注入污染 ──
+                  └→ exit（防後續 hook 覆寫輸出）
+
+partner-portal/main.tsx (DOMContentLoaded)
+  └→ ReactDOM.createRoot(#profit_partner_portal)
+      └→ <App />
+          ├→ <QueryClientProvider>          # react-query（無 Refine）
+          ├→ <ConfigProvider>               # Ant Design 主題
+          ├→ <HashRouter>                   # 與 admin 一致，避免 BrowserRouter 與 RewriteRules 衝突
+          └→ <AuthProvider>                 # status 三態 + 跨 partner 雙保險
+              └→ <AuthGate>
+                  ├→ guest → /login         # Login 頁（rate-limit 倒數）
+                  └→ authenticated → /dashboard # Dashboard（KPI / TrendChart / SettlementsTable）
 ```
 
 ### 前端載入流程
