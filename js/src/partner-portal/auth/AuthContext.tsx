@@ -61,7 +61,7 @@ const AuthContext = createContext<TAuthContextValue | null>(null)
  * 必須在 QueryClientProvider 之內使用。
  */
 const AuthProviderComponent = ({ children }: PropsWithChildren) => {
-	const { API_URL, SLUG } = usePartnerEnv()
+	const { SLUG } = usePartnerEnv()
 	const queryClient = useQueryClient()
 
 	// 啟動時用 useQuery 自動打 /me，依靠 cookie 已被瀏覽器自動帶。
@@ -69,7 +69,7 @@ const AuthProviderComponent = ({ children }: PropsWithChildren) => {
 	const meQuery = useQuery<TMeOutput, unknown>({
 		queryKey: ['partner-me'],
 		queryFn: async () => {
-			const res = await fetchMe(API_URL)
+			const res = await fetchMe()
 			return res.data
 		},
 		retry: 0,
@@ -105,7 +105,7 @@ const AuthProviderComponent = ({ children }: PropsWithChildren) => {
 
 	const handleLogout = useCallback(async (): Promise<void> => {
 		try {
-			await apiLogout(API_URL)
+			await apiLogout()
 		} catch {
 			// logout 永遠 local cleanup（即便網路失敗）
 		}
@@ -116,7 +116,7 @@ const AuthProviderComponent = ({ children }: PropsWithChildren) => {
 		if (!window.location.hash.startsWith('#/login')) {
 			window.location.hash = '#/login'
 		}
-	}, [API_URL, queryClient])
+	}, [queryClient])
 
 	logoutRef.current = handleLogout
 
@@ -133,7 +133,7 @@ const AuthProviderComponent = ({ children }: PropsWithChildren) => {
 
 	const handleLogin = useCallback(
 		async (slug: string, password: string): Promise<void> => {
-			const res = await apiLogin(API_URL, { slug, password })
+			const res = await apiLogin({ slug, password })
 
 			// **永不**儲存 token；只放展示用 metadata
 			session.save({
@@ -146,7 +146,7 @@ const AuthProviderComponent = ({ children }: PropsWithChildren) => {
 			// 觸發 /me 重新 fetch，讓 status 更新為 authenticated
 			await queryClient.invalidateQueries({ queryKey: ['partner-me'] })
 		},
-		[API_URL, queryClient]
+		[queryClient]
 	)
 
 	const value = useMemo<TAuthContextValue>(

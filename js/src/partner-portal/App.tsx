@@ -15,7 +15,7 @@
 import { memo, type PropsWithChildren } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 
-import { useAuth } from './auth/useAuth'
+import { useAuth } from './auth/AuthContext'
 import { LoadingScreen } from './components/LoadingScreen'
 import { Dashboard } from './pages/Dashboard'
 import { Login } from './pages/Login'

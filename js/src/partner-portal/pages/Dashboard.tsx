@@ -1,18 +1,19 @@
 /**
  * Partner Portal Dashboard
  *
- * Phase 4-B2 範圍：
+ * Phase 4-B3 範圍：
  * - Partner header（partner_name + 登出按鈕）
- * - DateRangeFilter（state 在 Dashboard 階層，避免 KPI / Trend 不同步）
+ * - DateRangeFilter（state 在 Dashboard 階層，避免 KPI / Trend / Settlements 不同步）
  * - KpiSummary（4 張卡）
- * - Trend / Settlements 仍 placeholder（4-B3 補）
- * - 整個內容用 ErrorBoundary 包住，避免 KPI 元件出錯炸掉整頁
+ * - TrendChart（趨勢折線圖）
+ * - SettlementsTable（結算列表）
+ * - 整個內容用 ErrorBoundary 包住，避免單一元件出錯炸掉整頁
  */
 
-import { Alert, Button, Card, Space, Typography } from 'antd'
+import { Button, Card, Space, Typography } from 'antd'
 import { memo, useState } from 'react'
 
-import { useAuth } from '../auth/useAuth'
+import { useAuth } from '../auth/AuthContext'
 import {
 	DateRangeFilter,
 	getDefaultDateRange,
@@ -21,6 +22,8 @@ import {
 import { ErrorBoundary } from '../components/ErrorBoundary'
 
 import { KpiSummary } from './KpiSummary'
+import { SettlementsTable } from './SettlementsTable'
+import { TrendChart } from './TrendChart'
 
 /** Dashboard 元件 */
 const DashboardComponent = () => {
@@ -49,7 +52,7 @@ const DashboardComponent = () => {
 						>
 							<div>
 								<Typography.Title level={3} style={{ margin: 0 }}>
-									歡迎，{partner?.partner_name ?? ''}
+									{partner ? `歡迎，${partner.partner_name}` : '歡迎'}
 								</Typography.Title>
 								{partner?.contact_email && (
 									<Typography.Paragraph
@@ -72,11 +75,11 @@ const DashboardComponent = () => {
 
 					<KpiSummary dateStart={range.date_start} dateEnd={range.date_end} />
 
-					<Alert
-						type="info"
-						showIcon
-						message="趨勢與結算列表開發中"
-						description="趨勢圖表與結算紀錄將於 Phase 4-B3 上線。"
+					<TrendChart dateStart={range.date_start} dateEnd={range.date_end} />
+
+					<SettlementsTable
+						dateStart={range.date_start}
+						dateEnd={range.date_end}
 					/>
 				</Space>
 			</ErrorBoundary>

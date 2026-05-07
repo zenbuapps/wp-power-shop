@@ -85,6 +85,37 @@ final class PartnerPortalRenderer {
 	}
 
 	/**
+	 * 輸出維護中畫面（503）
+	 *
+	 * 用於 Vite manifest 缺對應 entry 的情境（例：build artifact 未同步上傳）。
+	 * 不走 get_header/get_footer，避免 theme 干擾。
+	 *
+	 * @return void
+	 */
+	private static function render_maintenance(): void {
+		\status_header( 503 );
+		\nocache_headers();
+
+		$title   = \__( '服務暫時維護中', 'power_shop' );
+		$message = \__( '請稍後再試，如有疑問請聯絡管理員。', 'power_shop' );
+		?>
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><?php echo \esc_html( $title ); ?></title>
+<style>body{font-family:sans-serif;text-align:center;padding:80px 20px;}h1{font-size:2em;color:#999;}p{color:#666;}</style>
+</head>
+<body>
+<h1><?php echo \esc_html( $title ); ?></h1>
+<p><?php echo \esc_html( $message ); ?></p>
+</body>
+</html>
+		<?php
+	}
+
+	/**
 	 * 輸出 404 HTML
 	 *
 	 * 不走 get_header/get_footer，避免 theme 干擾。
@@ -135,6 +166,14 @@ final class PartnerPortalRenderer {
 				'in-footer' => true,
 			]
 		);
+
+		// 防呆（reviewer L-3）：若 Vite manifest 缺對應 entry，wp_scripts 不會註冊 handle，
+		// 此時若繼續輸出空殼 HTML 會讓 partner 看到一片空白。改顯示「服務維護中」。
+		$scripts = \wp_scripts();
+		if ( ! isset( $scripts->registered[ self::SCRIPT_HANDLE ] ) ) {
+			self::render_maintenance();
+			return;
+		}
 
 		// 注入 env（不需 nonce，partner 不用 wp_rest nonce）。
 		$env = [

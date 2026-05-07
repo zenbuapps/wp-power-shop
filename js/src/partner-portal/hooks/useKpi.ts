@@ -7,14 +7,14 @@
  * - 401 由 axios interceptor 統一處理（清 session + redirect /login）
  *
  * date 變動時 queryKey 會變，自動觸發新查詢。
+ *
+ * 4-B3 重構：apiClient 已內建 baseURL，不再從 usePartnerEnv 拿 API_URL。
  */
 
 import { useQuery } from '@tanstack/react-query'
 import type { AxiosError } from 'axios'
 
 import { fetchKpi, type TKpiOutput } from '../api/reports'
-
-import { usePartnerEnv } from './usePartnerEnv'
 
 /** useKpi 參數：unix timestamp（秒）起訖點 */
 type TUseKpiArgs = {
@@ -29,13 +29,12 @@ type TUseKpiArgs = {
  * @return {Object} TanStack Query v4 result，含 data / isLoading / isError / refetch 等
  */
 export const useKpi = (args: TUseKpiArgs) => {
-	const { API_URL } = usePartnerEnv()
 	const { date_start, date_end } = args
 
 	return useQuery<TKpiOutput, AxiosError>({
 		queryKey: ['partner-kpi', date_start, date_end],
 		queryFn: async () => {
-			const res = await fetchKpi(API_URL, { date_start, date_end })
+			const res = await fetchKpi({ date_start, date_end })
 			return res.data
 		},
 		retry: 0,

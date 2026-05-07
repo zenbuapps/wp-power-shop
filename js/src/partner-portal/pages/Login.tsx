@@ -14,7 +14,7 @@ import type { AxiosError } from 'axios'
 import { memo, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import { useAuth } from '../auth/useAuth'
+import { useAuth } from '../auth/AuthContext'
 import { usePartnerEnv } from '../hooks/usePartnerEnv'
 import { mapPartnerException } from '../utils/partnerExceptionMapper'
 import { parseRetryAfter } from '../utils/retryAfter'
@@ -96,7 +96,7 @@ const LoginComponent = () => {
 						label="夥伴帳號"
 						rules={[{ required: true, message: '請輸入帳號' }]}
 					>
-						<Input autoComplete="username" />
+						<Input autoComplete="username" disabled={Boolean(SLUG)} />
 					</Form.Item>
 					<Form.Item
 						name="password"
