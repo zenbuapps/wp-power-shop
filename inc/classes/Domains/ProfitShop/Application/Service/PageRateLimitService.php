@@ -86,6 +86,12 @@ final class PageRateLimitService {
 	 * @throws TooManyAttempts 達上限時拋出，retry_after = 視窗內剩餘秒數
 	 */
 	public function check_or_throw( ?string $ip, string $page_key ): void {
+		// Phase 5-B：page_key 白名單 assert（reviewer 5-A MINOR-1 順手修）
+		// 防未來 caller 帶非預期值（例如 user-controlled 字串），雖目前 caller 都是常數。
+		if ( ! preg_match( '/^[a-z_]{1,32}$/', $page_key ) ) {
+			return; // invalid page_key：fail-open，不阻擋訪客
+		}
+
 		if ( null === $ip ) {
 			return; // fail-open：取不到 IP（CLI / 異常環境）
 		}

@@ -202,7 +202,18 @@ final class ProfitShopRenderer {
 		// 我們也在 priority 1 印自己的 <title>，移除以避免雙 title。
 		\remove_action( 'wp_head', '_wp_render_title_tag', 1 );
 
-		\nocache_headers();
+		// Phase 5-B / reviewer LOW-3：publish 不送 nocache，讓 CDN / cache plugin
+		// 能快取賣場頁，提升大流量場景效能。draft 預覽 / 非 publish → 仍送 nocache。
+		//
+		// Trade-off：CDN 快取後若 admin 即時下架 shop（status: publish → draft），
+		// TTL 過期前訪客仍會看到舊頁。建議搭配 cache plugin 提供的 purge hook，
+		// 在 publish/unpublish use case 完成後手動 invalidate（待 Phase 5-D 接 hook，可 defer）。
+		//
+		// 對登入用戶（admin bar 等個人化）：一般 cache plugin 預設對 logged-in 自動 bypass cache，
+		// 故無需額外條件化；PartnerPortalRenderer 因 partner cookie 變動需 nocache，行為不同 → 不動。
+		if ( 'publish' !== $shop->status() ) {
+			\nocache_headers();
+		}
 
 		\get_header();
 

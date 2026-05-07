@@ -214,6 +214,23 @@ final class ProfitShop {
 	}
 
 	/**
+	 * 檢查商品是否在賣場中
+	 *
+	 * 封裝 $items public access，避免直接 isset( $shop->items[ $pid ] )
+	 * 散落各處（4-C2 reviewer security I-2 / DDD 純度）。
+	 *
+	 * 對公開 array 的相容性保留：$items 仍為 public，foreach / array_map 等用例
+	 * 仍可直接訪問；本 method 只取代「檢查 product_id 是否存在」這個 use case。
+	 *
+	 * @param int $product_id 商品 ID
+	 *
+	 * @return bool 商品在賣場中為 true
+	 */
+	public function has_item( int $product_id ): bool {
+		return isset( $this->items[ $product_id ] );
+	}
+
+	/**
 	 * 序列化為陣列
 	 *
 	 * @return array{

@@ -164,7 +164,8 @@ final class AddToCartHook {
 	/**
 	 * 檢查 product_id 是否在 shop 的 items 集合內
 	 *
-	 * 利用 ProfitShop 內部以 product_id 為 key 的 O(1) lookup。
+	 * Phase 5-B：透過 ProfitShop::has_item() 封裝 O(1) lookup，
+	 * 避免直接訪問 $shop->items[ $pid ]（DDD 純度）。
 	 *
 	 * @param ProfitShop $shop       賣場聚合根
 	 * @param int        $product_id 商品 ID
@@ -172,7 +173,6 @@ final class AddToCartHook {
 	 * @return bool 屬於賣場為 true
 	 */
 	private function product_in_shop( ProfitShop $shop, int $product_id ): bool {
-		// ProfitShop::$items 是 array<int, OverrideItem>，以 product_id 為 key
-		return isset( $shop->items[ $product_id ] );
+		return $shop->has_item( $product_id );
 	}
 }
