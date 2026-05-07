@@ -118,13 +118,13 @@ export type TSettlementStatus = 'pending' | 'paid' | 'refunded' | 'cancelled'
  * /partner-reports/settlements 查詢參數
  *
  * - page / per_page: 分頁（後端預設 page=1, per_page=20）
- * - statuses: 逗號分隔狀態（可選）
+ * - statuses: 狀態陣列（可選；fetcher 內 join 為 CSV 後送出，5-C.5 型別收斂）
  * - date_start / date_end: unix timestamp（秒，可選）
  */
 export type TSettlementsQuery = {
 	page: number
 	per_page: number
-	statuses?: string
+	statuses?: TSettlementStatus[]
 	date_start?: number
 	date_end?: number
 }
@@ -155,9 +155,18 @@ export type TSettlementListOutput = {
 /**
  * 取得 partner 結算列表（GET /partner-reports/settlements）
  *
+ * 5-C.5：statuses 由 string[] 在此 join 為 CSV，
+ * 呼叫端不再需要自己 .join(',')，型別更嚴格（防止傳錯字）。
+ *
  * @param query 查詢參數
  */
-export const fetchSettlements = (query: TSettlementsQuery) =>
-	apiClient.get<TSettlementListOutput>('/partner-reports/settlements', {
-		params: query,
+export const fetchSettlements = (query: TSettlementsQuery) => {
+	const { statuses, ...rest } = query
+	const params: Record<string, unknown> = { ...rest }
+	if (statuses && statuses.length > 0) {
+		params.statuses = statuses.join(',')
+	}
+	return apiClient.get<TSettlementListOutput>('/partner-reports/settlements', {
+		params,
 	})
+}

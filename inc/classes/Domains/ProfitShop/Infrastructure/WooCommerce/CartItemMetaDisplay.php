@@ -68,6 +68,13 @@ final class CartItemMetaDisplay {
 
 		$shop_url = \home_url( '/' . RewriteRules::SHOP_REWRITE_PREFIX . '/' . $shop->slug . '/' );
 
+		/*
+		信任邊界說明：
+		- value:   raw text，由 wc_get_formatted_cart_item_data() 在輸出時自行 escape。
+		- display: 已 escape 完整 HTML（含 <a>），WC 會直接輸出，覆寫 value 的顯示。
+		- 約束：不要把 value 直接 echo 到不會 escape 的地方（例如自製 template）；
+		若需自顯示，請走 esc_html() 或改讀 display。
+		*/
 		$item_data[] = [
 			'key'     => \__( '來自賣場', 'power_shop' ),
 			'value'   => $shop->title,

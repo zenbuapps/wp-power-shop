@@ -37,6 +37,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { type TTrendInterval } from '../api/reports'
 import { useTrend } from '../hooks/useTrend'
+import { formatAmount } from '../utils/format'
 import { mapPartnerException } from '../utils/partnerExceptionMapper'
 
 /** TrendChart props */
@@ -44,13 +45,6 @@ type TTrendChartProps = {
 	dateStart: number
 	dateEnd: number
 }
-
-/** 千分位 + 小數位數兩位 formatter */
-const formatAmount = (value: number): string =>
-	value.toLocaleString('zh-TW', {
-		minimumFractionDigits: 0,
-		maximumFractionDigits: 2,
-	})
 
 /** Partner Portal 趨勢圖元件 */
 const TrendChartComponent: React.FC<TTrendChartProps> = ({

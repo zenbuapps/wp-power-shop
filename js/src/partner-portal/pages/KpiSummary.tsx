@@ -26,6 +26,7 @@ import { Alert, Button, Card, Col, Empty, Row, Skeleton, Statistic } from 'antd'
 import { memo, useMemo } from 'react'
 
 import { useKpi } from '../hooks/useKpi'
+import { formatAmount } from '../utils/format'
 import { mapPartnerException } from '../utils/partnerExceptionMapper'
 
 /** KpiSummary props：dateStart / dateEnd 為 unix timestamp（秒） */
@@ -40,13 +41,6 @@ type TStatCard = {
 	rawValue: string | undefined
 	color: string
 }
-
-/** Statistic value formatter：千分位 + 最多 2 位小數 */
-const amountFormatter = (v: string | number | undefined): string =>
-	Number(v ?? 0).toLocaleString('zh-TW', {
-		minimumFractionDigits: 0,
-		maximumFractionDigits: 2,
-	})
 
 /** Partner KPI 彙總卡片元件 */
 const KpiSummaryComponent: React.FC<TKpiSummaryProps> = ({
@@ -132,7 +126,7 @@ const KpiSummaryComponent: React.FC<TKpiSummaryProps> = ({
 										title={card.title}
 										value={safeValue}
 										precision={2}
-										formatter={amountFormatter}
+										formatter={formatAmount}
 										prefix="NT$"
 										valueStyle={{ color: card.color, fontWeight: 600 }}
 									/>

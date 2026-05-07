@@ -21,6 +21,15 @@ import axios, { type AxiosInstance } from 'axios'
 import { session } from '../auth/session'
 import { readPartnerEnv } from '../hooks/usePartnerEnv'
 
+/**
+ * X-Skip-Auth-Redirect header 常數（5-C.2 DRY）
+ *
+ * 用途：logout request 帶此 header 告訴 401 interceptor「即使 401 也別自動導頁」。
+ * 兩處需同步引用：client.ts interceptor 比對 + auth/api.ts logout 設定。
+ */
+export const SKIP_AUTH_REDIRECT_HEADER = 'X-Skip-Auth-Redirect'
+export const SKIP_AUTH_REDIRECT_VALUE = '1'
+
 /** lazy 初始化的 axios singleton（首次 method 存取時建立，5-A.2） */
 let _instance: AxiosInstance | null = null
 
@@ -50,9 +59,17 @@ const getInstance = (): AxiosInstance => {
  *
  * 透過 Proxy 將屬性存取轉發到真正的 axios instance；首次存取時才呼叫 readPartnerEnv，
  * 確保 env 注入失敗的 error 能在 React render 階段被 ErrorBoundary 接住。
+ *
+ * 5-C.1：補齊 set / has trap（J-1 防 silent bug）
+ * 目前所有呼叫端只走 read，但若未來有人對 apiClient 做 `apiClient.foo = ...`
+ * 或 `'foo' in apiClient`，沒有 trap 會落到空 target object 而非真實 instance。
+ * 補齊三個 trap 維持 Proxy 與真實 axios instance 的行為一致性。
  */
 export const apiClient = new Proxy({} as AxiosInstance, {
 	get: (_target, prop, receiver) => Reflect.get(getInstance(), prop, receiver),
+	set: (_target, prop, value, receiver) =>
+		Reflect.set(getInstance(), prop, value, receiver),
+	has: (_target, prop) => Reflect.has(getInstance(), prop),
 })
 
 const registerInterceptors = (inst: AxiosInstance): void => {
@@ -68,7 +85,8 @@ const registerInterceptors = (inst: AxiosInstance): void => {
 				// 5-A.2: logout 路徑帶 X-Skip-Auth-Redirect 標記，不導頁
 				// （避免「登出 → 401 → 自動 redirect 回 /login」的體感誤判）
 				const skipRedirect =
-					err?.config?.headers?.['X-Skip-Auth-Redirect'] === '1'
+					err?.config?.headers?.[SKIP_AUTH_REDIRECT_HEADER] ===
+					SKIP_AUTH_REDIRECT_VALUE
 				if (skipRedirect) {
 					return Promise.reject(error)
 				}

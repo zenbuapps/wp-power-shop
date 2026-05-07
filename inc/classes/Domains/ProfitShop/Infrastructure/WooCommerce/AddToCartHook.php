@@ -51,7 +51,7 @@ final class AddToCartHook {
 	}
 
 	/**
-	 * 從 $_GET / $_REQUEST 抽取 profit_shop_id 並注入 cart_item_data
+	 * 從 $_GET / $_POST 抽取 profit_shop_id 並注入 cart_item_data
 	 *
 	 * @param array<string, mixed> $cart_item_data 既有 cart_item_data
 	 * @param int                  $product_id     商品 ID

@@ -35,6 +35,7 @@ import { memo, useMemo, useState } from 'react'
 
 import { type TSettlementItem, type TSettlementStatus } from '../api/reports'
 import { useSettlements } from '../hooks/useSettlements'
+import { formatAmount } from '../utils/format'
 import { mapPartnerException } from '../utils/partnerExceptionMapper'
 
 const { useBreakpoint } = Grid
@@ -53,16 +54,6 @@ const STATUS_META: Record<TSettlementStatus, { label: string; color: string }> =
 		refunded: { label: '已退款', color: 'red' },
 		cancelled: { label: '已取消', color: 'default' },
 	}
-
-/** 千分位 + 小數位數兩位 formatter */
-const formatAmount = (value: string | number | undefined): string => {
-	const num = typeof value === 'number' ? value : parseFloat(value ?? '0')
-	const safe = Number.isNaN(num) ? 0 : num
-	return safe.toLocaleString('zh-TW', {
-		minimumFractionDigits: 0,
-		maximumFractionDigits: 2,
-	})
-}
 
 const DEFAULT_PER_PAGE = 20
 
@@ -89,7 +80,9 @@ const SettlementsTableComponent: React.FC<TSettlementsTableProps> = ({
 		useSettlements({
 			page,
 			per_page: perPage,
-			statuses: statusFilter.length > 0 ? statusFilter.join(',') : undefined,
+
+			// 5-C.5：傳陣列，由 fetchSettlements 內部 join 為 CSV
+			statuses: statusFilter.length > 0 ? statusFilter : undefined,
 			date_start: dateStart,
 			date_end: dateEnd,
 		})

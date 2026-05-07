@@ -10,6 +10,8 @@
 import { Button, Result } from 'antd'
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
+import { PartnerEnvInjectionError } from '../hooks/usePartnerEnv'
+
 /** ErrorBoundary props（受保護的子樹） */
 type TErrorBoundaryProps = {
 	children: ReactNode
@@ -20,9 +22,6 @@ type TErrorBoundaryState = {
 	hasError: boolean
 	error: Error | null
 }
-
-/** 環境注入錯誤訊息特徵（readPartnerEnv 拋出時用，5-A.2） */
-const ENV_ERROR_PATTERN = /Partner Portal 環境注入/
 
 /** 攔截子樹 React 錯誤的 Error Boundary（class 元件，框架限制） */
 export class ErrorBoundary extends Component<
@@ -50,10 +49,10 @@ export class ErrorBoundary extends Component<
 
 	render(): ReactNode {
 		if (this.state.hasError) {
-			// 5-A.2：判別 readPartnerEnv 拋出的環境注入錯誤 → 顯示「服務維護中」
+			// 5-A.2 / 5-C.3：判別 readPartnerEnv 拋出的環境注入錯誤 → 顯示「服務維護中」
 			// 其他錯誤 → 顯示通用「畫面錯誤」
-			const message = this.state.error?.message ?? ''
-			const isEnvError = ENV_ERROR_PATTERN.test(message)
+			// 改用 instanceof 而非 regex 比對 message（訊息文字變動不會破測試）
+			const isEnvError = this.state.error instanceof PartnerEnvInjectionError
 
 			return (
 				<div style={{ padding: 24 }}>

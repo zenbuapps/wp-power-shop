@@ -11,7 +11,11 @@
  * 4-B3 重構（reviewer m-2）：apiClient 已內建 baseURL，不再傳 apiUrl 參數。
  */
 
-import { apiClient } from '../api/client'
+import {
+	apiClient,
+	SKIP_AUTH_REDIRECT_HEADER,
+	SKIP_AUTH_REDIRECT_VALUE,
+} from '../api/client'
 
 /** /partner-auth/login 輸入 */
 export type TLoginInput = {
@@ -60,7 +64,7 @@ export const logout = () =>
 		'/partner-auth/logout',
 		{},
 		{
-			headers: { 'X-Skip-Auth-Redirect': '1' },
+			headers: { [SKIP_AUTH_REDIRECT_HEADER]: SKIP_AUTH_REDIRECT_VALUE },
 		}
 	)
 

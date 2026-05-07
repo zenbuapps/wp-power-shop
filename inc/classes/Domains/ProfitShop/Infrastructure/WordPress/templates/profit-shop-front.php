@@ -57,15 +57,18 @@ $is_draft_preview = ( 'publish' !== $shop->status() );
 		<?php echo \esc_html__( '此賣場暫無商品', 'power_shop' ); ?>
 		</p>
 		<?php
+	elseif ( ! \function_exists( 'wc_get_product' ) ) :
+		// WooCommerce 未啟用：理論上 Bootstrap 已驗證 WC 為必要相依，這裡只做 defensive guard。
+		?>
+		<p style="text-align:center;padding:60px 20px;color:#999;">
+		<?php echo \esc_html__( '商品列表暫時無法顯示', 'power_shop' ); ?>
+		</p>
+		<?php
 	else :
 		?>
 		<div class="ps-shop-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:24px;">
 		<?php
 		foreach ( $items as $override_item ) :
-			if ( ! function_exists( 'wc_get_product' ) ) {
-				continue;
-			}
-
 			$product = \wc_get_product( $override_item->product_id );
 			if ( ! $product ) {
 				continue;
@@ -73,7 +76,7 @@ $is_draft_preview = ( 'publish' !== $shop->status() );
 
 			$product_type      = (string) $product->get_type();
 			$is_simple         = ( 'simple' === $product_type );
-			$product_image     = $product->get_image( 'medium' );
+			$product_image     = $product->get_image( 'medium', [ 'loading' => 'lazy' ] );
 			$product_name      = (string) $product->get_name();
 			$product_permalink = (string) \get_permalink( $override_item->product_id );
 

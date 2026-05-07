@@ -12,13 +12,17 @@
 import { useQuery } from '@tanstack/react-query'
 import type { AxiosError } from 'axios'
 
-import { fetchSettlements, type TSettlementListOutput } from '../api/reports'
+import {
+	fetchSettlements,
+	type TSettlementListOutput,
+	type TSettlementStatus,
+} from '../api/reports'
 
 /** useSettlements 參數 */
 type TUseSettlementsArgs = {
 	page: number
 	per_page: number
-	statuses?: string
+	statuses?: TSettlementStatus[]
 	date_start?: number
 	date_end?: number
 }
@@ -37,7 +41,9 @@ export const useSettlements = (args: TUseSettlementsArgs) => {
 			'partner-settlements',
 			page,
 			per_page,
-			statuses ?? '',
+
+			// 序列化為 CSV 作為 stable cache key（5-C.5：statuses 改 string[] 後）
+			statuses ? [...statuses].sort().join(',') : '',
 			date_start ?? 0,
 			date_end ?? 0,
 		],
