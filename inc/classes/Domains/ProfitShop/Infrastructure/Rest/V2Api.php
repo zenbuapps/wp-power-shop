@@ -8,17 +8,28 @@ declare(strict_types=1);
 namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest;
 
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerInput;
+use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerLoginInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\ProfitShopInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\SettingsDto;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\ItemValidator;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\LoginRateLimiter;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\PartnerAuthService;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\PartnerTokenStore;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\SettingsRepository;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\SlugConflictDetector;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Migration\ImportLegacyShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Migration\ListImportableLegacyShops;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\GetCurrentPartnerUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\LoginPartnerUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\LogoutPartnerUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\RegeneratePartnerPasswordUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\CreatePartner;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\DeletePartner;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\GetPartner;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\ListPartners;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\GetPartnerKpiUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\GetPartnerTrendUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\ListPartnerSettlementsUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\UpdatePartner;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settings\GetSettings;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settings\ResetSettings;
@@ -31,12 +42,18 @@ use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\ListShops;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\PublishShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\UnpublishShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\UpdateShop;
+use J7\PowerShop\Domains\ProfitShop\Domain\Criteria\FilterCriteria;
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\InvalidCredentials;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\LegacyOnePageShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\PartnerTermRepository;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementSummaryProvider;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRulesFlusher;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\SystemClock;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpAdminEmailNotifier;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpProductLookup;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSlugConflictLookup;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
 use J7\WpUtils\Classes\ApiBase;
 use J7\WpUtils\Classes\WP;
 
@@ -97,7 +114,9 @@ final class V2Api extends ApiBase {
 
 	/** Constructor */
 	public function __construct() {
-		$admin_only = [ self::class, 'admin_only_permission' ];
+		$admin_only      = [ self::class, 'admin_only_permission' ];
+		$public          = '__return_true';
+		$partner_token   = [ $this, 'partner_token_permission' ];
 
 		$this->apis = [
 			// §4.1 profit-shops
@@ -194,6 +213,44 @@ final class V2Api extends ApiBase {
 				'method' => 'post',
 				'permission_callback' => $admin_only,
 			],
+			// §4.2 regenerate-password（admin only；補 Phase 3-B observation 1）
+			[
+				'endpoint' => 'profit-partners/(?P<id>\d+)/regenerate-password',
+				'method' => 'post',
+				'permission_callback' => $admin_only,
+			],
+			// §4.4 PartnerAuth（公開：登入 / 登出 / me）
+			[
+				'endpoint' => 'partner-auth/login',
+				'method' => 'post',
+				'permission_callback' => $public,
+			],
+			[
+				'endpoint' => 'partner-auth/logout',
+				'method' => 'post',
+				'permission_callback' => $public,
+			],
+			[
+				'endpoint' => 'partner-auth/me',
+				'method' => 'get',
+				'permission_callback' => $partner_token,
+			],
+			// §4.5 PartnerReports（partner token 認證）
+			[
+				'endpoint' => 'partner-reports/kpi',
+				'method' => 'get',
+				'permission_callback' => $partner_token,
+			],
+			[
+				'endpoint' => 'partner-reports/trend',
+				'method' => 'get',
+				'permission_callback' => $partner_token,
+			],
+			[
+				'endpoint' => 'partner-reports/settlements',
+				'method' => 'get',
+				'permission_callback' => $partner_token,
+			],
 		];
 
 		parent::__construct();
@@ -206,6 +263,80 @@ final class V2Api extends ApiBase {
 	 */
 	public static function admin_only_permission(): bool {
 		return \current_user_can( 'manage_options' );
+	}
+
+	/**
+	 * Partner token permission callback
+	 *
+	 * 對應規格：specs/2026-05-06-profit-shop-design.md §4.5、§6.3
+	 *
+	 * 支援兩種 token 來源（任一即可）：
+	 *   1. Header `X-Partner-Token: {token}`
+	 *   2. Cookie `profit_partner_token`
+	 *
+	 * 通過驗證後，將解出的 partner_term_id 塞進 request 的 `_partner_term_id` 內部參數
+	 * （前綴 `_` 避免被 sanitize_text_field_deep 處理；callback 透過
+	 * `$request->get_param('_partner_term_id')` 取得）。
+	 *
+	 * 失敗回 401 + code=unauthorized（與 InvalidCredentials 對映一致）。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @phpstan-param \WP_REST_Request<array<string, mixed>> $request
+	 *
+	 * @return bool|\WP_Error true 通過；WP_Error 401 失敗
+	 */
+	public function partner_token_permission( \WP_REST_Request $request ) {
+		$token = $this->extract_partner_token( $request );
+		if ( '' === $token ) {
+			return new \WP_Error(
+				'unauthorized',
+				'INVALID_CREDENTIALS',
+				[ 'status' => 401 ]
+			);
+		}
+
+		$tokens          = self::make_partner_token_store();
+		$partner_term_id = $tokens->verify( $token );
+		if ( null === $partner_term_id ) {
+			return new \WP_Error(
+				'unauthorized',
+				'INVALID_CREDENTIALS',
+				[ 'status' => 401 ]
+			);
+		}
+
+		// 將 partner_term_id 塞進 request 內部欄位（前綴 _，不被外部覆蓋）
+		$request->set_param( '_partner_term_id', $partner_term_id );
+
+		return true;
+	}
+
+	/**
+	 * 從 Header / Cookie 取出 partner token
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @phpstan-param \WP_REST_Request<array<string, mixed>> $request
+	 *
+	 * @return string 找不到回空字串
+	 */
+	private function extract_partner_token( \WP_REST_Request $request ): string {
+		$from_header = (string) $request->get_header( 'x_partner_token' );
+		if ( '' !== $from_header ) {
+			return $from_header;
+		}
+
+		// Authorization: Bearer {token}
+		$auth = (string) $request->get_header( 'authorization' );
+		if ( '' !== $auth && 0 === stripos( $auth, 'bearer ' ) ) {
+			return trim( substr( $auth, 7 ) );
+		}
+
+		// Cookie
+		if ( isset( $_COOKIE['profit_partner_token'] ) ) {
+			return (string) $_COOKIE['profit_partner_token']; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+		}
+
+		return '';
 	}
 
 	// ========== §4.1 profit-shops callbacks ==========
@@ -645,6 +776,294 @@ final class V2Api extends ApiBase {
 		// 全面 sanitize（POST/PUT 內含的字串字段都會經過 sanitize_text_field）。
 		$sanitized = WP::sanitize_text_field_deep( $json, false );
 		return is_array( $sanitized ) ? $sanitized : [];
+	}
+
+	// ========== §4.2 regenerate-password callback ==========
+
+	/**
+	 * POST /profit-partners/{id}/regenerate-password
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_profit_partners_with_id_regenerate_password_callback( $request ): \WP_REST_Response {
+		try {
+			$id = (int) $request->get_param( 'id' );
+
+			$useCase  = new RegeneratePartnerPasswordUseCase( partnerRepo: PartnerTermRepository::instance() );
+			$plain_pw = $useCase->execute( partner_term_id: $id );
+
+			// Partner 系列端點回應直接是 payload（與 admin endpoint 的 {code, data} 結構不同），
+			// 對齊 spec §4.4 / §4.5 partner SPA 的呼叫慣例 + 測試合約。
+			return new \WP_REST_Response(
+				[
+					'partner_id' => $id,
+					'password'   => $plain_pw,
+				],
+				200
+			);
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	// ========== §4.4 partner-auth callbacks ==========
+
+	/**
+	 * POST /partner-auth/login
+	 *
+	 * Set-Cookie 透過 `WP_REST_Response::header()` 直接寫 raw header（避免使用 setcookie，
+	 * REST API 已 buffer output）。Cookie 屬性：HttpOnly + Secure + SameSite=Lax + Path=/ + Max-Age=3600。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_partner_auth_login_callback( $request ): \WP_REST_Response {
+		try {
+			$body  = self::read_json_body_for_partner( $request );
+			$input = PartnerLoginInput::from_array( $body );
+
+			$useCase = new LoginPartnerUseCase(
+				auth: self::make_partner_auth_service(),
+				tokens: self::make_partner_token_store(),
+			);
+			$output  = $useCase->execute( $input );
+
+			$response = new \WP_REST_Response( $output->to_array(), 200 );
+
+			$cookie = sprintf(
+				'profit_partner_token=%s; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=%d',
+				rawurlencode( $output->token ),
+				3600
+			);
+			$response->header( 'Set-Cookie', $cookie );
+
+			return $response;
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * POST /partner-auth/logout
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_partner_auth_logout_callback( $request ): \WP_REST_Response {
+		try {
+			$token = $this->extract_partner_token( $request );
+
+			$useCase = new LogoutPartnerUseCase(
+				tokens: self::make_partner_token_store(),
+			);
+			$useCase->execute( $token );
+
+			$response = new \WP_REST_Response( [ 'logged_out' => true ], 200 );
+
+			// 清空 cookie：Max-Age=0
+			$response->header(
+				'Set-Cookie',
+				'profit_partner_token=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0'
+			);
+
+			return $response;
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /partner-auth/me
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_partner_auth_me_callback( $request ): \WP_REST_Response {
+		try {
+			$token = $this->extract_partner_token( $request );
+
+			$useCase = new GetCurrentPartnerUseCase(
+				tokens: self::make_partner_token_store(),
+				partners: PartnerTermRepository::instance(),
+			);
+			$snapshot = $useCase->execute( $token );
+
+			return new \WP_REST_Response(
+				[
+					'partner_id'    => $snapshot->term_id,
+					'partner_name'  => $snapshot->name,
+					'partner_slug'  => $snapshot->slug->value(),
+					'contact_email' => $snapshot->contact_email,
+				],
+				200
+			);
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	// ========== §4.5 partner-reports callbacks ==========
+
+	/**
+	 * GET /partner-reports/kpi
+	 *
+	 * Partner_term_id 來源：permission_callback 已從 token 解出並寫入 `_partner_term_id`，
+	 * 永不從 query string 取（防範 cross-partner 越權）。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_partner_reports_kpi_callback( $request ): \WP_REST_Response {
+		try {
+			$partner_term_id = (int) $request->get_param( '_partner_term_id' );
+			$criteria        = self::build_filter_criteria_from_request( $request );
+
+			$useCase = new GetPartnerKpiUseCase( summary: WpSettlementSummaryProvider::instance() );
+			$kpi     = $useCase->execute( $partner_term_id, $criteria );
+
+			return new \WP_REST_Response( $kpi->to_array(), 200 );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /partner-reports/trend
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_partner_reports_trend_callback( $request ): \WP_REST_Response {
+		try {
+			$partner_term_id = (int) $request->get_param( '_partner_term_id' );
+			$criteria        = self::build_filter_criteria_from_request( $request );
+
+			$params   = WP::sanitize_text_field_deep( $request->get_query_params(), false );
+			$interval = isset( $params['interval'] ) ? (string) $params['interval'] : 'day';
+
+			$useCase = new GetPartnerTrendUseCase( summary: WpSettlementSummaryProvider::instance() );
+			$trend   = $useCase->execute( $partner_term_id, $criteria, $interval );
+
+			return new \WP_REST_Response( $trend->to_array(), 200 );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /partner-reports/settlements
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_partner_reports_settlements_callback( $request ): \WP_REST_Response {
+		try {
+			$partner_term_id = (int) $request->get_param( '_partner_term_id' );
+			$criteria        = self::build_filter_criteria_from_request( $request );
+
+			$useCase = new ListPartnerSettlementsUseCase( summary: WpSettlementSummaryProvider::instance() );
+			$output  = $useCase->execute( $partner_term_id, $criteria );
+
+			return new \WP_REST_Response( $output->to_array(), 200 );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	// ========== Service factories（poor-man's DI；單元測試直接 new，不走這） ==========
+
+	/**
+	 * 建立 PartnerTokenStore（production 連 wp transient）
+	 *
+	 * @return PartnerTokenStore
+	 */
+	private static function make_partner_token_store(): PartnerTokenStore {
+		return new PartnerTokenStore(
+			transients: WpTransientStore::instance(),
+			clock: SystemClock::instance(),
+			ttl: 3600,
+			key_prefix: 'ps_partner_token_',
+		);
+	}
+
+	/**
+	 * 建立 PartnerAuthService（production 連 wp transient + admin email）
+	 *
+	 * @return PartnerAuthService
+	 */
+	private static function make_partner_auth_service(): PartnerAuthService {
+		$limiter = new LoginRateLimiter(
+			transients: WpTransientStore::instance(),
+			clock: SystemClock::instance(),
+			email: WpAdminEmailNotifier::instance(),
+			max_attempts: 5,
+			window_seconds: 900,
+		);
+
+		return new PartnerAuthService(
+			partnerRepo: PartnerTermRepository::instance(),
+			limiter: $limiter,
+		);
+	}
+
+	/**
+	 * 從 query string 建構 FilterCriteria（不接受 partner_term_id；安全鎖死）
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @phpstan-param \WP_REST_Request<array<string, mixed>> $request
+	 *
+	 * @return FilterCriteria
+	 */
+	private static function build_filter_criteria_from_request( \WP_REST_Request $request ): FilterCriteria {
+		$params = WP::sanitize_text_field_deep( $request->get_query_params(), false );
+		if ( ! is_array( $params ) ) {
+			$params = [];
+		}
+
+		$date_start = isset( $params['date_start'] ) ? (int) $params['date_start'] : null;
+		$date_end   = isset( $params['date_end'] ) ? (int) $params['date_end'] : null;
+
+		$shop_ids = [];
+		if ( isset( $params['shop_ids'] ) ) {
+			$raw = is_array( $params['shop_ids'] ) ? $params['shop_ids'] : explode( ',', (string) $params['shop_ids'] );
+			foreach ( $raw as $id ) {
+				$id = (int) $id;
+				if ( $id > 0 ) {
+					$shop_ids[] = $id;
+				}
+			}
+		}
+
+		$statuses = [];
+		if ( isset( $params['statuses'] ) ) {
+			$raw = is_array( $params['statuses'] ) ? $params['statuses'] : explode( ',', (string) $params['statuses'] );
+			foreach ( $raw as $s ) {
+				$s = (string) $s;
+				if ( '' !== $s ) {
+					$statuses[] = $s;
+				}
+			}
+		}
+
+		$page     = isset( $params['page'] ) ? max( 1, (int) $params['page'] ) : 1;
+		$per_page = isset( $params['per_page'] ) ? max( 1, min( 100, (int) $params['per_page'] ) ) : 20;
+
+		return new FilterCriteria(
+			date_start: $date_start,
+			date_end: $date_end,
+			shop_ids: $shop_ids,
+			statuses: $statuses,
+			page: $page,
+			per_page: $per_page,
+		);
 	}
 
 	/**

@@ -129,6 +129,9 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 	 * @return bool 仍被綁定回傳 true
 	 */
 	public function is_in_use( int $term_id ): bool {
+		// 注意：post_status 明確只查 publish / draft，**不含 trash**——對應 OQ-2：
+		// 已被丟到 trash 的賣場視為不再使用 partner，允許 admin 刪除 partner。
+		// 雖然 WP_Query 預設不查 trash，這裡顯式列出以避免未來預設值改變。
 		$query = new \WP_Query(
 			[
 				'post_type'      => \J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar::POST_TYPE,
