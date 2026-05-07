@@ -26,6 +26,16 @@ final class RewriteRules {
 	public const QUERY_VAR = 'profit_partner_report';
 
 	/**
+	 * Query var 名稱（前台賣場 slug；Phase 4-C1）
+	 */
+	public const SHOP_QUERY_VAR = 'profit_shop_slug';
+
+	/**
+	 * 前台賣場前綴（固定）
+	 */
+	public const SHOP_REWRITE_PREFIX = 'profit-shop';
+
+	/**
 	 * 全站設定的 wp_options key
 	 */
 	public const OPTIONS_KEY = 'power_shop_profit_settings';
@@ -64,6 +74,13 @@ final class RewriteRules {
 			'index.php?' . self::QUERY_VAR . '=$matches[1]',
 			'top'
 		);
+
+		// Phase 4-C1：前台賣場 /profit-shop/{slug}/
+		\add_rewrite_rule(
+			'^' . self::SHOP_REWRITE_PREFIX . '/([^/]+)/?$',
+			'index.php?' . self::SHOP_QUERY_VAR . '=$matches[1]',
+			'top'
+		);
 	}
 
 	/**
@@ -75,6 +92,7 @@ final class RewriteRules {
 	 */
 	public static function add_query_var( array $vars ): array {
 		$vars[] = self::QUERY_VAR;
+		$vars[] = self::SHOP_QUERY_VAR;
 		return $vars;
 	}
 

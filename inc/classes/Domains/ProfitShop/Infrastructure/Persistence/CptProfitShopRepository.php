@@ -73,6 +73,50 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 	}
 
 	/**
+	 * 依 slug 取得賣場
+	 *
+	 * 用於前台 /profit-shop/{slug}/ 路由解析（Phase 4-C1）。
+	 * 行為與 find() 一致：trashed / 非 powershop CPT 一律回 null。
+	 *
+	 * @param string $slug 賣場 post_name（slug）
+	 *
+	 * @return ProfitShop|null 找不到、非 powershop CPT、或已 trashed 時回傳 null
+	 */
+	public function find_by_slug( string $slug ): ?ProfitShop {
+		if ( '' === $slug ) {
+			return null;
+		}
+
+		$posts = \get_posts(
+			[
+				'name'           => $slug,
+				'post_type'      => CptRegistrar::POST_TYPE,
+				'post_status'    => [ 'publish', 'draft' ],
+				'posts_per_page' => 1,
+				'no_found_rows'  => true,
+				'orderby'        => 'ID',
+				'order'          => 'ASC',
+			]
+		);
+
+		if ( empty( $posts ) ) {
+			return null;
+		}
+
+		$post = $posts[0];
+		if ( ! $post instanceof \WP_Post ) {
+			return null;
+		}
+
+		// 雙保險：post_status 已被 query 過濾，但仍保留以防 WP filter hook 把 trash 塞回來。
+		if ( 'trash' === $post->post_status ) {
+			return null;
+		}
+
+		return $this->hydrate_from_post( $post );
+	}
+
+	/**
 	 * 儲存賣場（新增或更新）
 	 *
 	 * @param ProfitShop $shop 賣場聚合根

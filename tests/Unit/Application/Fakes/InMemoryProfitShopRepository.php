@@ -51,6 +51,23 @@ final class InMemoryProfitShopRepository implements ProfitShopRepositoryInterfac
 	}
 
 	/**
+	 * @param string $slug 賣場 slug
+	 */
+	public function find_by_slug( string $slug ): ?ProfitShop {
+		if ( '' === $slug ) {
+			return null;
+		}
+
+		foreach ( $this->shops as $shop ) {
+			if ( $shop->slug === $slug ) {
+				return $shop;
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * @param ProfitShop $shop 賣場聚合根
 	 */
 	public function save( ProfitShop $shop ): int {

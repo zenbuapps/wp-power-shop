@@ -27,6 +27,17 @@ interface ProfitShopRepositoryInterface {
 	public function find( int $id ): ?ProfitShop;
 
 	/**
+	 * 依 slug 取得賣場
+	 *
+	 * 對應 Phase 4-C1 前台 /profit-shop/{slug}/ 路由解析需求。
+	 *
+	 * @param string $slug 賣場 post_name（slug）
+	 *
+	 * @return ProfitShop|null 找不到、非 powershop CPT、或已 trashed 時回傳 null
+	 */
+	public function find_by_slug( string $slug ): ?ProfitShop;
+
+	/**
 	 * 儲存賣場（新增或更新）
 	 *
 	 * @param ProfitShop $shop 賣場聚合根
