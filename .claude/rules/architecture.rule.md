@@ -70,26 +70,36 @@ inc/classes/Domains/ProfitShop/
 │   └── Exception/                   # 18 個 final extends \DomainException（PartnerNotFound、SlugConflict、TooManyAttempts...）
 │
 ├── Application/                     # 編排業務流程，依賴 Domain + Port interface
-│   ├── DTO/                         # 12 個 immutable readonly DTO（PartnerInput / ProfitShopInput / KpiReport...）
-│   ├── Service/                     # 11 個 Service：4 Port interface + 4 Service 實裝 + 3 Auth/Rate-limit
+│   ├── DTO/                         # 13 個 immutable readonly DTO（PartnerInput / ProfitShopInput / KpiReport / SlugValidationOutput...）
+│   ├── Service/                     # 13 個 Service：5 Port interface + 4 Service 實裝 + 4 Auth/Rate-limit/Crypto
 │   │                                #   - Port: ProductLookup / SlugConflictLookup / TransientStore / Clock /
-│   │                                #     EmailNotifier / SettlementSummaryProvider / SettingsRepository / ItemValidator
+│   │                                #     EmailNotifier / SettlementSummaryProvider / SettingsRepository / ItemValidator /
+│   │                                #     SaltProviderInterface（Phase 3-D，wp_salt 注入）
 │   │                                #   - 實裝: ItemValidator / SlugConflictDetector / SettingsRepository /
-│   │                                #     ProductSnapshotProvider / PartnerAuthService / PartnerTokenStore / LoginRateLimiter
-│   └── UseCase/                     # 25 個 UseCase
-│       ├── Shop/                    #   8 個（CRUD + publish/unpublish/duplicate）
+│   │                                #     ProductSnapshotProvider / PartnerAuthService / PartnerTokenStore（Phase 3-D 升級：
+│   │                                #     4-interface DI + hash_hmac + password_changed_at 撤銷）/
+│   │                                #     LoginRateLimiter（Phase 3-D 升級：per-slug + per-IP 雙維度，IP hash_hmac）/
+│   │                                #     CartPriceSignatureService（Phase 3-D 新增：HMAC-SHA256 cart 簽章）
+│   └── UseCase/                     # 26 個 UseCase
+│       ├── Shop/                    #   9 個（CRUD + publish/unpublish/duplicate + ValidateSlugUseCase[Phase 3-E]）
 │       ├── Partner/                 #   5 admin CRUD + 4 Auth + 3 Report
 │       ├── Migration/               #   2 個（list legacy / import）
 │       └── Settings/                #   3 個（get / update / reset）
 │
 ├── Infrastructure/                  # 唯一可呼叫 WP / WC API 的層
-│   ├── Persistence/                 # CptProfitShopRepository / PartnerTermRepository /
+│   ├── Persistence/                 # CptProfitShopRepository / PartnerTermRepository（Phase 3-D：+get_password_changed_at）/
 │   │                                #   OrderItemSettlementRepository / LegacyOnePageShopRepository /
-│   │                                #   WpSettlementSummaryProvider
+│   │                                #   WpSettlementSummaryProvider（Phase 3-D：placeholder → 545 行真實 SQL，
+│   │                                #     含 HPOS 雙路徑 / bcadd 精度 / IDOR partner_term_id 鎖死）
 │   ├── WordPress/                   # CptRegistrar / TaxonomyRegistrar / RewriteRules /
 │   │                                #   RewriteRulesFlusher / WpProductLookup / WpSlugConflictLookup /
-│   │                                #   WpTransientStore / SystemClock / WpAdminEmailNotifier
-│   └── Rest/                        # ExceptionMapper（Domain Exception → HTTP）+ V2Api（25 endpoint）
+│   │                                #   WpTransientStore / SystemClock / WpAdminEmailNotifier /
+│   │                                #   WpSaltProvider（Phase 3-D，context 白名單防 silent salt rotation）
+│   ├── WooCommerce/                 # Phase 3-D 新層：CartPriceOverrideHook（前台 cart 價格防竄改，
+│   │                                #   add_cart_item_data + get_cart_item_from_session +
+│   │                                #   before_calculate_totals priority 999 + draft shop fallback）
+│   └── Rest/                        # ExceptionMapper（Domain Exception → HTTP，Phase 3-E：+filter test seam）+
+│   │                                #   V2Api（26 endpoint：Phase 3-E +validate-slug）
 │
 └── Loader.php                       # ProfitShop sub-loader，由 Domains\Loader 註冊
 ```
@@ -113,7 +123,8 @@ plugin.php
                   ├→ Report\Dashboard\Core\V2Api::instance() # 既有報表 REST API
                   └→ ProfitShop\Loader::instance()           # Profit Shop sub-loader
                       ├→ Infrastructure/WordPress/CptRegistrar / TaxonomyRegistrar / RewriteRules
-                      └→ Infrastructure/Rest/V2Api::instance() # 25 個 endpoint
+                      ├→ Infrastructure/WooCommerce/CartPriceOverrideHook::instance() # Phase 3-D，admin context guard
+                      └→ Infrastructure/Rest/V2Api::instance() # 26 個 endpoint
 ```
 
 ### 前端載入流程

@@ -303,9 +303,10 @@ final class V2Api extends ApiBase {
 	 *
 	 * 對應規格：specs/2026-05-06-profit-shop-design.md §4.5、§6.3
 	 *
-	 * 支援兩種 token 來源（任一即可）：
-	 *   1. Header `X-Partner-Token: {token}`
-	 *   2. Cookie `profit_partner_token`
+	 * 支援三種 token 來源（任一即可，優先級鏈見 extract_partner_token）：
+	 *   1. Header `X-Partner-Token: {token}`               - SPA 直接帶（最常見）
+	 *   2. Header `Authorization: Bearer {token}`           - REST API 通用慣例
+	 *   3. Cookie `profit_partner_token`                    - 瀏覽器自動帶（fallback）
 	 *
 	 * 通過驗證後，將 partner_term_id 透過 set_param() 寫入 request；
 	 * WP_REST_Request::set_param() 會 overwrite 所有已存在 buckets 中的同名 key——

@@ -92,10 +92,12 @@ final class PartnerPasswordRotationRevokesTokenTest extends TestCase {
 
 		// ---------- 步驟 3：admin regenerate-password ----------
 		\wp_set_current_user( $this->admin_id );
-		$regen_request  = new \WP_REST_Request(
+		$regen_request = new \WP_REST_Request(
 			'POST',
 			'/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password',
 		);
+		// admin nonce 必須在 wp_set_current_user 之後產生（nonce 與 current user 綁定）.
+		$regen_request->set_header( 'X-WP-Nonce', \wp_create_nonce( 'wp_rest' ) );
 		$regen_response = \rest_do_request( $regen_request );
 		$this->assertSame( 200, $regen_response->get_status(), 'admin regenerate-password 應 200' );
 

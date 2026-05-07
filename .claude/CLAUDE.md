@@ -52,7 +52,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 3-C 完工 → 下一步 Phase 3-D（Settlements 真實聚合 + AddToCart Hook + 安全強化）
+**目前狀態**：Phase 3-D + Phase 3-E 完工 → 下一步 Phase 4（前端 SPA 整合：商家後台 React 頁面 + 分潤夥伴前台 hash router）
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -118,16 +118,45 @@ pnpm release:major
 - Presentation：ExceptionMapper（Domain Exception → HTTP）+ V2Api（單一 ApiBase，namespace `power-shop`）
 - Test：`tests/Unit/**` 純 PHP；`tests/Integration/**` 啟 WP；`tests/Support/**` fakes 與 production interface 同步 implements
 
-### Phase 3-D 預告（待辦）
+### Phase 3-D（Settlements 真實聚合 + AddToCart Hook + 三輪安全強化）已完工（commits `78a050f` / `64e4c04` / `4e1c780` / `3b36a2a`）
 
-優先順序（**高優先**項已 commit message 點名）：
-1. **regenerate-password 撤銷舊 token**（password_changed_at 比對機制；順手 #4 降級至 3-D）
-2. WpSettlementSummaryProvider 接真實 `wc_order_itemmeta` JOIN 聚合（取代 placeholder）
-3. AddToCart Hook（前台價格防竄改）+ Cart price override 機制
-4. IP-based rate-limit（reviewer M-2）+ rate-limit 5/15min 改 3 次（reviewer L-3）
-5. token 三條讀取路徑收斂（reviewer M-5）
-6. regenerate-password 加 admin nonce + `Cache-Control: no-store`（reviewer 紀錄）
-7. hash_hmac + `wp_salt` 升級（reviewer L-1，現行 sha256 已安全）
+| Batch | Commit | 範圍 | 測試 |
+|-------|--------|------|------|
+| Batch 1 | `78a050f` | T-1 PartnerRepo `get_password_changed_at()` + T-7 CartPriceSignatureService（HMAC-SHA256 + `cart-signature:v1` domain prefix + `v1.` version prefix + hash_equals） | 16 method（CartPriceSignatureServiceTest）+ 4 method（PartnerRepositoryGetPasswordChangedAtContractTest）+ 4 method（PartnerTermRepositoryGetPasswordChangedAtTest IT） |
+| Batch 2 | `64e4c04` | T-2 PartnerTokenStore 撤銷比對 + 4-interface DI（`SaltProviderInterface` 加入）+ `hash_hmac('sha256', $token, wp_salt('auth'))` 升級 + T-5 WpSettlementSummaryProvider 真實 SQL（94 行 → 545 行，5 道安全防線：prepare / IDOR / HPOS 雙路徑 / bcadd 精度 / pagination cap） | 9 method（PartnerTokenStorePasswordRotationTest）+ 端到端 IT（PartnerPasswordRotationRevokesTokenTest）+ 21 method（WpSettlementSummaryProviderRealAggregationTest） |
+| Batch 3 | `4e1c780` | T-3 LoginRateLimiter +per-IP 雙維度（換 slug 攻擊防禦，IP sha256 hash + 不解析 X-Forwarded-For）+ unknown slug `record_ip_only_failure` + T-8 CartPriceOverrideHook（**新層！`Infrastructure/WooCommerce/`**）：`add_cart_item_data` / `get_cart_item_from_session` / `before_calculate_totals` priority 999 + 4 筆 `_profit_*` meta + draft shop fallback + `wc_format_decimal($price, '')` normalize | 14 method（LoginRateLimiterIpDimensionTest）+ 14 method（CartPriceOverrideHookTest IT，含 draft shop test） |
+| Batch 4 | `3b36a2a` | T-4 V2Api 收尾整合：regenerate-password 加 admin nonce（`X-WP-Nonce`）+ `Cache-Control: no-store, no-cache, must-revalidate` + extract_partner_token 三路徑優先級 PHPDoc 化；三輪 reviewer 11 條安全強化：LOW-T2-1（PartnerTokenStore `partner-token:v1\|` domain prefix）/ LOW-T2-2（verify try/catch fail-closed + log injection 過濾）/ LOW-T5-1（V2Api page max 10000 cap）/ LOW-T5-2（format_datetime MAX_TIMESTAMP cap）/ M-1（`power_shop_partner_login_client_ip` filter hook）/ M-2（LoginRateLimiter IP hash 升 hash_hmac + `SaltProviderInterface` DI + KEY_PREFIX_IP v2）/ MAJOR-1（`is_hpos_enabled` 共用一次計算）/ MAJOR-2（format_money 非數字 fail-fast）/ MAJOR-3（trend INNER JOIN 1:1 假設 docblock） | 全部既有測試 ctor 補注入 `FixedSaltProvider` regression 防護 |
+
+### Phase 3-E（validate-slug + ExceptionMapper 解封 + OpenAPI 同步）已完工（commit `0660fc7`）
+
+| 項 | 內容 | 路徑 |
+|----|------|------|
+| T-9 validate-slug | `ValidateSlugUseCase`（格式守門：空 / >60 字元 / `^[a-z0-9_-]+$`，違規拋 `InvalidPartnerSlug`）+ `SlugValidationOutput` readonly DTO（`available` / `conflicts` / `is_available()`）+ V2Api `GET /profit-shops/validate-slug?slug=xxx`（permission `null`） | `Application/UseCase/Shop/ValidateSlugUseCase.php` + `Application/DTO/SlugValidationOutput.php` |
+| T-10 ExceptionMapper 解封 | `ExceptionMapper::should_mask()` private static helper + `power_shop_exception_mapper_mask` filter（test seam，default = `!WP_DEBUG`），測試 try/finally 復原；13 種 Domain Exception 對映邏輯與 V2Api callsites 完全未動 | `Infrastructure/Rest/ExceptionMapper.php` |
+| T-11 OpenAPI 同步 | `specs/api/api.yml` 從 1996 行擴增至 2940+ 行：26 個 Profit Shop endpoint（Phase 3-A/B/C/E 全收）+ 21 個 component schemas + 3 個 securitySchemes（`PartnerToken` / `PartnerBearer` / `PartnerCookie`）+ partner endpoint 裸 payload 標註 + partner-reports 三 endpoint description 鎖死「禁從 query string 讀 partner_term_id」 | `specs/api/api.yml` |
+| 測試 | 9 method（ValidateSlugUseCaseTest，FakeSlugConflictDetector）+ 紅燈 IT 7 method（待 wp-env 跑） | `tests/Unit/Application/UseCase/Shop/` |
+
+### Phase 4 預告（待辦）
+
+**下一階段：前端 SPA 整合 + Frontend** —— 後端 26 個 endpoint 全部就緒、OpenAPI 同步完成，進入前端開發。
+
+優先順序：
+1. **商家後台 React 頁面**：Profit Shop 列表 / 編輯（雙 mode toggle）/ Partner CRUD / Migration 視圖 / Settings 表單
+2. **分潤夥伴前台**：`/profit-report/{slug}/` 路由 + Login 頁 + Dashboard（KPI / Trend / Settlements 三 widget）
+3. **AddToCart 前端整合**：cart_item_data 注入 4 筆 `_profit_*` meta + signature 由後端簽發後夾帶
+
+### Reviewer 累積的「未來補強建議」（非 blocking）
+
+由 Phase 3-D Batch 1-3 的 reviewer 順手清單彙整（已於 Batch 4 解決部分）：
+
+- [ ] **security L-1**：全域 mass-spray rate-limit（1000/hour 跨任意 slug + IP）
+- [ ] **security M-4**：`error_log` 路徑安全提示寫入 README / 設計文件
+- [ ] **T-3 補測**：`PartnerAuthServiceTest` 加 unknown slug + IP-only record 端到端測試
+- [ ] **T-3 文件**：`specs/2026-05-06-profit-shop-design.md` §6 加 IP 偵測信任邊界章節 + `power_shop_partner_login_client_ip` filter hook 用法範例
+- [ ] **T-8 perf**：`reset_to_original_price` 的 N+1 query micro-cache
+- [ ] **T-8 邊界**：`before_calculate_totals` priority 999 對 `PHP_INT_MAX` 的其他 plugin 防護評估
+- [ ] **rate-limit 5/15min 改 3 次**（reviewer L-3，產品決策層）
+- [ ] **token 三條讀取路徑收斂**（reviewer M-5，目前已 PHPDoc 化但未刪路徑）
 
 ## Specs
 

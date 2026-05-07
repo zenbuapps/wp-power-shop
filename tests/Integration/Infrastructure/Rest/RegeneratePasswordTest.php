@@ -53,7 +53,8 @@ final class RegeneratePasswordTest extends TestCase {
 	 * @group security
 	 */
 	public function test_admin_regenerates_password_returns_new_plaintext(): void {
-		$request  = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		$request = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		$request->set_header( 'X-WP-Nonce', \wp_create_nonce( 'wp_rest' ) );
 		$response = \rest_do_request( $request );
 
 		$this->assertSame( 200, $response->get_status() );
@@ -69,6 +70,7 @@ final class RegeneratePasswordTest extends TestCase {
 	 */
 	public function test_old_password_cannot_login_after_regenerate(): void {
 		$request = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		$request->set_header( 'X-WP-Nonce', \wp_create_nonce( 'wp_rest' ) );
 		\rest_do_request( $request );
 
 		// 確保不會被 admin login session 干擾
@@ -88,7 +90,8 @@ final class RegeneratePasswordTest extends TestCase {
 	 */
 	public function test_new_password_can_login(): void {
 		\wp_set_current_user( $this->admin_id );
-		$request  = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		$request = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		$request->set_header( 'X-WP-Nonce', \wp_create_nonce( 'wp_rest' ) );
 		$response = \rest_do_request( $request );
 		$new_pw   = $response->get_data()['password'] ?? '';
 		$this->assertNotEmpty( $new_pw );
@@ -110,9 +113,45 @@ final class RegeneratePasswordTest extends TestCase {
 		$shop_manager = self::factory()->user->create( [ 'role' => 'shop_manager' ] );
 		\wp_set_current_user( $shop_manager );
 
-		$request  = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		$request = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		// 即便附 nonce，capability 檢查也應先擋下；此處刻意帶上 nonce 以確保不是「沒帶 nonce 才被擋」.
+		$request->set_header( 'X-WP-Nonce', \wp_create_nonce( 'wp_rest' ) );
 		$response = \rest_do_request( $request );
 
 		$this->assertContains( $response->get_status(), [ 401, 403 ] );
+	}
+
+	/**
+	 * 沒有帶 X-WP-Nonce → 應 403 rest_forbidden（CSRF 防護）
+	 *
+	 * @group security
+	 * @group edge
+	 */
+	public function test_regenerate_password_returns_403_when_nonce_missing(): void {
+		\wp_set_current_user( $this->admin_id );
+
+		$request = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		// 故意不帶 X-WP-Nonce.
+		$response = \rest_do_request( $request );
+
+		$this->assertSame( 403, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame( 'rest_forbidden', is_array( $data ) ? ( $data['code'] ?? null ) : null );
+	}
+
+	/**
+	 * 帶錯誤的 X-WP-Nonce → 應 403 rest_forbidden（CSRF 防護）
+	 *
+	 * @group security
+	 * @group edge
+	 */
+	public function test_regenerate_password_returns_403_when_nonce_invalid(): void {
+		\wp_set_current_user( $this->admin_id );
+
+		$request = new \WP_REST_Request( 'POST', '/power-shop/profit-partners/' . $this->partner_term_id . '/regenerate-password' );
+		$request->set_header( 'X-WP-Nonce', 'invalid_nonce_string' );
+		$response = \rest_do_request( $request );
+
+		$this->assertSame( 403, $response->get_status() );
 	}
 }

@@ -80,7 +80,7 @@ Phase 3-C（Partner Auth + Reports，7 個）：
 
 | Method | 端點 | Permission | 說明 |
 |--------|------|------------|------|
-| POST | `profit-partners/{id}/regenerate-password` | **admin_only** | 重新產生密碼（12 字元 wp_generate_password） |
+| POST | `profit-partners/{id}/regenerate-password` | **admin_only** | 重新產生密碼（12 字元 wp_generate_password；Phase 3-D T-4：加 admin nonce 驗證 + `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`，response token 永不被 cache） |
 | POST | `partner-auth/login` | **public** | Partner 登入；Set-Cookie HttpOnly/Secure/SameSite=Lax/Path=/wp-json/power-shop/ |
 | POST | `partner-auth/logout` | **public** | 登出（idempotent，Cookie Max-Age=0） |
 | GET | `partner-auth/me` | **partner_token** | 取得當前 partner 資訊 |
@@ -88,10 +88,28 @@ Phase 3-C（Partner Auth + Reports，7 個）：
 | GET | `partner-reports/trend` | **partner_token** | 趨勢報表（partner_term_id 鎖死於 token） |
 | GET | `partner-reports/settlements` | **partner_token** | 結算列表（partner_term_id 鎖死於 token） |
 
+Phase 3-E（slug 即時驗證，1 個）：
+
+| Method | 端點 | Permission | 說明 |
+|--------|------|------------|------|
+| GET | `profit-shops/validate-slug?slug=xxx` | default | slug 即時驗證（前端建立時呼叫，回 `{available, conflicts[]}`；委派 `SlugConflictDetector` spec §6.11 五類衝突） |
+
 **Profit Shop API 慣例差異**：
 - Partner endpoint **不裹** `{code, data}`，body 直接是 payload（spec §4.4）
 - partner_token 從 `X-Partner-Token` / `Authorization: Bearer` / `Cookie` 取，驗證後寫入 `$request->_partner_term_id`（內部欄位前綴 `_` 避免被 sanitize）
 - Partner Reports callback **永不從 query string 讀 partner_term_id**（防範圍隔離繞過）
+
+**Partner Login IP 偵測信任邊界（Phase 3-D T-3 + reviewer M-1）**：
+- `LoginRateLimiter` per-IP 維度的 IP 來源為 `$_SERVER['REMOTE_ADDR']`，**不解析 `X-Forwarded-For`**（避免 header 偽造繞鎖）
+- 若部署在 reverse proxy 後方（Cloudflare / nginx LB / AWS ALB），`REMOTE_ADDR` 會是 proxy IP 而非真實客戶端 IP，造成同一 proxy 後方所有用戶共享同一 IP 計數
+- 解法：使用 `power_shop_partner_login_client_ip` filter hook 注入真實 IP，例如：
+  ```php
+  add_filter( 'power_shop_partner_login_client_ip', function( $ip ) {
+      // 從 CF-Connecting-IP / X-Real-IP 等可信 header 取（需先驗證來源 IP 為 trusted proxy）
+      return $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $ip;
+  } );
+  ```
+- IP 永不明文落地：transient key 與 audit log 都用 `hash_hmac('sha256', $ip, wp_salt('auth'))`
 
 **WooCommerce 端點（`/wp-json/wc/v3/`）：**
 
