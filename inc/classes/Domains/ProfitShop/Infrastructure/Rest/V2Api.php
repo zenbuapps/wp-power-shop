@@ -42,6 +42,7 @@ use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\ListShops;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\PublishShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\UnpublishShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\UpdateShop;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\ValidateSlugUseCase;
 use J7\PowerShop\Domains\ProfitShop\Domain\Criteria\FilterCriteria;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\InvalidCredentials;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
@@ -154,6 +155,12 @@ final class V2Api extends ApiBase {
 			[
 				'endpoint' => 'profit-shops',
 				'method' => 'post',
+				'permission_callback' => null,
+			],
+			// §6.11 validate-slug（必須在 /(?P<id>\d+) 之前，避免被 numeric route 攔截）
+			[
+				'endpoint' => 'profit-shops/validate-slug',
+				'method' => 'get',
 				'permission_callback' => null,
 			],
 			[
@@ -421,6 +428,37 @@ final class V2Api extends ApiBase {
 
 			$output = $useCase->execute( $input );
 			return self::created( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /profit-shops/validate-slug
+	 *
+	 * 對應規格：specs/2026-05-06-profit-shop-design.md §6.11
+	 *
+	 * Query string：?slug=xxx
+	 *
+	 * 此 endpoint 必須在 /profit-shops/(?P<id>\d+) 之前註冊，
+	 * 否則 'validate-slug' 會被 numeric route 攔截（雖然 \d+ 不會 match 字串，
+	 * 但 WP REST router 比對順序仍以登錄順序為準，提前註冊較保險）。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_profit_shops_validate_slug_callback( $request ): \WP_REST_Response {
+		try {
+			$params = WP::sanitize_text_field_deep( $request->get_query_params(), false );
+			$slug   = isset( $params['slug'] ) ? (string) $params['slug'] : '';
+
+			$useCase = new ValidateSlugUseCase(
+				slugDetector: new SlugConflictDetector( WpSlugConflictLookup::instance() )
+			);
+			$output = $useCase->execute( $slug );
+
+			return self::ok( $output->to_array() );
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}

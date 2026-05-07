@@ -78,33 +78,35 @@ final class ExceptionMapperDepthTest extends TestCase {
 	 * @group security
 	 */
 	public function test_persistence_failure_maps_to_500_and_masks_message_in_production(): void {
-		// 確保不在 WP_DEBUG mode
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			$this->markTestSkipped( '此測試需在 WP_DEBUG=false 環境跑（生產模式遮蔽訊息）' );
+		// 透過 filter test seam 強制進入生產遮蔽模式（不依賴 PHPUnit fixture 的 WP_DEBUG 設定）
+		\add_filter( 'power_shop_exception_mapper_mask', '__return_true' );
+
+		try {
+			$secret_message = 'SQL ERROR: Table foo doesn\'t exist at /var/www/secret/path.php:123';
+			$response       = ExceptionMapper::map( new PersistenceFailure( $secret_message ) );
+
+			$this->assertSame( 500, $response->get_status() );
+			$body = $response->get_data();
+			$this->assertSame( 'internal_error', $body['code'] ?? null );
+
+			// 生產 mode 不洩漏內部錯誤訊息
+			$this->assertStringNotContainsString(
+				'SQL ERROR',
+				(string) $body['message'],
+				'生產 mode 必須遮蔽原始 PersistenceFailure message'
+			);
+			$this->assertStringNotContainsString(
+				'/var/www/secret',
+				(string) $body['message'],
+				'生產 mode 不洩漏檔案路徑'
+			);
+
+			// error_id 必須存在（讓運維追蹤）
+			$this->assertArrayHasKey( 'error_id', $body );
+			$this->assertNotEmpty( $body['error_id'] );
+		} finally {
+			\remove_filter( 'power_shop_exception_mapper_mask', '__return_true' );
 		}
-
-		$secret_message = 'SQL ERROR: Table foo doesn\'t exist at /var/www/secret/path.php:123';
-		$response       = ExceptionMapper::map( new PersistenceFailure( $secret_message ) );
-
-		$this->assertSame( 500, $response->get_status() );
-		$body = $response->get_data();
-		$this->assertSame( 'internal_error', $body['code'] ?? null );
-
-		// 生產 mode 不洩漏內部錯誤訊息
-		$this->assertStringNotContainsString(
-			'SQL ERROR',
-			(string) $body['message'],
-			'生產 mode 必須遮蔽原始 PersistenceFailure message'
-		);
-		$this->assertStringNotContainsString(
-			'/var/www/secret',
-			(string) $body['message'],
-			'生產 mode 不洩漏檔案路徑'
-		);
-
-		// error_id 必須存在（讓運維追蹤）
-		$this->assertArrayHasKey( 'error_id', $body );
-		$this->assertNotEmpty( $body['error_id'] );
 	}
 
 	/**

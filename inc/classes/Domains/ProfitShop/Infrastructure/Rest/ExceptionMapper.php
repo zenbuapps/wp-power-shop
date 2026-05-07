@@ -74,7 +74,7 @@ final class ExceptionMapper {
 			\error_log( "[power-shop] {$error_id} {$msg_for_log}" ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 
 			// 生產環境遮蔽原始 message，避免洩漏內部錯誤細節（DB schema、檔案路徑等）
-			if ( ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ) {
+			if ( self::should_mask() ) {
 				$body['message'] = '伺服器發生錯誤，請聯絡管理員';
 			}
 		}
@@ -188,5 +188,20 @@ final class ExceptionMapper {
 	 */
 	private static function generate_error_id(): string {
 		return sprintf( 'PS-%d-%s', time(), \wp_generate_password( 6, false, false ) );
+	}
+
+	/**
+	 * 是否應該遮蔽錯誤訊息（500 internal_error）
+	 *
+	 * 預設行為：當 `WP_DEBUG` 未啟用時遮蔽（生產模式）；啟用時保留原始訊息（開發模式）。
+	 *
+	 * Test seam：透過 `power_shop_exception_mapper_mask` filter 可在測試環境強制覆寫，
+	 * 例如 `add_filter('power_shop_exception_mapper_mask', '__return_true')` 強制遮蔽。
+	 *
+	 * @return bool
+	 */
+	private static function should_mask(): bool {
+		$default = ! ( defined( 'WP_DEBUG' ) && WP_DEBUG );
+		return (bool) \apply_filters( 'power_shop_exception_mapper_mask', $default );
 	}
 }
