@@ -32,24 +32,19 @@ final class LoginRateLimiter {
 	/**
 	 * 建構子
 	 *
-	 * Transient / Clock / Email 採 duck-typing（object 型別 + docblock 約定形狀），允許測試 fake
-	 * 不必 nominal-implement 對應 interface（避免汙染 tests/Support 層）。
-	 * Production 由 WpTransientStore / SystemClock / WpAdminEmailNotifier 注入，皆有 implement 對應 interface。
+	 * 採 nominal interface（TransientStoreInterface / ClockInterface / EmailNotifierInterface）；
+	 * Production 由 WpTransientStore / SystemClock / WpAdminEmailNotifier 注入，測試由 fake / 匿名 class 實作介面。
 	 *
-	 * @param object $transients     Transient 儲存（提供 set/get/delete）.
-	 * @param object $clock          時鐘（提供 now(): int）.
-	 * @param object $email          Email 通知（提供 notify(string,string,string)）.
-	 * @param int    $max_attempts   失敗次數上限（含）.
-	 * @param int    $window_seconds 視窗秒數（預設 900 = 15 分鐘）.
-	 *
-	 * @phpstan-param TransientStoreInterface $transients
-	 * @phpstan-param ClockInterface $clock
-	 * @phpstan-param EmailNotifierInterface $email
+	 * @param TransientStoreInterface $transients     Transient 儲存（提供 set/get/delete）.
+	 * @param ClockInterface          $clock          時鐘（提供 now(): int）.
+	 * @param EmailNotifierInterface  $email          Email 通知（提供 notify(string,string,string)）.
+	 * @param int                     $max_attempts   失敗次數上限（含）.
+	 * @param int                     $window_seconds 視窗秒數（預設 900 = 15 分鐘）.
 	 */
 	public function __construct(
-		private readonly object $transients,
-		private readonly object $clock,
-		private readonly object $email,
+		private readonly TransientStoreInterface $transients,
+		private readonly ClockInterface $clock,
+		private readonly EmailNotifierInterface $email,
 		private readonly int $max_attempts = 5,
 		private readonly int $window_seconds = 900
 	) {}
@@ -105,8 +100,11 @@ final class LoginRateLimiter {
 			$ttl
 		);
 
-		// 達到門檻：通知 admin（warn-and-swallow）
+		// 達到門檻：先寫 audit log（無條件，獨立於 email 成敗），再通知 admin（warn-and-swallow）
 		if ( $new_count === $this->max_attempts ) {
+			\error_log( // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				sprintf( '[power-shop][audit] partner-lockout slug=%s count=%d', $slug, $new_count )
+			);
 			$this->notify_admin_safely( $slug, $new_count );
 		}
 	}
@@ -190,8 +188,9 @@ final class LoginRateLimiter {
 			// 收件人為空字串時，WpAdminEmailNotifier 內部 fallback 到 get_option('admin_email')。
 			$this->email->notify( '', $subject, $body );
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
-			// warn-and-swallow：寄信失敗只記 log，不阻擋登入流程
-			\error_log( '[power-shop] LoginRateLimiter admin notice failed: ' . $e->getMessage() ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			// warn-and-swallow：寄信失敗只記 log，不阻擋登入流程；過濾 CR/LF/TAB 防 log injection
+			$msg = str_replace( [ "\r", "\n", "\t" ], ' ', $e->getMessage() );
+			\error_log( "[power-shop] LoginRateLimiter admin notice failed: {$msg}" ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 		}
 	}
 }

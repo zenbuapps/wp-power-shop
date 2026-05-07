@@ -10,6 +10,8 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
+use J7\PowerShop\Domains\ProfitShop\Application\Service\ClockInterface;
+
 /**
  * 可手動推進的測試時鐘
  *
@@ -19,7 +21,7 @@ namespace Tests\Support;
  *   $clock->set_to( 1_000_900_000 );   // 跳到指定時間
  *   $clock->now();                      // 取得當前 timestamp
  */
-final class FixedClock {
+final class FixedClock implements ClockInterface {
 
 	/**
 	 * 目前時間（unix timestamp）

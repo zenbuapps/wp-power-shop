@@ -10,6 +10,8 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
+use J7\PowerShop\Domains\ProfitShop\Application\Service\EmailNotifierInterface;
+
 /**
  * 紀錄寄送呼叫的 email spy
  *
@@ -20,7 +22,7 @@ namespace Tests\Support;
  *   - send_should_throw = true：紀錄一筆訊息（送達失敗前已嘗試），並拋 \RuntimeException，
  *     用以測試 LoginRateLimiter 是否 warn-and-swallow（不應 propagate 錯誤）
  */
-final class SpyEmailNotifier {
+final class SpyEmailNotifier implements EmailNotifierInterface {
 
 	/**
 	 * 已寄送（或嘗試寄送）的 message log

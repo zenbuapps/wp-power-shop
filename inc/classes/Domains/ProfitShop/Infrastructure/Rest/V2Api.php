@@ -99,6 +99,31 @@ final class V2Api extends ApiBase {
 	private const PARTNER_RAW_FIELDS = [ 'password' ];
 
 	/**
+	 * Partner token TTL（秒）
+	 *
+	 * 此常數同時用於：
+	 *   - PartnerTokenStore::issue 的 transient 過期時間
+	 *   - login response 的 Set-Cookie Max-Age
+	 *
+	 * 兩處必須一致，避免 cookie 還在但 transient 已過期（或反之）造成 401 認知不一致。
+	 *
+	 * @var int
+	 */
+	private const PARTNER_TOKEN_TTL_SECONDS = 3600;
+
+	/**
+	 * Partner token cookie 路徑
+	 *
+	 * 收斂 cookie 作用域到本外掛 REST namespace，避免被同網域其他 endpoint 讀到。
+	 * 涵蓋 /wp-json/power-shop/partner-auth/* 與 /wp-json/power-shop/partner-reports/*。
+	 *
+	 * 前提：partner SPA 走的是 /wp-json/power-shop/ base URL（與 Bootstrap::API_URL + KEBAB 對齊）。
+	 *
+	 * @var string
+	 */
+	private const PARTNER_COOKIE_PATH = '/wp-json/power-shop/';
+
+	/**
 	 * Namespace
 	 *
 	 * @var string
@@ -274,9 +299,10 @@ final class V2Api extends ApiBase {
 	 *   1. Header `X-Partner-Token: {token}`
 	 *   2. Cookie `profit_partner_token`
 	 *
-	 * 通過驗證後，將解出的 partner_term_id 塞進 request 的 `_partner_term_id` 內部參數
-	 * （前綴 `_` 避免被 sanitize_text_field_deep 處理；callback 透過
-	 * `$request->get_param('_partner_term_id')` 取得）。
+	 * 通過驗證後，將 partner_term_id 透過 set_param() 寫入 request；
+	 * WP_REST_Request::set_param() 會 overwrite 所有已存在 buckets 中的同名 key——
+	 * 即使 attacker 在 query string 帶 `?_partner_term_id=999`，set_param 也會覆寫為認證取得的真值。
+	 * （命名 `_` 前綴僅為 convention 標示「內部、非外部輸入」，與安全性無關。）
 	 *
 	 * 失敗回 401 + code=unauthorized（與 InvalidCredentials 對映一致）。
 	 *
@@ -331,9 +357,9 @@ final class V2Api extends ApiBase {
 			return trim( substr( $auth, 7 ) );
 		}
 
-		// Cookie
+		// Cookie：wp_unslash 處理 magic_quotes 殘留 + sanitize_text_field 防注入
 		if ( isset( $_COOKIE['profit_partner_token'] ) ) {
-			return (string) $_COOKIE['profit_partner_token']; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+			return \sanitize_text_field( \wp_unslash( $_COOKIE['profit_partner_token'] ) );
 		}
 
 		return '';
@@ -814,7 +840,8 @@ final class V2Api extends ApiBase {
 	 * POST /partner-auth/login
 	 *
 	 * Set-Cookie 透過 `WP_REST_Response::header()` 直接寫 raw header（避免使用 setcookie，
-	 * REST API 已 buffer output）。Cookie 屬性：HttpOnly + Secure + SameSite=Lax + Path=/ + Max-Age=3600。
+	 * REST API 已 buffer output）。Cookie 屬性：HttpOnly + Secure + SameSite=Lax +
+	 * Path=PARTNER_COOKIE_PATH（/wp-json/power-shop/）+ Max-Age=PARTNER_TOKEN_TTL_SECONDS（3600）。
 	 *
 	 * @param \WP_REST_Request $request Request.
 	 * @return \WP_REST_Response
@@ -834,9 +861,10 @@ final class V2Api extends ApiBase {
 			$response = new \WP_REST_Response( $output->to_array(), 200 );
 
 			$cookie = sprintf(
-				'profit_partner_token=%s; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=%d',
+				'profit_partner_token=%s; HttpOnly; Secure; SameSite=Lax; Path=%s; Max-Age=%d',
 				rawurlencode( $output->token ),
-				3600
+				self::PARTNER_COOKIE_PATH,
+				self::PARTNER_TOKEN_TTL_SECONDS
 			);
 			$response->header( 'Set-Cookie', $cookie );
 
@@ -864,10 +892,13 @@ final class V2Api extends ApiBase {
 
 			$response = new \WP_REST_Response( [ 'logged_out' => true ], 200 );
 
-			// 清空 cookie：Max-Age=0
+			// 清空 cookie：Max-Age=0；Path 必須與 set 時一致才能清除
 			$response->header(
 				'Set-Cookie',
-				'profit_partner_token=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0'
+				sprintf(
+					'profit_partner_token=; HttpOnly; Secure; SameSite=Lax; Path=%s; Max-Age=0',
+					self::PARTNER_COOKIE_PATH
+				)
 			);
 
 			return $response;
@@ -989,7 +1020,7 @@ final class V2Api extends ApiBase {
 		return new PartnerTokenStore(
 			transients: WpTransientStore::instance(),
 			clock: SystemClock::instance(),
-			ttl: 3600,
+			ttl: self::PARTNER_TOKEN_TTL_SECONDS,
 			key_prefix: 'ps_partner_token_',
 		);
 	}

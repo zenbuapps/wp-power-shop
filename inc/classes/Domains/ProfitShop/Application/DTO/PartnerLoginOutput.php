@@ -13,6 +13,10 @@ namespace J7\PowerShop\Domains\ProfitShop\Application\DTO;
  * 對應規格：specs/2026-05-06-profit-shop-design.md §6.3 / §7
  *
  * 攜帶 token + 過期時間 + Partner 公開資訊。
+ *
+ * `expires_at` 採字串型別保持序列化彈性（DtoRoundTripTest 鎖定 round-trip 不變更）；
+ * Production 由 LoginPartnerUseCase 將 PartnerTokenStore::issue() 回傳的 unix timestamp（int）
+ * 轉成字串（以 `(string)` cast，無格式化），前端視需求自行 parse。
  */
 final class PartnerLoginOutput {
 
@@ -20,7 +24,7 @@ final class PartnerLoginOutput {
 	 * 建構子
 	 *
 	 * @param string $token        驗證 token
-	 * @param string $expires_at   過期時間（Y-m-d H:i:s）
+	 * @param string $expires_at   過期時間（unix timestamp 字串化；前端 parseInt 即得秒數）
 	 * @param int    $partner_id   Partner term ID
 	 * @param string $partner_name Partner 名稱
 	 */

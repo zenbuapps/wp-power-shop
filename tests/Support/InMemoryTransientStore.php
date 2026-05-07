@@ -15,6 +15,8 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
+use J7\PowerShop\Domains\ProfitShop\Application\Service\TransientStoreInterface;
+
 /**
  * 模擬 WP transient 的純記憶體實作
  *
@@ -25,7 +27,7 @@ namespace Tests\Support;
  *
  * 配合 FixedClock 可模擬時間流動驗證 TTL 過期。
  */
-final class InMemoryTransientStore {
+final class InMemoryTransientStore implements TransientStoreInterface {
 
 	/**
 	 * 內部儲存

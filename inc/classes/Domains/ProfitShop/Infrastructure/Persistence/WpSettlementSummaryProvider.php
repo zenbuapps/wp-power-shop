@@ -54,6 +54,9 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 	 * @return array<string, mixed>
 	 */
 	public function summary_for_partner( int $partner_term_id, FilterCriteria $criteria ): array {
+		if ( defined( 'WP_DEBUG' ) && \WP_DEBUG ) {
+			\error_log( '[power-shop] WpSettlementSummaryProvider::summary_for_partner is Phase 3-C placeholder (returns zero KPI).' ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		}
 		// Phase 3-C：回 0；Phase 3-D 將以 wc_order_itemmeta JOIN 計算
 		return self::empty_kpi();
 	}
@@ -68,6 +71,9 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 	 * @return array<int, array<string, mixed>>
 	 */
 	public function trend_for_partner( int $partner_term_id, FilterCriteria $criteria, string $interval ): array {
+		if ( defined( 'WP_DEBUG' ) && \WP_DEBUG ) {
+			\error_log( '[power-shop] WpSettlementSummaryProvider::trend_for_partner is Phase 3-C placeholder (returns empty series).' ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		}
 		return [];
 	}
 
@@ -80,6 +86,9 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 	 * @return array<int, array<string, mixed>>
 	 */
 	public function find_by_partner( int $partner_term_id, FilterCriteria $criteria ): array {
+		if ( defined( 'WP_DEBUG' ) && \WP_DEBUG ) {
+			\error_log( '[power-shop] WpSettlementSummaryProvider::find_by_partner is Phase 3-C placeholder (returns empty list).' ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		}
 		return [];
 	}
 }

@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report;
 
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\KpiReport;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\SettlementSummaryProviderInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Criteria\FilterCriteria;
 
 /**
@@ -20,20 +21,18 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Criteria\FilterCriteria;
  *   絕不從 input/criteria 取，避免 attacker 透過 query string 跨 partner 查詢。
  *   FilterCriteria 設計上**沒有 partner_term_id 屬性**——這由 PartnerReportScopeIsolationTest 鎖定。
  *
- * Provider 介面相容性：
- *   ctor 期望注入 SettlementSummaryProviderInterface 實作（Production: WpSettlementSummaryProvider；
- *   Test: Tests\Support\InMemorySettlementSummaryProvider）。後者並未 nominal implement 此介面（為避免汙染
- *   production），但其 method shape 與 interface 一致，PHP duck-typing via `object` parameter 即可。
+ * Provider 介面採 nominal interface（SettlementSummaryProviderInterface）；
+ * Production: WpSettlementSummaryProvider；Test: Tests\Support\InMemorySettlementSummaryProvider 同樣 implements 此 interface。
  */
 final class GetPartnerKpiUseCase {
 
 	/**
 	 * 建構子
 	 *
-	 * @param object $summary 提供 summary_for_partner(int, FilterCriteria): array 的物件（implements SettlementSummaryProviderInterface 或測試替身）
+	 * @param SettlementSummaryProviderInterface $summary 結算彙總 Provider
 	 */
 	public function __construct(
-		private readonly object $summary
+		private readonly SettlementSummaryProviderInterface $summary
 	) {}
 
 	/**

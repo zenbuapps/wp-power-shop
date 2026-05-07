@@ -21,12 +21,13 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
+use J7\PowerShop\Domains\ProfitShop\Application\Service\SettlementSummaryProviderInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Criteria\FilterCriteria;
 
 /**
  * Settlement summary / trend / list 的測試替身
  */
-final class InMemorySettlementSummaryProvider {
+final class InMemorySettlementSummaryProvider implements SettlementSummaryProviderInterface {
 
 	/**
 	 * 預埋：partner_term_id => KpiReport 風格陣列

@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report;
 
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\TrendReport;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\SettlementSummaryProviderInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Criteria\FilterCriteria;
 
 /**
@@ -22,10 +23,10 @@ final class GetPartnerTrendUseCase {
 	/**
 	 * 建構子
 	 *
-	 * @param object $summary 提供 trend_for_partner(int, FilterCriteria, string): array 的物件
+	 * @param SettlementSummaryProviderInterface $summary 結算彙總 Provider
 	 */
 	public function __construct(
-		private readonly object $summary
+		private readonly SettlementSummaryProviderInterface $summary
 	) {}
 
 	/**

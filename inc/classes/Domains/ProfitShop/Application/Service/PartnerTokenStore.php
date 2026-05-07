@@ -28,21 +28,17 @@ final class PartnerTokenStore {
 	/**
 	 * 建構子
 	 *
-	 * Transient / Clock 採 duck-typing（object 型別 + docblock 約定形狀），允許測試 fake
-	 * 不必 nominal-implement TransientStoreInterface / ClockInterface（避免汙染 support 層）。
-	 * Production 由 WpTransientStore / SystemClock 注入，皆有 implement 對應 interface。
+	 * 採 nominal interface（TransientStoreInterface / ClockInterface）；
+	 * Production 由 WpTransientStore / SystemClock 注入，測試由匿名 class 或 fake 實作介面。
 	 *
-	 * @param object $transients Transient 儲存抽象（提供 set(string,mixed,int) / get(string) / delete(string)）
-	 * @param object $clock      時鐘抽象（提供 now(): int）
-	 * @param int    $ttl        TTL 秒數（預設 3600）
-	 * @param string $key_prefix Transient key prefix
-	 *
-	 * @phpstan-param TransientStoreInterface $transients
-	 * @phpstan-param ClockInterface $clock
+	 * @param TransientStoreInterface $transients Transient 儲存抽象
+	 * @param ClockInterface          $clock      時鐘抽象
+	 * @param int                     $ttl        TTL 秒數（預設 3600）
+	 * @param string                  $key_prefix Transient key prefix
 	 */
 	public function __construct(
-		private readonly object $transients,
-		private readonly object $clock,
+		private readonly TransientStoreInterface $transients,
+		private readonly ClockInterface $clock,
 		private readonly int $ttl = 3600,
 		private readonly string $key_prefix = 'ps_partner_token_'
 	) {}
