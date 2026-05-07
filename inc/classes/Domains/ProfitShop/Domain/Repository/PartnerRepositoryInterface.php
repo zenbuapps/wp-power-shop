@@ -92,4 +92,19 @@ interface PartnerRepositoryInterface {
 	 * @return PartnerSnapshot[]
 	 */
 	public function all(): array;
+
+	/**
+	 * 取得 Partner 密碼最後變更時間（unix timestamp）
+	 *
+	 * 用於 token 撤銷比對：當 token 簽發時間 < 此時間，視為已撤銷。
+	 * 對應 spec §6.3 password rotation token revocation。
+	 *
+	 * 實作必須將「從未設定」與「termmeta 值為空字串」皆視為 null，
+	 * 不可回 0——否則 caller 比對 issued_at >= changed_at 會永遠成立，token 撤銷邏輯失效。
+	 *
+	 * @param int $term_id Partner term ID
+	 *
+	 * @return int|null 從未變更或 partner 不存在回 null
+	 */
+	public function get_password_changed_at( int $term_id ): ?int;
 }

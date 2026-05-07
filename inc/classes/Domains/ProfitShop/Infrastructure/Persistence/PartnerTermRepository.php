@@ -230,6 +230,33 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 	}
 
 	/**
+	 * 取得 Partner 密碼最後變更時間（unix timestamp）
+	 *
+	 * 對應 spec §6.3 password rotation token revocation：
+	 * Phase 3-D Task T-2 將以此 timestamp 與 token issued_at 比對，
+	 * 一旦密碼被變更，舊 token（issued_at < password_changed_at）即可被識別為失效。
+	 *
+	 * 安全規範：空字串 / null / false 一律回 null，**不可回 0**。
+	 * 否則 caller 用 (int) cast 會把空字串變 0，0 又是 epoch 起點，
+	 * 會讓「token issued_at >= password_changed_at」永遠成立，等於撤銷邏輯失效。
+	 *
+	 * @param int $term_id Partner term ID
+	 *
+	 * @return int|null 從未變更或 partner 不存在回 null
+	 */
+	public function get_password_changed_at( int $term_id ): ?int {
+		$raw = \get_term_meta( $term_id, self::META_PASSWORD_CHANGED_AT, true );
+
+		// get_term_meta 在「meta 不存在」時回空字串 ''；保險起見 null / false 也視為未設定。
+		if ( '' === $raw || null === $raw || false === $raw ) {
+			return null;
+		}
+
+		$ts = (int) $raw;
+		return $ts > 0 ? $ts : null;
+	}
+
+	/**
 	 * 從 WP_Term + termmeta 重建 PartnerSnapshot
 	 *
 	 * @param \WP_Term $term 來源 term

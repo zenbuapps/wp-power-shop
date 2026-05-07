@@ -42,6 +42,13 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 	private array $in_use_flags = [];
 
 	/**
+	 * term_id => 密碼最後變更 unix timestamp（對應 production 的 _partner_password_changed_at termmeta）
+	 *
+	 * @var array<int, int>
+	 */
+	private array $password_changed_at = [];
+
+	/**
 	 * 自增 ID
 	 *
 	 * @var int
@@ -82,7 +89,8 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 		);
 
 		if ( null !== $plain_password ) {
-			$this->passwords[ $term_id ] = 'hashed::' . $plain_password;
+			$this->passwords[ $term_id ]           = 'hashed::' . $plain_password;
+			$this->password_changed_at[ $term_id ] = time();
 		}
 
 		return $term_id;
@@ -111,7 +119,19 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 	 * @param int $term_id Partner term ID
 	 */
 	public function delete( int $term_id ): void {
-		unset( $this->partners[ $term_id ], $this->passwords[ $term_id ], $this->in_use_flags[ $term_id ] );
+		unset(
+			$this->partners[ $term_id ],
+			$this->passwords[ $term_id ],
+			$this->in_use_flags[ $term_id ],
+			$this->password_changed_at[ $term_id ]
+		);
+	}
+
+	/**
+	 * @param int $term_id Partner term ID
+	 */
+	public function get_password_changed_at( int $term_id ): ?int {
+		return $this->password_changed_at[ $term_id ] ?? null;
 	}
 
 	// ========== 測試專用 helper ==========
@@ -151,6 +171,16 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 	 */
 	public function stored_password_hash( int $term_id ): ?string {
 		return $this->passwords[ $term_id ] ?? null;
+	}
+
+	/**
+	 * 直接設定密碼最後變更時間（測試專用，模擬 password rotation 場景）
+	 *
+	 * @param int $term_id    Partner term ID
+	 * @param int $changed_at unix timestamp
+	 */
+	public function set_password_changed_at( int $term_id, int $changed_at ): void {
+		$this->password_changed_at[ $term_id ] = $changed_at;
 	}
 
 	/**
