@@ -39,12 +39,16 @@ final class LoginPartnerUseCase {
 	/**
 	 * 執行登入
 	 *
+	 * IP 由呼叫端（V2Api）從 `$_SERVER['REMOTE_ADDR']` 取得並 filter_var 驗證後傳入；
+	 * IP 不是 client payload，故不放進 PartnerLoginInput DTO 以維持 DTO 語意純度.
+	 *
 	 * @param PartnerLoginInput $input 登入輸入
+	 * @param string|null       $ip    Client IP（per-IP rate-limit；無效時自動退化）
 	 *
 	 * @return PartnerLoginOutput 含 token 的登入回應
 	 */
-	public function execute( PartnerLoginInput $input ): PartnerLoginOutput {
-		$snapshot = $this->auth->attempt_login( $input->slug, $input->password );
+	public function execute( PartnerLoginInput $input, ?string $ip = null ): PartnerLoginOutput {
+		$snapshot = $this->auth->attempt_login( $input->slug, $input->password, $ip );
 
 		$issued = $this->tokens->issue( $snapshot->term_id );
 

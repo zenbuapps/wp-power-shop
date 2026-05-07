@@ -7,10 +7,14 @@ declare(strict_types=1);
 
 namespace J7\PowerShop\Domains\ProfitShop;
 
+use J7\PowerShop\Domains\ProfitShop\Application\Service\CartPriceSignatureService;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\CartPriceOverrideHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRules;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSaltProvider;
 
 /**
  * 分潤賣場 Domain Loader
@@ -19,6 +23,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
  *
  * Phase 2：註冊 CPT / Taxonomy / Rewrite Rules。
  * Phase 3-B：加上 V2Api（profit-shops / profit-partners / profit-migration / profit-settings）。
+ * Phase 3-D：加上 CartPriceOverrideHook（前台 cart 價格防竄改）。
  */
 final class Loader {
 
@@ -30,5 +35,11 @@ final class Loader {
 		TaxonomyRegistrar::instance();
 		RewriteRules::instance();
 		V2Api::instance();
+
+		// Phase 3-D：前台 cart 價格 override hook（最高風險：影響真實訂單金額）
+		CartPriceOverrideHook::instance(
+			CptProfitShopRepository::instance(),
+			new CartPriceSignatureService( new WpSaltProvider() )
+		);
 	}
 }

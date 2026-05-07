@@ -41,8 +41,9 @@ final class PartnerAuthService {
 	/**
 	 * 嘗試登入
 	 *
-	 * @param string $slug           Partner slug
-	 * @param string $plain_password 明文密碼
+	 * @param string      $slug           Partner slug
+	 * @param string      $plain_password 明文密碼
+	 * @param string|null $ip             Client IP（per-IP rate-limit；無效時自動退化為純 per-slug）
 	 *
 	 * @return PartnerSnapshot 登入成功的 Partner 資訊
 	 *
@@ -51,27 +52,34 @@ final class PartnerAuthService {
 	 *
 	 * @phpcs:disable Squiz.Commenting.FunctionCommentThrowTag.WrongNumber
 	 */
-	public function attempt_login( string $slug, string $plain_password ): PartnerSnapshot {
+	public function attempt_login( string $slug, string $plain_password, ?string $ip = null ): PartnerSnapshot {
 		// 1. 先檢查是否已被鎖定（攻擊面短路）
-		$this->limiter->assert_not_blocked( $slug );
+		$this->limiter->assert_not_blocked( $slug, $ip );
 
 		// 2. 取得 partner（不存在 → 統一回 InvalidCredentials）
 		$partner = $this->partnerRepo->find_by_slug( $slug );
 		if ( null === $partner ) {
-			// 注意：不 record_failure（避免攻擊者透過已知不存在的 slug 間接猜測存在的 slug
-			// 是否會 trigger rate-limit；但若加上 record_failure 反而能阻擋探測——
-			// 此處選擇「不 record」以維持「未知 slug 與密碼錯」行為一致，避免 timing oracle）。
+			/*
+			* T-3 reviewer M-1 必修：
+			* 原本「未知 slug 不 record」會讓攻擊者用同一 IP 對 1000 個不存在的 slug 各試 1 次，
+			* IP 計數完全不增加 → IP 維度防禦對「unknown slug 攻擊」失效。
+			*
+			* 權衡後採用：對 unknown slug 分支「只 record IP 維度，不 record slug 維度」——
+			*   - 維持「未知 slug 不在 slug 維度留痕」的原則（避免 timing oracle 暴露 slug 存在性）
+			*   - 但仍累計 IP 維度，阻擋 IP 層級的暴力探測
+			*/
+			$this->limiter->record_ip_only_failure( $ip );
 			throw new InvalidCredentials();
 		}
 
 		// 3. 驗證密碼
 		if ( ! $this->partnerRepo->verify_password( $partner->term_id, $plain_password ) ) {
-			$this->limiter->record_failure( $slug );
+			$this->limiter->record_failure( $slug, $ip );
 			throw new InvalidCredentials();
 		}
 
-		// 4. 成功，重置計數
-		$this->limiter->reset( $slug );
+		// 4. 成功，重置計數（slug + IP 雙維度同時清；IP 無效時 limiter 內部會略過）
+		$this->limiter->reset( $slug, $ip );
 
 		return $partner;
 	}

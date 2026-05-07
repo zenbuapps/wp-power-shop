@@ -853,11 +853,20 @@ final class V2Api extends ApiBase {
 			$body  = self::read_json_body_for_partner( $request );
 			$input = PartnerLoginInput::from_array( $body );
 
+			// 由 server 觀測 IP 注入 limiter（per-IP rate-limit / reviewer M-2）；
+			// IP 不放進 client payload DTO 以維持語意純度。filter_var 防呆，無效視同 null。
+			$ip_raw = isset( $_SERVER['REMOTE_ADDR'] )
+			? \sanitize_text_field( \wp_unslash( (string) $_SERVER['REMOTE_ADDR'] ) )
+			: '';
+			/** @var string|false $validated */
+			$validated = '' === $ip_raw ? false : filter_var( $ip_raw, FILTER_VALIDATE_IP );
+			$ip        = false === $validated ? null : (string) $validated;
+
 			$useCase = new LoginPartnerUseCase(
 				auth: self::make_partner_auth_service(),
 				tokens: self::make_partner_token_store(),
 			);
-			$output  = $useCase->execute( $input );
+			$output  = $useCase->execute( $input, $ip );
 
 			$response = new \WP_REST_Response( $output->to_array(), 200 );
 
