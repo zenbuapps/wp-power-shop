@@ -35,6 +35,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Exception\InvalidCredentials;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\FixedClock;
+use Tests\Support\FixedSaltProvider;
 use Tests\Support\InMemoryTransientStore;
 use Tests\Support\SpyEmailNotifier;
 use Tests\Unit\Application\Fakes\InMemoryPartnerRepository;
@@ -150,6 +151,8 @@ final class LoginPartnerUseCaseTest extends TestCase {
 		$tokens  = new PartnerTokenStore(
 			transients: $this->transients,
 			clock: $this->clock,
+			partners: $this->partnerRepo,
+			salt_provider: new FixedSaltProvider(),
 			ttl: 3600,
 			key_prefix: 'ps_partner_token_',
 		);

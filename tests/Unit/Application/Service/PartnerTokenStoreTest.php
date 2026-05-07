@@ -31,7 +31,9 @@ namespace Tests\Unit\Application\Service;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PartnerTokenStore;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\FixedClock;
+use Tests\Support\FixedSaltProvider;
 use Tests\Support\InMemoryTransientStore;
+use Tests\Unit\Application\Fakes\InMemoryPartnerRepository;
 
 /**
  * PartnerTokenStore 紅燈合約測試
@@ -40,17 +42,23 @@ final class PartnerTokenStoreTest extends TestCase {
 
 	private FixedClock $clock;
 	private InMemoryTransientStore $transients;
+	private InMemoryPartnerRepository $partners;
+	private FixedSaltProvider $salt_provider;
 
 	protected function setUp(): void {
 		parent::setUp();
-		$this->clock      = new FixedClock( 1_700_000_000 );
-		$this->transients = new InMemoryTransientStore( $this->clock );
+		$this->clock         = new FixedClock( 1_700_000_000 );
+		$this->transients    = new InMemoryTransientStore( $this->clock );
+		$this->partners      = new InMemoryPartnerRepository( $this->clock );
+		$this->salt_provider = new FixedSaltProvider();
 	}
 
 	private function make_store(): PartnerTokenStore {
 		return new PartnerTokenStore(
 			transients: $this->transients,
 			clock: $this->clock,
+			partners: $this->partners,
+			salt_provider: $this->salt_provider,
 			ttl: 3600,
 			key_prefix: 'ps_partner_token_',
 		);

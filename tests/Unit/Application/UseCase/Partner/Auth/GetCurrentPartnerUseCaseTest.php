@@ -31,6 +31,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Exception\InvalidCredentials;
 use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\PartnerSnapshot;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\FixedClock;
+use Tests\Support\FixedSaltProvider;
 use Tests\Support\InMemoryTransientStore;
 use Tests\Unit\Application\Fakes\InMemoryPartnerRepository;
 
@@ -46,12 +47,14 @@ final class GetCurrentPartnerUseCaseTest extends TestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
-		$this->partnerRepo = new InMemoryPartnerRepository();
 		$this->clock       = new FixedClock( 1_700_000_000 );
+		$this->partnerRepo = new InMemoryPartnerRepository( $this->clock );
 		$this->transients  = new InMemoryTransientStore( $this->clock );
 		$this->tokens      = new PartnerTokenStore(
 			transients: $this->transients,
 			clock: $this->clock,
+			partners: $this->partnerRepo,
+			salt_provider: new FixedSaltProvider(),
 			ttl: 3600,
 			key_prefix: 'ps_partner_token_',
 		);

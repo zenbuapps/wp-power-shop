@@ -52,6 +52,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRulesFlusher
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\SystemClock;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpAdminEmailNotifier;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpProductLookup;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSaltProvider;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSlugConflictLookup;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
 use J7\WpUtils\Classes\ApiBase;
@@ -1012,7 +1013,11 @@ final class V2Api extends ApiBase {
 	// ========== Service factories（poor-man's DI；單元測試直接 new，不走這） ==========
 
 	/**
-	 * 建立 PartnerTokenStore（production 連 wp transient）
+	 * 建立 PartnerTokenStore（production 連 wp transient + partner repo + wp_salt）
+	 *
+	 * Phase 3-D Batch 2 升級：
+	 *   - 注入 PartnerTermRepository → verify() 比對 password_changed_at（撤銷邏輯）
+	 *   - 注入 WpSaltProvider → hash_token 用 hash_hmac + wp_salt（reviewer L-1）
 	 *
 	 * @return PartnerTokenStore
 	 */
@@ -1020,6 +1025,8 @@ final class V2Api extends ApiBase {
 		return new PartnerTokenStore(
 			transients: WpTransientStore::instance(),
 			clock: SystemClock::instance(),
+			partners: PartnerTermRepository::instance(),
+			salt_provider: new WpSaltProvider(),
 			ttl: self::PARTNER_TOKEN_TTL_SECONDS,
 			key_prefix: 'ps_partner_token_',
 		);

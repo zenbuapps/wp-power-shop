@@ -27,7 +27,9 @@ use J7\PowerShop\Domains\ProfitShop\Application\Service\PartnerTokenStore;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\LogoutPartnerUseCase;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\FixedClock;
+use Tests\Support\FixedSaltProvider;
 use Tests\Support\InMemoryTransientStore;
+use Tests\Unit\Application\Fakes\InMemoryPartnerRepository;
 
 /**
  * LogoutPartnerUseCase 紅燈合約測試
@@ -45,6 +47,8 @@ final class LogoutPartnerUseCaseTest extends TestCase {
 		$this->tokens     = new PartnerTokenStore(
 			transients: $this->transients,
 			clock: $this->clock,
+			partners: new InMemoryPartnerRepository( $this->clock ),
+			salt_provider: new FixedSaltProvider(),
 			ttl: 3600,
 			key_prefix: 'ps_partner_token_',
 		);

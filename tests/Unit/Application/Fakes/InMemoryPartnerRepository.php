@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Application\Fakes;
 
+use J7\PowerShop\Domains\ProfitShop\Application\Service\ClockInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\PartnerRepositoryInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\PartnerSnapshot;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PartnerSlug;
@@ -16,9 +17,31 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PartnerSlug;
 /**
  * 純記憶體 Partner Repository
  *
- * @internal Phase 3-B 測試用替身
+ * @internal Phase 3-B 測試用替身（Phase 3-D Batch 2 補 optional ClockInterface for M-4）
  */
 final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
+
+	/**
+	 * 注入時鐘（讀取現在時間，模擬 password_changed_at 寫入）
+	 *
+	 * 預設使用 `time()`，傳入 FixedClock 可在純單元測試中精準控制時間。
+	 *
+	 * @var ClockInterface
+	 */
+	private ClockInterface $clock;
+
+	/**
+	 * 建構子
+	 *
+	 * @param ClockInterface|null $clock 注入時鐘；null 時自建匿名 adapter 用 `time()`（保留向後相容）
+	 */
+	public function __construct( ?ClockInterface $clock = null ) {
+		$this->clock = $clock ?? new class implements ClockInterface {
+			public function now(): int {
+				return time();
+			}
+		};
+	}
 
 	/**
 	 * 內部儲存：term_id => PartnerSnapshot
@@ -90,7 +113,7 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 
 		if ( null !== $plain_password ) {
 			$this->passwords[ $term_id ]           = 'hashed::' . $plain_password;
-			$this->password_changed_at[ $term_id ] = time();
+			$this->password_changed_at[ $term_id ] = $this->clock->now();
 		}
 
 		return $term_id;
