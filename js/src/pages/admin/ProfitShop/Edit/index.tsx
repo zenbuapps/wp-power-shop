@@ -4,20 +4,27 @@ import { App, Form, Skeleton, Tag } from 'antd'
 import { memo, useEffect, useRef } from 'react'
 
 import { ProfitShopForm } from '@/pages/admin/ProfitShop/components/ProfitShopForm'
+import { ShopActionsButtons } from '@/pages/admin/ProfitShop/Edit/ShopActionsButtons'
 import {
 	useProfitShopOne,
 	useProfitShopUpdate,
 } from '@/pages/admin/ProfitShop/hooks'
 import {
+	type TOverrideItem,
 	type TProfitShop,
 	type TProfitShopInput,
 } from '@/pages/admin/ProfitShop/types'
 import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
 
+/** 4-A2 表單型別：items 為可編輯陣列 */
+type TProfitShopEditFormValues = TProfitShopInput & {
+	items?: TOverrideItem[]
+}
+
 const EditComponent = () => {
 	const { id } = useParsed()
 	const { notification } = App.useApp()
-	const [form] = Form.useForm<TProfitShopInput>()
+	const [form] = Form.useForm<TProfitShopEditFormValues>()
 
 	const { data, isLoading, isFetching } = useProfitShopOne(id)
 	const updater = useProfitShopUpdate()
@@ -42,6 +49,14 @@ const EditComponent = () => {
 			mode: record.mode,
 			partner_term_id: record.partner_term_id,
 			rate: record.rate,
+			items: record.items.map((it) => ({
+				product_id: it.product_id,
+				variation_id: it.variation_id,
+				price_override: it.price_override,
+				inflated_count: it.inflated_count,
+				sku: it.sku,
+				name: it.name,
+			})),
 		})
 	}, [record, form])
 
@@ -49,16 +64,24 @@ const EditComponent = () => {
 		if (!record) return
 		try {
 			const values = await form.validateFields()
-			await updater.mutateAsync(record.id, {
-				...values,
 
-				// items / settings 在 4-A1 不開放編輯，沿用後端既有資料即可
-				items: record.items.map((it) => ({
-					product_id: it.product_id,
-					variation_id: it.variation_id,
-					price_override: it.price_override,
-					inflated_count: it.inflated_count,
-				})),
+			// 4-A2：items 由 ItemsEditor 受控編輯；提交時把表單值送上，
+			// 後端會以 PUT 整體覆寫。settings 仍沿用後端既有資料（4-A3 才開放編輯）。
+			const items = (values.items ?? []).map((it) => ({
+				product_id: it.product_id,
+				variation_id: it.variation_id,
+				price_override: it.price_override,
+				inflated_count: it.inflated_count,
+			}))
+
+			await updater.mutateAsync(record.id, {
+				title: values.title,
+				slug: values.slug,
+				status: values.status,
+				mode: values.mode,
+				partner_term_id: values.partner_term_id,
+				rate: values.rate,
+				items,
 				settings: record.settings,
 			})
 			notification.success({
@@ -106,7 +129,9 @@ const EditComponent = () => {
 				onClick: handleSubmit,
 				disabled: !record,
 			}}
-			headerButtons={() => null}
+			headerButtons={() =>
+				record ? <ShopActionsButtons shop={record} /> : null
+			}
 			goBack={undefined}
 			footerButtonProps={{}}
 			recordItemId={record?.id}
@@ -120,6 +145,7 @@ const EditComponent = () => {
 					form={form}
 					record={record}
 					submitting={updater.isLoading}
+					mode="edit"
 				/>
 			)}
 		</Edit>

@@ -69,7 +69,11 @@ const CreateComponent = () => {
 			goBack={undefined}
 			resource="profit-shop"
 		>
-			<ProfitShopForm form={form} submitting={creator.isLoading} />
+			<ProfitShopForm
+				form={form}
+				submitting={creator.isLoading}
+				mode="create"
+			/>
 		</Create>
 	)
 }

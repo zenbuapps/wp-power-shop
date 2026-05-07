@@ -4,17 +4,17 @@ import {
 	InputNumber,
 	Radio,
 	Slider,
-	Tag,
 	type FormInstance,
 	type FormRule,
 } from 'antd'
 import { memo } from 'react'
 
+import { PartnerSelector } from '@/pages/admin/ProfitPartner/components/PartnerSelector'
+import { ItemsEditor } from '@/pages/admin/ProfitShop/components/ItemsEditor'
 import { SlugInput } from '@/pages/admin/ProfitShop/components/SlugInput'
 import {
 	PROFIT_SHOP_MODE,
 	PROFIT_SHOP_STATUS,
-	type TOverrideItem,
 	type TProfitShop,
 } from '@/pages/admin/ProfitShop/types'
 
@@ -33,8 +33,9 @@ const RATE_RULES: FormRule[] = [
 
 type TProfitShopFormProps = {
 	form: FormInstance // 受 antd Form 控制；由父層 useForm 傳入
-	record?: TProfitShop // 編輯模式：傳入目前 record，用於 currentSlug + 顯示 items 唯讀預覽
+	record?: TProfitShop // 編輯模式：傳入目前 record，用於 currentSlug + items 預設值
 	submitting?: boolean // 建立 / 更新中（用於 disabled）
+	mode: 'create' | 'edit' // 4-A2：Create 模式不開放 ItemsEditor（建立時 items: []）
 }
 
 /**
@@ -42,17 +43,16 @@ type TProfitShopFormProps = {
  *
  * Edit / Create 兩頁共用；不負責 submit，由父層處理 onFinish。
  *
- * 注意：本 Phase 4-A1 範圍內 partner_term_id 暫用 InputNumber，
- * 4-A2 會替換為 PartnerSelector；items 暫顯示唯讀 Tag 列表，
- * 4-A2 會替換為 ItemsEditor。
+ * 4-A2 變更：
+ *   - partner_term_id：InputNumber → PartnerSelector（下拉選擇 + 搜尋）
+ *   - items：唯讀 Tag list → ItemsEditor（僅 edit 模式啟用，create 仍寫死 [] 避免複雜度）
  */
 const ProfitShopFormComponent = ({
 	form,
 	record,
 	submitting,
+	mode,
 }: TProfitShopFormProps) => {
-	const items: TOverrideItem[] = record?.items ?? []
-
 	return (
 		<Form
 			form={form}
@@ -114,18 +114,18 @@ const ProfitShopFormComponent = ({
 
 			<Item
 				name="partner_term_id"
-				label="分潤夥伴 ID"
+				label="分潤夥伴"
 				rules={[
-					{ required: true, message: '請填入夥伴 ID' },
+					{ required: true, message: '請選擇分潤夥伴' },
 					{
 						type: 'number',
 						min: 1,
-						message: '請填入有效的夥伴 ID',
+						message: '請選擇有效的分潤夥伴',
 					},
 				]}
-				extra="（4-A2 將替換為夥伴下拉選單）"
+				extra="若清單為空，請先到「分潤夥伴」頁面建立夥伴"
 			>
-				<InputNumber min={1} className="tw-w-full" />
+				<PartnerSelector />
 			</Item>
 
 			<Item label="分潤比例">
@@ -145,24 +145,13 @@ const ProfitShopFormComponent = ({
 				</div>
 			</Item>
 
-			{record && (
+			{mode === 'edit' && (
 				<Item
-					label="商品（唯讀預覽）"
-					extra="（4-A2 將開放批次新增 / 移除 / 浮報）"
+					name="items"
+					label="賣場商品"
+					extra="可新增、移除商品；price_override 留空代表沿用原價"
 				>
-					{items.length === 0 ? (
-						<Tag color="default">尚未加入任何商品</Tag>
-					) : (
-						<div className="tw-flex tw-flex-wrap tw-gap-2">
-							{items.map((it) => (
-								<Tag key={`${it.product_id}-${it.variation_id}`} color="blue">
-									#{it.product_id}
-									{it.variation_id ? `／${it.variation_id}` : ''}
-									{it.name ? `（${it.name}）` : ''}
-								</Tag>
-							))}
-						</div>
-					)}
+					<ItemsEditor disabled={submitting} />
 				</Item>
 			)}
 		</Form>

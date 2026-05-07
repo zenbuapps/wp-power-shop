@@ -144,3 +144,43 @@ export const useProfitShopDelete = () => {
 
 	return { ...mutation, mutateAsync }
 }
+
+/**
+ * 共用 helper：產生 status / publish / unpublish / duplicate 等
+ * 「對單一賣場做動作」的 mutation。動作後失效 list + detail。
+ */
+const useProfitShopAction = (action: 'publish' | 'unpublish' | 'duplicate') => {
+	const apiUrl = useApiUrl('power-shop')
+	const invalidate = useInvalidate()
+	const mutation = useCustomMutation<TWrappedResponse<TProfitShop>>()
+
+	const mutateAsync = (id: number) =>
+		mutation.mutateAsync(
+			{
+				url: `${apiUrl}/${PROFIT_SHOP_RESOURCE}/${id}/${action}`,
+				method: 'post',
+				values: {},
+			},
+			{
+				onSuccess: () => {
+					invalidate({
+						resource: PROFIT_SHOP_RESOURCE,
+						invalidates: ['list', 'detail'],
+						id,
+						dataProviderName: 'power-shop',
+					})
+				},
+			}
+		)
+
+	return { ...mutation, mutateAsync }
+}
+
+/** 上架賣場（POST /profit-shops/:id/publish） */
+export const useProfitShopPublish = () => useProfitShopAction('publish')
+
+/** 下架賣場（POST /profit-shops/:id/unpublish） */
+export const useProfitShopUnpublish = () => useProfitShopAction('unpublish')
+
+/** 複製賣場（POST /profit-shops/:id/duplicate） */
+export const useProfitShopDuplicate = () => useProfitShopAction('duplicate')

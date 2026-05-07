@@ -137,6 +137,17 @@ export const resources: ResourceProps[] = [
 		},
 	},
 	{
+		parentName: 'marketing',
+		name: 'profit-partner',
+		list: '/profit-partner',
+		create: '/profit-partner/create',
+		edit: '/profit-partner/edit/:id',
+		meta: {
+			label: '分潤夥伴',
+			icon: <UserOutlined />,
+		},
+	},
+	{
 		name: 'analytics',
 		list: '/analytics',
 		meta: {

@@ -33,6 +33,9 @@ import {
 	ProfitShopList,
 	ProfitShopEdit,
 	ProfitShopCreate,
+	ProfitPartnerList,
+	ProfitPartnerEdit,
+	ProfitPartnerCreate,
 } from '@/pages/admin'
 import { resources } from '@/resources'
 
@@ -128,6 +131,12 @@ function App() {
 							<Route index element={<ProfitShopList />} />
 							<Route path="create" element={<ProfitShopCreate />} />
 							<Route path="edit/:id" element={<ProfitShopEdit />} />
+						</Route>
+
+						<Route path="profit-partner">
+							<Route index element={<ProfitPartnerList />} />
+							<Route path="create" element={<ProfitPartnerCreate />} />
+							<Route path="edit/:id" element={<ProfitPartnerEdit />} />
 						</Route>
 
 						<Route path="analytics" element={<Analytics />} />
