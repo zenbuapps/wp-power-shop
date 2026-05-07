@@ -3,12 +3,16 @@
  * Partner Portal Renderer
  *
  * Phase 4-B1：分潤夥伴自助查詢入口前台 HTML 骨架輸出。
+ * Phase 5-A.1：加上 IP-based rate-limit（前台頁面 DoS 緩解）。
  */
 
 declare(strict_types=1);
 
 namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress;
 
+use J7\PowerShop\Domains\ProfitShop\Application\Service\ClientIpProviderInterface;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\PageRateLimitService;
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
 use J7\PowerShop\Plugin;
 use J7\Powerhouse\Utils\Base as PowerhouseUtils;
 use Kucrut\Vite;
@@ -22,10 +26,11 @@ use Kucrut\Vite;
  * - template_redirect priority 9（早於 theme template_include 的 default 11）
  * - 完全脫離 theme：不呼叫 get_header() / get_footer()，避免 theme CSS 污染
  * - 只在 query var profit_partner_report 非空時介入
+ * - rate-limit（Phase 5-A.1）在 partner term 查詢之前，避免攻擊者用 DB 查詢消耗資源
  * - partner term 不存在 → 404
  * - partner term 存在 → 輸出 mount 點 + enqueue partner bundle → exit
  *
- * 對應規格：specs/2026-05-06-profit-shop-design.md §3.8 / Phase 4-B1
+ * 對應規格：specs/2026-05-06-profit-shop-design.md §3.8 / Phase 4-B1 / Phase 5-A.1
  */
 final class PartnerPortalRenderer {
 
@@ -47,12 +52,42 @@ final class PartnerPortalRenderer {
 	private const SCRIPT_HANDLE = 'power-shop-partner-portal';
 
 	/**
+	 * Page key（rate-limit namespace 區隔）
+	 */
+	private const PAGE_KEY = 'partner_portal';
+
+	/**
+	 * IP rate-limit Service（Phase 5-A.1）
+	 *
+	 * @var PageRateLimitService
+	 */
+	private PageRateLimitService $rate_limit;
+
+	/**
+	 * Client IP Provider（Phase 5-A.1）
+	 *
+	 * @var ClientIpProviderInterface
+	 */
+	private ClientIpProviderInterface $ip_provider;
+
+	/**
 	 * Constructor
 	 *
 	 * 掛在 template_redirect priority 9，早於 theme template_include。
+	 *
+	 * Phase 5-A.1：改 instance based + 注入 PageRateLimitService / ClientIpProviderInterface。
+	 *
+	 * @param PageRateLimitService      $rate_limit  IP rate-limit service
+	 * @param ClientIpProviderInterface $ip_provider Client IP 來源
 	 */
-	public function __construct() {
-		\add_action( 'template_redirect', [ __CLASS__, 'maybe_render' ], 9 );
+	public function __construct(
+		PageRateLimitService $rate_limit,
+		ClientIpProviderInterface $ip_provider
+	) {
+		$this->rate_limit  = $rate_limit;
+		$this->ip_provider = $ip_provider;
+
+		\add_action( 'template_redirect', [ $this, 'maybe_render' ], 9 );
 	}
 
 	/**
@@ -60,7 +95,7 @@ final class PartnerPortalRenderer {
 	 *
 	 * @return void
 	 */
-	public static function maybe_render(): void {
+	public function maybe_render(): void {
 		$slug = (string) \get_query_var( RewriteRules::QUERY_VAR, '' );
 		if ( '' === $slug ) {
 			return; // 不是 partner portal 路徑，fall through to theme.
@@ -69,19 +104,44 @@ final class PartnerPortalRenderer {
 		// Sanitize slug（雙保險，雖然 WP 已過 query var filter）。
 		$slug = \sanitize_title( $slug );
 		if ( '' === $slug ) {
-			self::render_404();
+			$this->render_404();
+			exit;
+		}
+
+		// Phase 5-A.1：rate-limit 檢查（在 partner term DB 查詢之前，省 DB query）
+		try {
+			$this->rate_limit->check_or_throw( $this->ip_provider->get_ip(), self::PAGE_KEY );
+		} catch ( TooManyAttempts $e ) {
+			$this->render_429( $e );
 			exit;
 		}
 
 		// 驗證 partner term 存在。
 		$term = \get_term_by( 'slug', $slug, 'profit_partner' );
 		if ( ! $term || \is_wp_error( $term ) ) {
-			self::render_404();
+			$this->render_404();
 			exit;
 		}
 
-		self::render_portal( $slug );
+		$this->render_portal( $slug );
 		exit;
+	}
+
+	/**
+	 * 輸出 429 Too Many Requests（Phase 5-A.1 自決 Q2=A）
+	 *
+	 * 純文字回應 + Retry-After header，不走 theme，避免被攻擊者用 rate-limit 觸發 theme render 消耗資源。
+	 *
+	 * @param TooManyAttempts $e Domain Exception，含 retry_after 秒數
+	 *
+	 * @return void
+	 */
+	private function render_429( TooManyAttempts $e ): void {
+		\status_header( 429 );
+		\header( 'Retry-After: ' . $e->getRetryAfter() );
+		\nocache_headers();
+		\header( 'Content-Type: text/plain; charset=UTF-8' );
+		echo 'Too Many Requests';
 	}
 
 	/**
@@ -92,7 +152,7 @@ final class PartnerPortalRenderer {
 	 *
 	 * @return void
 	 */
-	private static function render_maintenance(): void {
+	private function render_maintenance(): void {
 		\status_header( 503 );
 		\nocache_headers();
 
@@ -122,7 +182,7 @@ final class PartnerPortalRenderer {
 	 *
 	 * @return void
 	 */
-	private static function render_404(): void {
+	private function render_404(): void {
 		\status_header( 404 );
 		\nocache_headers();
 
@@ -156,7 +216,7 @@ final class PartnerPortalRenderer {
 	 *
 	 * @return void
 	 */
-	private static function render_portal( string $slug ): void {
+	private function render_portal( string $slug ): void {
 		// Enqueue partner bundle（由 Vite 處理，manifest 由 4-B1.2 react-master 確保包含此 entry）。
 		Vite\enqueue_asset(
 			Plugin::$dir . '/js/dist',
@@ -171,7 +231,7 @@ final class PartnerPortalRenderer {
 		// 此時若繼續輸出空殼 HTML 會讓 partner 看到一片空白。改顯示「服務維護中」。
 		$scripts = \wp_scripts();
 		if ( ! isset( $scripts->registered[ self::SCRIPT_HANDLE ] ) ) {
-			self::render_maintenance();
+			$this->render_maintenance();
 			return;
 		}
 

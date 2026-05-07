@@ -40,15 +40,30 @@ declare global {
  * 此實作為純函式，可在 React tree 之外（例如 axios interceptor）安全呼叫。
  * 不使用 React state / context，避免違反 react-hooks rule-of-hooks。
  *
- * @return {TPartnerEnv} 解密後的 env，缺欄位以空字串 fallback
+ * 5-A.2 fail-fast：當 PHP 端未注入 power_shop_partner_data，或解密後缺
+ * 關鍵欄位 API_URL 時，throw error 讓 ErrorBoundary 接住並顯示維護中畫面，
+ * 避免後續 axios baseURL='' 造成相對路徑誤打 + 白屏。
+ *
+ * @throws {Error} 當環境注入失敗或 API_URL 缺失時
+ * @return {TPartnerEnv} 解密後的 env
  */
 export const readPartnerEnv = (): TPartnerEnv => {
 	const encrypted = window?.power_shop_partner_data?.env
-	const decrypted = encrypted ? simpleDecrypt(encrypted) : null
+	if (!encrypted) {
+		throw new Error(
+			'Partner Portal 環境注入失敗（power_shop_partner_data 未定義），請聯絡管理員或重新整理頁面'
+		)
+	}
+	const decrypted = simpleDecrypt(encrypted)
+	if (!decrypted?.API_URL) {
+		throw new Error(
+			'Partner Portal 環境注入不完整（API_URL 缺失），請聯絡管理員'
+		)
+	}
 
 	return {
 		SITE_URL: decrypted?.SITE_URL ?? '',
-		API_URL: decrypted?.API_URL ?? '',
+		API_URL: decrypted.API_URL,
 		KEBAB: decrypted?.KEBAB ?? 'power-shop',
 		SLUG: decrypted?.SLUG ?? '',
 	}

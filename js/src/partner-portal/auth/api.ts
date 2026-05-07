@@ -50,8 +50,19 @@ export const login = (input: TLoginInput) =>
 
 /**
  * 登出 partner（POST /partner-auth/logout，idempotent）
+ *
+ * 5-A.2：帶 X-Skip-Auth-Redirect header，告訴 axios interceptor
+ * 即使後端回 401（例如 cookie 已過期），也不要再自動導到 /login——
+ * 因為 logout 本來就要走 local cleanup + 前端自行決定下一步。
  */
-export const logout = () => apiClient.post('/partner-auth/logout', {})
+export const logout = () =>
+	apiClient.post(
+		'/partner-auth/logout',
+		{},
+		{
+			headers: { 'X-Skip-Auth-Redirect': '1' },
+		}
+	)
 
 /**
  * 取得當前 partner 資訊（GET /partner-auth/me）

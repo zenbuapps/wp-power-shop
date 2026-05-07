@@ -15,10 +15,14 @@ type TErrorBoundaryProps = {
 	children: ReactNode
 }
 
-/** ErrorBoundary 內部 state（hasError 表示子樹是否拋錯） */
+/** ErrorBoundary 內部 state（hasError 表示子樹是否拋錯，error 保留訊息供 UI 判斷） */
 type TErrorBoundaryState = {
 	hasError: boolean
+	error: Error | null
 }
+
+/** 環境注入錯誤訊息特徵（readPartnerEnv 拋出時用，5-A.2） */
+const ENV_ERROR_PATTERN = /Partner Portal 環境注入/
 
 /** 攔截子樹 React 錯誤的 Error Boundary（class 元件，框架限制） */
 export class ErrorBoundary extends Component<
@@ -27,11 +31,11 @@ export class ErrorBoundary extends Component<
 > {
 	constructor(props: TErrorBoundaryProps) {
 		super(props)
-		this.state = { hasError: false }
+		this.state = { hasError: false, error: null }
 	}
 
-	static getDerivedStateFromError(): TErrorBoundaryState {
-		return { hasError: true }
+	static getDerivedStateFromError(error: Error): TErrorBoundaryState {
+		return { hasError: true, error }
 	}
 
 	componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -46,12 +50,21 @@ export class ErrorBoundary extends Component<
 
 	render(): ReactNode {
 		if (this.state.hasError) {
+			// 5-A.2：判別 readPartnerEnv 拋出的環境注入錯誤 → 顯示「服務維護中」
+			// 其他錯誤 → 顯示通用「畫面錯誤」
+			const message = this.state.error?.message ?? ''
+			const isEnvError = ENV_ERROR_PATTERN.test(message)
+
 			return (
 				<div style={{ padding: 24 }}>
 					<Result
-						status="error"
-						title="畫面錯誤"
-						subTitle="發生未預期的錯誤，請重新整理頁面再試一次。"
+						status={isEnvError ? 'warning' : 'error'}
+						title={isEnvError ? '服務維護中' : '畫面錯誤'}
+						subTitle={
+							isEnvError
+								? '系統暫時無法載入分潤夥伴頁面，請稍後再試或聯絡管理員。'
+								: '發生未預期的錯誤，請重新整理頁面再試一次。'
+						}
 						extra={
 							<Button type="primary" onClick={this.handleReload}>
 								重新整理

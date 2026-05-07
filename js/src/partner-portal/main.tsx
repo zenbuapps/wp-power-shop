@@ -22,6 +22,7 @@ import { HashRouter } from 'react-router'
 
 import App from './App'
 import { AuthProvider } from './auth/AuthContext'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -36,16 +37,22 @@ const init = (): void => {
 	const mountNode = document.getElementById('profit_partner_portal')
 	if (!mountNode) return
 
+	// 5-A.2：ErrorBoundary 必須包在最外層
+	// 1) AuthProvider 內部會呼叫 readPartnerEnv() — env 注入失敗會 throw，
+	//    需要 ErrorBoundary 接住顯示「服務維護中」畫面，避免白屏
+	// 2) ErrorBoundary 也兼任所有子樹未捕獲 React 錯誤的最後防線
 	createRoot(mountNode).render(
-		<QueryClientProvider client={queryClient}>
-			<ConfigProvider theme={{ token: { colorPrimary: '#1677ff' } }}>
-				<HashRouter>
-					<AuthProvider>
-						<App />
-					</AuthProvider>
-				</HashRouter>
-			</ConfigProvider>
-		</QueryClientProvider>
+		<ErrorBoundary>
+			<QueryClientProvider client={queryClient}>
+				<ConfigProvider theme={{ token: { colorPrimary: '#1677ff' } }}>
+					<HashRouter>
+						<AuthProvider>
+							<App />
+						</AuthProvider>
+					</HashRouter>
+				</ConfigProvider>
+			</QueryClientProvider>
+		</ErrorBoundary>
 	)
 }
 

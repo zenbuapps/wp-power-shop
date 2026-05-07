@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace J7\PowerShop\Domains\ProfitShop;
 
 use J7\PowerShop\Domains\ProfitShop\Application\Service\CartPriceSignatureService;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\PageRateLimitService;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\AddToCartHook;
@@ -17,8 +18,11 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\PartnerPortalRenderer;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopRenderer;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRules;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\SystemClock;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpClientIpProvider;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSaltProvider;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
 
 /**
  * 分潤賣場 Domain Loader
@@ -31,6 +35,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSaltProvider;
  * Phase 4-B1：加上 PartnerPortalRenderer（前台 /profit-report/{slug}/ HTML 骨架輸出）。
  * Phase 4-C1：加上 ProfitShopRenderer（前台 /profit-shop/{slug}/ 賣場頁面，走 theme 整合）。
  * Phase 4-C2：加上 AddToCartHook（注入 profit_shop_id）+ CartItemMetaDisplay（cart UI 分潤標記）。
+ * Phase 5-A.1：加上 PageRateLimitService + WpClientIpProvider（前台頁面 IP-based DoS 緩解）。
  */
 final class Loader {
 
@@ -41,11 +46,26 @@ final class Loader {
 		CptRegistrar::instance();
 		TaxonomyRegistrar::instance();
 		RewriteRules::instance();
-		PartnerPortalRenderer::instance();
 
-		// Phase 4-C1：賣場前台 renderer（DI 注入 Repository）
+		// Phase 5-A.1：前台頁面 rate-limit 共用基礎設施（PartnerPortalRenderer / ProfitShopRenderer 共用）
+		$page_rate_limit = new PageRateLimitService(
+			WpTransientStore::instance(),
+			SystemClock::instance(),
+			new WpSaltProvider()
+		);
+		$ip_provider     = WpClientIpProvider::instance();
+
+		// Phase 4-B1：Partner portal renderer（Phase 5-A.1：注入 rate-limit + ip provider）
+		PartnerPortalRenderer::instance(
+			$page_rate_limit,
+			$ip_provider
+		);
+
+		// Phase 4-C1：賣場前台 renderer（DI 注入 Repository；Phase 5-A.1：注入 rate-limit + ip provider）
 		ProfitShopRenderer::instance(
-			CptProfitShopRepository::instance()
+			CptProfitShopRepository::instance(),
+			$page_rate_limit,
+			$ip_provider
 		);
 
 		V2Api::instance();

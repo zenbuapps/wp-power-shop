@@ -9,7 +9,10 @@ declare(strict_types=1);
 
 namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress;
 
+use J7\PowerShop\Domains\ProfitShop\Application\Service\ClientIpProviderInterface;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\PageRateLimitService;
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\ProfitShop;
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterface;
 
 /**
@@ -22,13 +25,19 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterf
  * - template_redirect priority 9（早於 theme template_include 的 default 11）
  * - 與 PartnerPortalRenderer 不同：要走 theme 整合，由 get_header/get_footer 包覆
  * - 只在 query var profit_shop_slug 非空時介入
+ * - rate-limit（Phase 5-A.1）在 Repository 查詢之前，避免攻擊者用 DB 查詢消耗資源
  * - 賣場不存在 / status 不為 publish → 404（admin 可預覽 draft）
  *
- * 對應規格：specs/2026-05-06-profit-shop-design.md / Phase 4-C1
+ * 對應規格：specs/2026-05-06-profit-shop-design.md / Phase 4-C1 / Phase 5-A.1
  */
 final class ProfitShopRenderer {
 
 	use \J7\WpUtils\Traits\SingletonTrait;
+
+	/**
+	 * Page key（rate-limit namespace 區隔）
+	 */
+	private const PAGE_KEY = 'profit_shop';
 
 	/**
 	 * Repository（建構子 DI）
@@ -38,14 +47,38 @@ final class ProfitShopRenderer {
 	private ProfitShopRepositoryInterface $shops;
 
 	/**
+	 * IP rate-limit Service（Phase 5-A.1）
+	 *
+	 * @var PageRateLimitService
+	 */
+	private PageRateLimitService $rate_limit;
+
+	/**
+	 * Client IP Provider（Phase 5-A.1）
+	 *
+	 * @var ClientIpProviderInterface
+	 */
+	private ClientIpProviderInterface $ip_provider;
+
+	/**
 	 * Constructor
 	 *
 	 * 掛在 template_redirect priority 9，早於 theme template_include。
 	 *
-	 * @param ProfitShopRepositoryInterface $shops 賣場 Repository（DIP 注入）
+	 * Phase 5-A.1：增注 PageRateLimitService / ClientIpProviderInterface（前台 DoS 緩解）。
+	 *
+	 * @param ProfitShopRepositoryInterface $shops       賣場 Repository（DIP 注入）
+	 * @param PageRateLimitService          $rate_limit  IP rate-limit service
+	 * @param ClientIpProviderInterface     $ip_provider Client IP 來源
 	 */
-	public function __construct( ProfitShopRepositoryInterface $shops ) {
-		$this->shops = $shops;
+	public function __construct(
+		ProfitShopRepositoryInterface $shops,
+		PageRateLimitService $rate_limit,
+		ClientIpProviderInterface $ip_provider
+	) {
+		$this->shops       = $shops;
+		$this->rate_limit  = $rate_limit;
+		$this->ip_provider = $ip_provider;
 		\add_action( 'template_redirect', [ $this, 'maybe_render' ], 9 );
 	}
 
@@ -67,6 +100,14 @@ final class ProfitShopRenderer {
 			exit;
 		}
 
+		// Phase 5-A.1：rate-limit 檢查（在 Repository 查詢之前，省 DB query）
+		try {
+			$this->rate_limit->check_or_throw( $this->ip_provider->get_ip(), self::PAGE_KEY );
+		} catch ( TooManyAttempts $e ) {
+			$this->render_429( $e );
+			exit;
+		}
+
 		$shop = $this->shops->find_by_slug( $slug );
 		if ( ! $shop instanceof ProfitShop ) {
 			$this->render_404();
@@ -83,6 +124,23 @@ final class ProfitShopRenderer {
 
 		$this->render_shop( $shop );
 		exit;
+	}
+
+	/**
+	 * 輸出 429 Too Many Requests（Phase 5-A.1 自決 Q2=A）
+	 *
+	 * 純文字回應 + Retry-After header，不走 theme，避免被攻擊者用 rate-limit 觸發 theme render 消耗資源。
+	 *
+	 * @param TooManyAttempts $e Domain Exception，含 retry_after 秒數
+	 *
+	 * @return void
+	 */
+	private function render_429( TooManyAttempts $e ): void {
+		\status_header( 429 );
+		\header( 'Retry-After: ' . $e->getRetryAfter() );
+		\nocache_headers();
+		\header( 'Content-Type: text/plain; charset=UTF-8' );
+		echo 'Too Many Requests';
 	}
 
 	/**
