@@ -41,12 +41,17 @@ const RegeneratePasswordButtonComponent = ({
 	const [plainPassword, setPlainPassword] = useState<string | null>(null)
 	const [modalOpen, setModalOpen] = useState(false)
 
+	// LOW-2: Input.Password 預設 mask（密碼不直接呈現於 DOM 文字）；
+	// 由 user 主動點 toggle 才顯示，降低 shoulder-surfing 風險。
+	const [pwdVisible, setPwdVisible] = useState(false)
+
 	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
 	/** 立即清除明文 + 關閉 modal + 取消 timer */
 	const clearPassword = useCallback(() => {
 		setPlainPassword(null)
 		setModalOpen(false)
+		setPwdVisible(false)
 		if (timerRef.current !== null) {
 			clearTimeout(timerRef.current)
 			timerRef.current = null
@@ -54,12 +59,14 @@ const RegeneratePasswordButtonComponent = ({
 	}, [])
 
 	// 取得明文時，啟動 5 分鐘 auto-clear timer
+	// 注意：此 effect 的 cleanup 已涵蓋 unmount 場景，不需另外加一個 unmount-only effect。
 	useEffect(() => {
 		if (plainPassword === null) return
 
 		timerRef.current = setTimeout(() => {
 			setPlainPassword(null)
 			setModalOpen(false)
+			setPwdVisible(false)
 			timerRef.current = null
 			notification.warning({
 				message: '為您的安全，新密碼已自動清除',
@@ -75,17 +82,6 @@ const RegeneratePasswordButtonComponent = ({
 			}
 		}
 	}, [plainPassword, notification])
-
-	// unmount 時 cleanup（避免 timer 在元件卸載後仍觸發 setState）
-	useEffect(
-		() => () => {
-			if (timerRef.current !== null) {
-				clearTimeout(timerRef.current)
-				timerRef.current = null
-			}
-		},
-		[]
-	)
 
 	const handleRegenerate = async () => {
 		try {
@@ -180,11 +176,15 @@ const RegeneratePasswordButtonComponent = ({
 					}
 					className="tw-mb-4"
 				/>
+				{/* LOW-2: Input.Password 預設 mask；user 點 toggle 後才顯示明文 */}
 				<Space.Compact className="tw-w-full">
 					<Input.Password
 						value={plainPassword ?? ''}
 						readOnly
-						visibilityToggle
+						visibilityToggle={{
+							visible: pwdVisible,
+							onVisibleChange: setPwdVisible,
+						}}
 						autoComplete="off"
 					/>
 					<Button icon={<CopyOutlined />} onClick={handleCopy}>

@@ -35,13 +35,17 @@ export const useProfitPartnerList = () => {
 	return useCustom<TWrappedResponse<TProfitPartner[]>>({
 		url,
 		method: 'get',
+		dataProviderName: 'power-shop',
 	})
 }
 
 /** 取得單一分潤夥伴 */
 export const useProfitPartnerOne = (id: number | string | undefined) => {
 	const apiUrl = useApiUrl('power-shop')
-	const url = `${apiUrl}/${PROFIT_PARTNER_RESOURCE}/${id ?? ''}`
+
+	// N-1: id 不存在時直接給空 url，避免出現 `${apiUrl}/profit-partners/`
+	// （末尾斜線會觸發 WP REST 邊界 routing 異常 / 404）；queryOptions.enabled 控制不發 request。
+	const url = id ? `${apiUrl}/${PROFIT_PARTNER_RESOURCE}/${id}` : ''
 
 	return useCustom<TWrappedResponse<TProfitPartner>>({
 		url,
@@ -52,6 +56,7 @@ export const useProfitPartnerOne = (id: number | string | undefined) => {
 			// 雙保險：避免 window focus 觸發 refetch 蓋掉編輯中內容
 			refetchOnWindowFocus: false,
 		},
+		dataProviderName: 'power-shop',
 	})
 }
 
@@ -67,6 +72,7 @@ export const useProfitPartnerCreate = () => {
 				url: `${apiUrl}/${PROFIT_PARTNER_RESOURCE}`,
 				method: 'post',
 				values,
+				dataProviderName: 'power-shop',
 			},
 			{
 				onSuccess: () => {
@@ -94,6 +100,7 @@ export const useProfitPartnerUpdate = () => {
 				url: `${apiUrl}/${PROFIT_PARTNER_RESOURCE}/${id}`,
 				method: 'put',
 				values,
+				dataProviderName: 'power-shop',
 			},
 			{
 				onSuccess: () => {
@@ -123,6 +130,7 @@ export const useProfitPartnerDelete = () => {
 				url: `${apiUrl}/${PROFIT_PARTNER_RESOURCE}/${id}`,
 				method: 'delete',
 				values: {},
+				dataProviderName: 'power-shop',
 			},
 			{
 				onSuccess: () => {
@@ -156,6 +164,7 @@ export const useRegeneratePartnerPassword = () => {
 			url: `${apiUrl}/${PROFIT_PARTNER_RESOURCE}/${id}/regenerate-password`,
 			method: 'post',
 			values: {},
+			dataProviderName: 'power-shop',
 		})
 
 	return { ...mutation, mutateAsync }

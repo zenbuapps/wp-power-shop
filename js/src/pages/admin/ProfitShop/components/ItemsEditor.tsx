@@ -9,6 +9,7 @@ import {
 	Space,
 	Table,
 	Tag,
+	type SelectProps,
 	type TableProps,
 } from 'antd'
 import { memo, useState } from 'react'
@@ -211,7 +212,7 @@ const ItemsEditorComponent = ({
 				 * 因 SelectProps 的型別參數會與 selectProps 推論衝突，故對外層整體 cast 為 SelectProps。
 				 */}
 				<Select
-					{...(selectProps as Record<string, unknown>)}
+					{...(selectProps as unknown as SelectProps<number>)}
 					value={pendingProductId ?? undefined}
 					onChange={(v) =>
 						setPendingProductId(typeof v === 'number' ? v : null)

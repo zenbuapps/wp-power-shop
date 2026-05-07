@@ -33,9 +33,7 @@ const CreateComponent = () => {
 				description: `#${newId ?? ''} ${values.name}`,
 			})
 
-			// 注意：表單暫存的 password 在這裡會隨頁面 unmount 自動回收；
-			// 不做額外 setFieldsValue({ password: '' }) 是為了讓 antd 自然走 unmount cleanup，
-			// 避免反覆 setState 造成多餘 re-render
+			// password 隨 navigate 後 unmount 自然 GC，不額外清欄位避免多餘 re-render。
 			if (newId) {
 				go({
 					to: { resource: 'profit-partner', action: 'edit', id: newId },

@@ -67,6 +67,7 @@ const SlugInputComponent = ({
 			retry: 0,
 			keepPreviousData: false,
 		},
+		dataProviderName: 'power-shop',
 	})
 
 	// 後端 V2Api 統一裹 {code, data}，axios → result.data 是 axios body，

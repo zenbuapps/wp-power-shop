@@ -41,6 +41,7 @@ export const useProfitShopList = (params?: { partner_term_id?: number }) => {
 				? { partner_term_id: params.partner_term_id }
 				: undefined,
 		},
+		dataProviderName: 'power-shop',
 	})
 }
 
@@ -59,6 +60,7 @@ export const useProfitShopOne = (id: number | string | undefined) => {
 			// （Edit 頁的 filledIdRef 守門是主防線；此處關閉自動 refetch 是輔防線）
 			refetchOnWindowFocus: false,
 		},
+		dataProviderName: 'power-shop',
 	})
 }
 
@@ -74,6 +76,7 @@ export const useProfitShopCreate = () => {
 				url: `${apiUrl}/${PROFIT_SHOP_RESOURCE}`,
 				method: 'post',
 				values,
+				dataProviderName: 'power-shop',
 			},
 			{
 				onSuccess: () => {
@@ -101,6 +104,7 @@ export const useProfitShopUpdate = () => {
 				url: `${apiUrl}/${PROFIT_SHOP_RESOURCE}/${id}`,
 				method: 'put',
 				values,
+				dataProviderName: 'power-shop',
 			},
 			{
 				onSuccess: () => {
@@ -130,6 +134,7 @@ export const useProfitShopDelete = () => {
 				url: `${apiUrl}/${PROFIT_SHOP_RESOURCE}/${id}`,
 				method: 'delete',
 				values: {},
+				dataProviderName: 'power-shop',
 			},
 			{
 				onSuccess: () => {
@@ -160,6 +165,7 @@ const useProfitShopAction = (action: 'publish' | 'unpublish' | 'duplicate') => {
 				url: `${apiUrl}/${PROFIT_SHOP_RESOURCE}/${id}/${action}`,
 				method: 'post',
 				values: {},
+				dataProviderName: 'power-shop',
 			},
 			{
 				onSuccess: () => {

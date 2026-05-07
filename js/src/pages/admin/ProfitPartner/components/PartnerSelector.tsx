@@ -4,9 +4,16 @@ import { memo, useMemo } from 'react'
 import { useProfitPartnerList } from '@/pages/admin/ProfitPartner/hooks'
 import type { TProfitPartner } from '@/pages/admin/ProfitPartner/types'
 
+/**
+ * 後端 list endpoint 目前未做 server-side pagination，
+ * 一次回傳全部 partner term。當總量逼近此門檻時，給出明顯的提示，
+ * 提醒使用者用搜尋過濾、或推動後端補 pagination。
+ */
+const PARTNER_LIST_WARN_THRESHOLD = 100
+
 type TPartnerSelectorProps = {
 	value?: number // 受 antd Form.Item 控制的目前值（partner_term_id）
-	onChange?: (value: number) => void // 由 antd Form.Item 注入的 onChange
+	onChange?: (value: number | null) => void // 由 antd Form.Item 注入的 onChange（null = 清除）
 	disabled?: boolean
 	placeholder?: string
 }
@@ -42,9 +49,12 @@ const PartnerSelectorComponent = ({
 		[partners]
 	)
 
+	const isOverThreshold = partners.length >= PARTNER_LIST_WARN_THRESHOLD
+
 	return (
 		<Select<number>
 			showSearch
+			allowClear
 			placeholder={placeholder}
 			loading={isLoading || isFetching}
 			notFoundContent={
@@ -58,7 +68,7 @@ const PartnerSelectorComponent = ({
 			}
 			options={options}
 			value={value}
-			onChange={(v) => onChange?.(v)}
+			onChange={(v) => onChange?.(typeof v === 'number' ? v : null)}
 			disabled={disabled}
 			optionFilterProp="label"
 			filterOption={(input, option) => {
@@ -69,6 +79,20 @@ const PartnerSelectorComponent = ({
 					(option.slug ?? '').toLowerCase().includes(keyword)
 				)
 			}}
+			dropdownRender={(menu) => (
+				<>
+					{menu}
+					{isOverThreshold && (
+						<div
+							className="tw-text-xs tw-text-orange-500 tw-px-3 tw-py-2 tw-border-t tw-border-gray-200"
+							role="note"
+						>
+							結果可能超過 {PARTNER_LIST_WARN_THRESHOLD}{' '}
+							筆，請使用上方搜尋過濾。
+						</div>
+					)}
+				</>
+			)}
 			className="tw-w-full"
 		/>
 	)
