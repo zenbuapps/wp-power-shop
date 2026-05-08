@@ -368,15 +368,17 @@ js/src/partner-portal/
 │   ├── usePartnerEnv.ts        # 解密 window.power_shop_partner_data.env
 │   ├── useKpi.ts               # typed useQuery<TKpiOutput, AxiosError>
 │   ├── useTrend.ts
-│   └── useSettlements.ts
+│   ├── useSettlements.ts
+│   └── useChangePassword.ts    # Phase 6-A2：typed useMutation + mutationKey + retry: 0
 ├── pages/
-│   ├── Login.tsx               # rate-limit 倒數 + autoComplete + SLUG 自動帶入 disabled
-│   ├── Dashboard.tsx           # KPI 4 卡 + TrendChart + SettlementsTable
+│   ├── Login.tsx               # rate-limit 倒數 + autoComplete + SLUG 自動帶入 disabled + ?reason=password_changed 一次性 notice（6-A2）
+│   ├── Dashboard.tsx           # KPI 4 卡 + TrendChart + SettlementsTable + 「修改密碼」link button（6-A2）
 │   ├── TrendChart.tsx          # echarts callback ref pattern（reviewer C-1 教訓）
-│   └── SettlementsTable.tsx    # desktop / mobile 響應式 + status filter
+│   ├── SettlementsTable.tsx    # desktop / mobile 響應式 + status filter
+│   └── ChangePassword.tsx      # Phase 6-A2 ⚠ HIGH-RISK：三欄位 Form + Form rule + cooldown + success state lock + setTimeout cleanup
 └── utils/
     ├── retryAfter.ts           # 解析 Retry-After header（防呆 NaN / negative / 非數字）
-    └── partnerExceptionMapper.ts # partner-specific 訊息 + fallback admin profitShopExceptionMapper
+    └── partnerExceptionMapper.ts # partner-specific 訊息 + context-aware 第二參數（'default' \| 'change-password'，6-A2）+ fallback admin profitShopExceptionMapper
 ```
 
 ### Vite multi-entry 配置
@@ -397,13 +399,20 @@ v4wp({
 
 ```ts
 // utils/partnerExceptionMapper.ts
-export const mapPartnerException = (error: unknown): string => {
+export const mapPartnerException = (
+  error: unknown,
+  context: 'default' | 'change-password' = 'default', // 6-A2 加入 context-aware
+): string => {
   // 1. partner-specific code: too_many_attempts / unauthorized 額外訊息（含 Retry-After 倒數）
-  // 2. fallback: admin profitShopExceptionMapper 的 12 種 ErrorCode
-  // 3. fallback: error.message
-  // 4. fallback: '發生未知錯誤'
+  //    - context='change-password' 時 unauthorized 訊息改為「目前密碼錯誤」（語意對齊 ChangePassword UX）
+  // 2. weak_password（context='change-password'）：讀 data.reasons[]，KNOWN_WEAK_PASSWORD_REASONS 白名單 + isKnownWeakPasswordReason type guard
+  // 3. fallback: admin profitShopExceptionMapper 的 12 種 ErrorCode
+  // 4. fallback: error.message
+  // 5. fallback: '發生未知錯誤'
 }
 ```
+
+向後相容：既有 `Login.tsx` / `useKpi` / `useTrend` / `useSettlements` 不傳第二參數預設 `'default'`，行為不變。Phase 6-A2 LOW-7 master 自決跳過 DRY 重構（兩 context branch 約 80% 相同，但語意差異點 `unauthorized` / `weak_password` 需保留在 caller 處理）。
 
 ### Auth flow 安全紀律
 
@@ -412,9 +421,10 @@ export const mapPartnerException = (error: unknown): string => {
 | Token 儲存 | **永不**進 localStorage / sessionStorage / cookie 主動讀寫；HTTP-only cookie 由後端簽發，前端僅 axios `withCredentials: true` |
 | sessionStorage | 只存 metadata（`partner_id` / `partner_name` / `partner_slug` / `expires_at`），`session.read()` 帶 shape 防呆（JSON parse / 缺欄位 → null） |
 | 跨 partner 偵測 | URL slug ≠ session partner_slug 時：`status` 設 `'loading'`（非 `'authenticated'`，避免短暫渲染舊 partner 資料），`partner` 物件遮蔽為 `null`（雙保險），`useEffect` 觸發 logout + notification |
-| 401 interceptor | 在 React tree **之外**，用 `window.location.hash = '#/login'` 跳轉，`isLoginPage` 檢查防迴圈 |
+| 401 interceptor | 在 React tree **之外**，用 `window.location.hash = '#/login'` 跳轉，`isLoginPage` 檢查防迴圈；6-A2 加 `X-Skip-Auth-Redirect` header 旁路（讓 ChangePassword 401 失敗能由元件內部接 mutation.onError 顯示通知，不被 interceptor 強制跳轉） |
 | Logout | **永遠 local cleanup**（清 sessionStorage + react-query cache + 跳 login）即使 API 失敗 |
-| Login form | autoComplete `username` / `current-password`、SLUG 從 URL 自動帶入並 `disabled` 防 typo、雙擊保護（`submitting` state + button `loading` + `disabled`） |
+| `forceLogoutAndRedirect(reason?)` | 6-A2 新增於 AuthContext，與既有 `handleLogout` **並存**：前者強制 `?reason=...` 並跳 login；後者依 `isLoginPage` 防迴圈。供 ChangePassword success path 使用（後端 password_changed_at 已撤銷舊 token，必須重新登入） |
+| Login form | autoComplete `username` / `current-password`、SLUG 從 URL 自動帶入並 `disabled` 防 typo、雙擊保護（`submitting` state + button `loading` + `disabled`）；讀 `?reason=password_changed`（KNOWN_REASONS 白名單）顯示一次性 success notification（6-A2） |
 | rate-limit UX | 解析 `Retry-After` header → cooldown timer 倒數秒數，期間 button disabled |
 
 ### echarts callback ref pattern（reviewer C-1 教訓）
@@ -465,6 +475,7 @@ export const apiClient = axios.create({
 | `Login.tsx` | rate-limit 倒數錯誤可能讓 partner 看到「永遠 disabled」 | `retryAfter.ts` 防呆 NaN / negative / 非數字 → 預設 cooldown=0 |
 | `AuthContext.tsx` | 跨 partner race window | 雙保險：`status='loading'`（避免短暫渲染舊 partner 資料） + `partner` 物件 null masking + `useEffect` 觸發 logout |
 | `TrendChart.tsx` | echarts dispose race / SSR ref 為 null | callback ref pattern + 數值 sanitize（`parseFloat` + `Number.isNaN` fallback） |
+| `ChangePassword.tsx`（6-A2）| 明文密碼 + cookie 偷取後改密鎖人 + DOM/devtools 殘留 | 8 條紀律（強化版，對照 admin RegeneratePasswordButton）：(1) 明文**只**在 antd Form state，不進 cache / storage / log / Jotai / Context / (2) 不 console.log 印密碼 / (3) submit 後 form.resetFields **分支策略**：weak_password UX 友善只清 current；其他敏感全清 / (4) submit button **三重守門** `disabled = isLoading \|\| isCoolingDown \|\| success` / (5) 成功 → `forceLogoutAndRedirect('password_changed')`（後端 password_changed_at 同秒撤銷舊 token）/ (6) `mutation.reset()` 清 react-query variables（防 React DevTools 窺）/ (7) Form rule 阻擋 new === current / new !== confirm / (8) `setTimeout` cleanup ref + useEffect unmount cleanup（防使用者中途離開後仍觸發 logout）。**關鍵技術決策**：`X-Skip-Auth-Redirect` header 防 401 interceptor 干擾 success notification；success state lock 蓋 1.5s race（連返回按鈕都 disabled，A+ 級品質） |
 
 ### 不打包 admin（隔離驗收）
 
@@ -595,6 +606,11 @@ js/src/
 ├── pages/admin/ProfitPartner/   # Phase 4-A2：夥伴 CRUD + RegeneratePasswordButton（HIGH-RISK）+ PartnerSelector
 ├── pages/admin/ProfitMigration/ # Phase 4-A3：legacy 一頁商店匯入 + ImportModal（HIGH-RISK）
 ├── pages/admin/ProfitSettings/  # Phase 4-A3：全域設定 + ResetButton（HIGH-RISK）
+├── partner-portal/             # Phase 4-B + 6-A2：獨立 SPA bundle（mount 點 #profit_partner_portal，與 admin 完全隔離）
+│   ├── pages/                  #   Login / Dashboard / TrendChart / SettlementsTable / ChangePassword（6-A2 HIGH-RISK）
+│   ├── hooks/                  #   useKpi / useTrend / useSettlements / useChangePassword（6-A2）
+│   ├── auth/                   #   AuthContext + forceLogoutAndRedirect（6-A2）+ api.ts changePassword wrapper
+│   └── utils/                  #   partnerExceptionMapper（6-A2 加 context-aware 第二參數）/ retryAfter
 ├── components/               # 共用元件
 │   ├── general/              # CopyButton, Price
 │   ├── order/                # InfoTable, OrderNotes

@@ -55,7 +55,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A1 完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼）
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端）
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -212,14 +212,37 @@ pnpm release:major
 - composer lint 全綠；既有 Phase 3-D PartnerTokenStorePasswordRotationTest 同秒 case 契約反轉為「已撤銷」（檔頭 docblock 同步）
 - 不引入新 npm / composer 套件 / 不動 Phase 4-A SPA / 4-B Portal / 4-C 賣場前台
 
+### Phase 6-A2（Partner 自助修密碼前端 UI）已完工（commit `c80b4cc`）
+
+| 層 | 內容 | 路徑 |
+|----|------|------|
+| Frontend Hook | `useChangePassword`（typed `useMutation<TChangePasswordOutput, AxiosError, TChangePasswordInput>` + `mutationKey: ['partner-change-password']` + `retry: 0` 防重送） | `js/src/partner-portal/hooks/useChangePassword.ts` |
+| Frontend Page ⚠ HIGH-RISK | `ChangePassword.tsx`（antd Form 三欄位：current / new / confirm；Form rule 阻擋 new === current / new !== confirm；cooldown timer + success state lock + setTimeout cleanup ref + mutation.reset；submit button `disabled = isLoading \|\| isCoolingDown \|\| success` 三重守門；成功後 `forceLogoutAndRedirect('password_changed')`） | `js/src/partner-portal/pages/ChangePassword.tsx` |
+| Auth API wrapper | `changePassword(payload): Promise<TChangePasswordOutput>` + `TChangePasswordInput` / `TChangePasswordOutput` typed + 加 `X-Skip-Auth-Redirect` header（防 401 interceptor 干擾 success notification UX） | `js/src/partner-portal/auth/api.ts` |
+| AuthContext helper | `forceLogoutAndRedirect(reason?: string)`（與既有 `handleLogout` 並存：前者強制 redirect 並附 query reason；後者依 `isLoginPage` 防迴圈） | `js/src/partner-portal/auth/AuthContext.tsx` |
+| Routes | App.tsx 加 `/change-password` 路由（authenticated only） + Dashboard 加「修改密碼」link button 入口 | `js/src/partner-portal/App.tsx` + `pages/Dashboard.tsx` |
+| Login one-shot notice | Login 頁讀 `?reason=password_changed`（KNOWN_REASONS 白名單，未來可擴 `session_expired` 等）顯示一次性 success notification | `js/src/partner-portal/pages/Login.tsx` |
+| ExceptionMapper context-aware | `mapPartnerException(error, context?: 'default' \| 'change-password')` 第二參數 + `KNOWN_WEAK_PASSWORD_REASONS` 白名單 + `isKnownWeakPasswordReason` type guard；既有 Login 不傳第二參數預設 `'default'`，向後相容 | `js/src/partner-portal/utils/partnerExceptionMapper.ts` |
+
+**Phase 6-A2 完工要點**：
+- HIGH-RISK 8 條紀律（二輪後強化版）：(1) 明文密碼**只**在 antd Form state，不進 cache / storage / log / (2) 不 console.log 印密碼 / (3) submit 後 form.resetFields 分支策略（weak_password 只清 current；其他全清）/ (4) submit button 三重守門 `disabled={mutation.isLoading \|\| isCoolingDown \|\| success}` / (5) 成功後 `forceLogoutAndRedirect`（後端 password_changed_at 已撤銷舊 token）/ (6) `mutation.reset()` 清 react-query variables（防 React DevTools 窺）/ (7) Form rule 阻擋 new === current / new !== confirm / (8) setTimeout cleanup ref + useEffect unmount cleanup（防使用者中途離開後仍觸發 logout）
+- `X-Skip-Auth-Redirect` header 防 401 interceptor 干擾 success notification（master 自決技術決策）
+- `forceLogoutAndRedirect` 與 `handleLogout` 並存（前者強制 redirect + reason，後者依 `isLoginPage` 防迴圈）
+- 失敗清欄位策略分支（MAJOR-3）：weak_password UX 友善只清 current；其他敏感全清
+- success state lock（MAJOR-4，A+ 級品質）：連返回按鈕都 disabled，蓋 1.5s race
+- `partnerExceptionMapper` context-aware 向後相容（Login 不傳第二參數預設 `'default'`）
+- 隔離驗收（assets/main-*.js）：`App1 \| @refinedev \| Refine \| dataProviderName \| wc-rest \| wp-rest \| X-WP-Nonce` → **0 命中**
+- 0 admin SPA 修改 / 0 新 npm 套件 / 0 後端變動（純前端 UI 串接 Phase 6-A1 endpoint）
+- TS partner-portal 範圍 0 errors（admin baseline 129 不變）/ ESLint partner-portal 0 errors / 0 warnings / pnpm build 39.90s ✓
+
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 
 優先順序：
-1. **Phase 6-A2：partner 自助修密碼前端**（Partner Portal 新增 ChangePassword 頁面，使用 6-A1 的 `POST /partner-auth/change-password` endpoint）
-2. **LoginRateLimiter context-aware message provider**（reviewer 順手：audit log + admin email 在 `pwchange:{id}` pseudo-slug 場景目前語意誤導為「登入失敗」，需抽 message provider 區分 login / pwchange context）
-3. **partner-reports/{kpi,trend,settlements} 三 callback 缺 `_partner_term_id <= 0` fail-fast 一致性**（reviewer 順手，與 6-A1 L-4 對齊）
-4. **PartnerPasswordTest 補 multibyte / emoji / 中文邊界測試**（reviewer 順手，現有 8 method 已涵蓋 ASCII codepoint 但未顯式驗證 emoji / 中文與英文混排）
-5. **密碼強度規則升級**（產品決策層，例如 NIST SP 800-63B 12 字元 / pwned password 黑名單）
+1. **LoginRateLimiter context-aware message provider**（reviewer 順手：audit log + admin email 在 `pwchange:{id}` pseudo-slug 場景目前語意誤導為「登入失敗」，需抽 message provider 區分 login / pwchange context）
+2. **partner-reports/{kpi,trend,settlements} 三 callback 缺 `_partner_term_id <= 0` fail-fast 一致性**（reviewer 順手，與 6-A1 L-4 對齊）
+3. **PartnerPasswordTest 補 multibyte / emoji / 中文邊界測試**（reviewer 順手，現有 8 method 已涵蓋 ASCII codepoint 但未顯式驗證 emoji / 中文與英文混排）
+4. **密碼強度規則升級**（產品決策層，例如 NIST SP 800-63B 12 字元 / pwned password 黑名單）
+5. **6-A2 OBS 順手 3 條**：partnerExceptionMapper context-aware DRY 重構（LOW-7 master 自決跳過：兩函式 80% 相同但語意差異點需保留 caller） / Login `?reason=` query string 多 reason 擴充（目前僅 `password_changed`） / ChangePassword 失敗清欄位策略文件化到 react.rule.md HIGH-RISK 表
 6. **'power-shop' dataProvider thin wrapper**（Phase 4-A1 自決踩坑紀錄遺留）：包 `{code, data}` 讓未來頁面能用 useTable / useForm
 7. **賣場前台 SEO 強化**：`pre_get_document_title` filter（與 SEO plugin 整合，4-C1 m-3）/ Open Graph / structured data
 8. **賣場前台 IP-based rate-limit**（4-C1 security LOW-1，跨 `/profit-shop/*/` URL 防爬）

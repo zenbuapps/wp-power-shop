@@ -94,11 +94,11 @@ Phase 3-E（slug 即時驗證，1 個）：
 |--------|------|------------|------|
 | GET | `profit-shops/validate-slug?slug=xxx` | default | slug 即時驗證（前端建立時呼叫，回 `{available, conflicts[]}`；委派 `SlugConflictDetector` spec §6.11 五類衝突） |
 
-Phase 6-A1（Partner 自助修密碼，1 個）：
+Phase 6-A1（Partner 自助修密碼後端，1 個；Phase 6-A2 已完工 partner portal 前端 UI）：
 
 | Method | 端點 | Permission | 說明 |
 |--------|------|------------|------|
-| POST | `partner-auth/change-password` | **partner_token** | Partner 自助修密碼。Body：`{current_password, new_password}`（**不過 sanitize_text_field**，保留密碼字面值）；partner_term_id **永不**從 body / query 取，鎖死於 `_partner_term_id`（permission_callback 從 token 解出 + V2Api L-4 fail-fast `<= 0` 拒）。流程：assert_not_blocked → find_by_id → verify current → new PartnerPassword VO → save → reset → audit log（不含明文）。pseudo-slug `pwchange:{id}` 與 login slug 維度**隔離**；弱密碼不污染 rate-limit。Success path：`Set-Cookie profit_partner_token=; Max-Age=0` 強制重新登入 + `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`。失敗對映：401 unauthorized（current 錯）/ 422 weak_password（含 `data.reasons[]`）/ 429 rate_limited（含 Retry-After）。 |
+| POST | `partner-auth/change-password` | **partner_token** | Partner 自助修密碼。Body：`{current_password, new_password}`（**不過 sanitize_text_field**，保留密碼字面值）；partner_term_id **永不**從 body / query 取，鎖死於 `_partner_term_id`（permission_callback 從 token 解出 + V2Api L-4 fail-fast `<= 0` 拒）。流程：assert_not_blocked → find_by_id → verify current → new PartnerPassword VO → save → reset → audit log（不含明文）。pseudo-slug `pwchange:{id}` 與 login slug 維度**隔離**；弱密碼不污染 rate-limit。Success path：`Set-Cookie profit_partner_token=; Max-Age=0` 強制重新登入 + `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`。失敗對映：401 unauthorized（current 錯）/ 422 weak_password（含 `data.reasons[]`）/ 429 rate_limited（含 Retry-After）。**Phase 6-A2 前端 UI 已實裝**：partner portal 路由 `/change-password`（authenticated only，Dashboard 入口），UI 紀律見 `react.rule.md` §6.6 ChangePassword.tsx HIGH-RISK 8 條。 |
 
 **Profit Shop API 慣例差異**：
 - Partner endpoint **不裹** `{code, data}`，body 直接是 payload（spec §4.4）

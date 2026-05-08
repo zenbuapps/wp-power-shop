@@ -72,7 +72,7 @@ applyTo: "**/*.{php,ts,tsx}"
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Partner self-service portal（Phase 4-B，獨立 SPA）
+### Partner self-service portal（Phase 4-B + 6-A2，獨立 SPA）
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -85,15 +85,25 @@ applyTo: "**/*.{php,ts,tsx}"
 │  │  │  ┌────────┐  ┌──────────┐  ┌────────────────┐   │  │ │
 │  │  │  │ Login  │  │Dashboard │  │ TrendChart     │   │  │ │
 │  │  │  │ (rate- │  │ (KPI 4   │  │  (echarts,     │   │  │ │
-│  │  │  │  limit │  │  cards)  │  │  callback ref) │   │  │ │
-│  │  │  │  倒數) │  │          │  │                │   │  │ │
+│  │  │  │  limit │  │  cards + │  │  callback ref) │   │  │ │
+│  │  │  │  倒數  │  │ 「修改   │  │                │   │  │ │
+│  │  │  │ + ?reas│  │  密碼」  │  │                │   │  │ │
+│  │  │  │ on 6-A2│  │  link)   │  │                │   │  │ │
 │  │  │  └────────┘  └──────────┘  └────────────────┘   │  │ │
 │  │  │  ┌────────────────────────────────────────────┐  │  │ │
 │  │  │  │      SettlementsTable                       │  │  │ │
 │  │  │  │   (desktop / mobile 響應式)                 │  │  │ │
 │  │  │  └────────────────────────────────────────────┘  │  │ │
+│  │  │  ┌────────────────────────────────────────────┐  │  │ │
+│  │  │  │   ChangePassword (6-A2 ⚠ HIGH-RISK)         │  │  │ │
+│  │  │  │   - 三欄位 Form + Form rule + cooldown      │  │  │ │
+│  │  │  │   - success state lock + setTimeout cleanup │  │  │ │
+│  │  │  │   - 成功 → forceLogoutAndRedirect          │  │  │ │
+│  │  │  │     ('password_changed')                    │  │  │ │
+│  │  │  └────────────────────────────────────────────┘  │  │ │
 │  │  └───────────────────────────────────────────────────┘  │ │
 │  │       HashRouter + AuthContext + axios apiClient        │ │
+│  │       + forceLogoutAndRedirect helper（6-A2）           │ │
 │  │  ── 不打包 admin / 不依賴 Refine / 不用 dataProvider ──│ │
 │  └─────────────────────────────────────────────────────────┘ │
 │                           │                                   │
@@ -313,10 +323,23 @@ partner-portal/main.tsx (DOMContentLoaded)
           ├→ <QueryClientProvider>          # react-query（無 Refine）
           ├→ <ConfigProvider>               # Ant Design 主題
           ├→ <HashRouter>                   # 與 admin 一致，避免 BrowserRouter 與 RewriteRules 衝突
-          └→ <AuthProvider>                 # status 三態 + 跨 partner 雙保險
+          └→ <AuthProvider>                 # status 三態 + 跨 partner 雙保險 + forceLogoutAndRedirect helper（6-A2）
               └→ <AuthGate>
-                  ├→ guest → /login         # Login 頁（rate-limit 倒數）
-                  └→ authenticated → /dashboard # Dashboard（KPI / TrendChart / SettlementsTable）
+                  ├→ guest → /login          # Login 頁（rate-limit 倒數）
+                  │                          #   讀 ?reason=password_changed（KNOWN_REASONS 白名單）
+                  │                          #   顯示一次性 success notification（6-A2）
+                  └→ authenticated → /dashboard # Dashboard（KPI / TrendChart / SettlementsTable + 「修改密碼」link）
+                      └→ /change-password   # ChangePassword 頁（6-A2 HIGH-RISK）
+                          ├→ 三欄位 antd Form + Form rule（new === current / new !== confirm 阻擋）
+                          ├→ submit → useChangePassword（mutationKey + retry: 0）
+                          │   → POST /partner-auth/change-password
+                          │     （axios + X-Skip-Auth-Redirect header 旁路 401 interceptor）
+                          ├→ failure：mapPartnerException(error, 'change-password') → notification.error
+                          │            rate-limit → Retry-After cooldown
+                          ├→ success：mutation.reset() + form.resetFields + state lock 1.5s
+                          │            → forceLogoutAndRedirect('password_changed')
+                          │            → /login?reason=password_changed
+                          └→ unmount：setTimeout cleanup ref 防 race
 ```
 
 ### 賣場前台載入流程（Phase 4-C）
