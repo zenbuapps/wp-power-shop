@@ -2,9 +2,10 @@
  * Partner Portal App
  *
  * 路由：
- * - /login   → Login 頁
- * - /        → Dashboard（受 AuthGate 保護）
- * - *        → 重定向到 /
+ * - /login            → Login 頁
+ * - /                 → Dashboard（受 AuthGate 保護）
+ * - /change-password  → 修改密碼（受 AuthGate 保護，Phase 6-A2）
+ * - *                 → 重定向到 /
  *
  * AuthGate 邏輯：
  * - status === 'loading' → 顯示載入畫面
@@ -17,6 +18,7 @@ import { Navigate, Route, Routes } from 'react-router'
 
 import { useAuth } from './auth/AuthContext'
 import { LoadingScreen } from './components/LoadingScreen'
+import { ChangePassword } from './pages/ChangePassword'
 import { Dashboard } from './pages/Dashboard'
 import { Login } from './pages/Login'
 
@@ -38,6 +40,14 @@ const AppComponent = () => (
 			element={
 				<AuthGate>
 					<Dashboard />
+				</AuthGate>
+			}
+		/>
+		<Route
+			path="/change-password"
+			element={
+				<AuthGate>
+					<ChangePassword />
 				</AuthGate>
 			}
 		/>

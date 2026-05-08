@@ -10,8 +10,10 @@
  * - 整個內容用 ErrorBoundary 包住，避免單一元件出錯炸掉整頁
  */
 
+import { KeyOutlined } from '@ant-design/icons'
 import { Button, Card, Space, Typography } from 'antd'
 import { memo, useState } from 'react'
+import { Link } from 'react-router'
 
 import { useAuth } from '../auth/AuthContext'
 import {
@@ -64,6 +66,9 @@ const DashboardComponent = () => {
 								)}
 							</div>
 							<Space>
+								<Link to="/change-password">
+									<Button icon={<KeyOutlined />}>修改密碼</Button>
+								</Link>
 								<Button onClick={() => void logout()}>登出</Button>
 							</Space>
 						</div>

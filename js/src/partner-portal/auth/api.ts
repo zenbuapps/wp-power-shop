@@ -74,3 +74,36 @@ export const logout = () =>
  * 依靠 HttpOnly cookie 自動帶入；無有效 cookie 時後端回 401。
  */
 export const fetchMe = () => apiClient.get<TMeOutput>('/partner-auth/me')
+
+/** /partner-auth/change-password 輸入 */
+export type TChangePasswordInput = {
+	current_password: string
+	new_password: string
+}
+
+/** /partner-auth/change-password 後端成功回傳 payload */
+export type TChangePasswordOutput = {
+	success: boolean
+	password_changed_at: number
+}
+
+/**
+ * 修改密碼（POST /partner-auth/change-password，Phase 6-A1 後端 / 6-A2 前端）
+ *
+ * 安全紀律：
+ * - 兩個密碼欄位**禁止**前端 trim / normalize / sanitize，原樣送（避免 server-side
+ *   雜湊不一致）
+ * - 帶 X-Skip-Auth-Redirect：成功後伺服器會立即 expire cookie（password_changed_at
+ *   撤銷），下一次請求即會 401，但這時 UI 已經要顯示「請重新登入」並導頁，不該
+ *   再被 axios interceptor 自動跳一次 /login（會干擾 notification.success 顯示）
+ *
+ * @param input { current_password, new_password }
+ */
+export const changePassword = (input: TChangePasswordInput) =>
+	apiClient.post<TChangePasswordOutput>(
+		'/partner-auth/change-password',
+		input,
+		{
+			headers: { [SKIP_AUTH_REDIRECT_HEADER]: SKIP_AUTH_REDIRECT_VALUE },
+		}
+	)

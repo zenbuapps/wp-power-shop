@@ -41,16 +41,19 @@ export type TAuthStatus = 'loading' | 'authenticated' | 'guest'
 /**
  * Context 對外型別
  *
- * status:  目前認證狀態
- * partner: 已驗證的 partner 資料（status === 'authenticated' 時必有值）
- * login:   執行登入
- * logout:  執行登出（永遠執行 local cleanup，即便後端 logout 失敗）
+ * status:                  目前認證狀態
+ * partner:                 已驗證的 partner 資料（status === 'authenticated' 時必有值）
+ * login:                   執行登入
+ * logout:                  執行登出（永遠執行 local cleanup，即便後端 logout 失敗）
+ * forceLogoutAndRedirect:  強制登出並導向 /login，可附上 reason query string
+ *                          （6-A2 改密成功 / 跨 partner 偵測等場景使用）
  */
 export type TAuthContextValue = {
 	status: TAuthStatus
 	partner: TMeOutput | null
 	login: (slug: string, password: string) => Promise<void>
 	logout: () => Promise<void>
+	forceLogoutAndRedirect: (reason?: string) => Promise<void>
 }
 
 const AuthContext = createContext<TAuthContextValue | null>(null)
@@ -120,6 +123,34 @@ const AuthProviderComponent = ({ children }: PropsWithChildren) => {
 
 	logoutRef.current = handleLogout
 
+	/**
+	 * 強制登出並導向 /login，附上 reason query string（6-A2 修密成功用）
+	 *
+	 * 與 handleLogout 的差別：
+	 * - 永遠強制 redirect（不檢查 isLoginPage）+ 帶 ?reason=xxx
+	 * - 用於密碼變更後的端到端流程：後端已撤銷 token → 前端 cleanup +
+	 *   notification 一併處理
+	 *
+	 * @param reason 例如 'password_changed'（會 encodeURIComponent 後接到 hash）
+	 */
+	const forceLogoutAndRedirect = useCallback(
+		async (reason?: string): Promise<void> => {
+			try {
+				await apiLogout()
+			} catch {
+				// 同 handleLogout：永遠 local cleanup
+			}
+			session.clear()
+			queryClient.clear()
+
+			const hash = reason
+				? `#/login?reason=${encodeURIComponent(reason)}`
+				: '#/login'
+			window.location.hash = hash
+		},
+		[queryClient]
+	)
+
 	// 跨 partner 偵測：me.partner_slug 必須等於 URL 的 SLUG
 	useEffect(() => {
 		if (meQuery.data && SLUG && meQuery.data.partner_slug !== SLUG) {
@@ -155,8 +186,15 @@ const AuthProviderComponent = ({ children }: PropsWithChildren) => {
 			partner,
 			login: handleLogin,
 			logout: handleLogout,
+			forceLogoutAndRedirect,
 		}),
-		[status, partner, handleLogin, handleLogout]
+		[
+			status,
+			partner,
+			handleLogin,
+			handleLogout,
+			forceLogoutAndRedirect,
+		]
 	)
 
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

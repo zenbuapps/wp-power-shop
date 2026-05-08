@@ -11,8 +11,8 @@
 
 import { Button, Card, Form, Input, Typography, notification } from 'antd'
 import type { AxiosError } from 'axios'
-import { memo, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { memo, useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router'
 
 import { useAuth } from '../auth/AuthContext'
 import { usePartnerEnv } from '../hooks/usePartnerEnv'
@@ -24,16 +24,46 @@ type TLoginFormValues = {
 	password: string
 }
 
+/**
+ * 已知 reason query string 白名單（LOW-1 security）
+ *
+ * 為什麼用白名單：避免攻擊者塞任意字串到 ?reason= 觸發未預期的訊息顯示
+ * （目前訊息走 antd notification，已自動 escape，但白名單作為深度防禦）
+ */
+const KNOWN_REASONS: ReadonlySet<string> = new Set(['password_changed'])
+
 /** Partner 登入頁元件 */
 const LoginComponent = () => {
 	const { login } = useAuth()
 	const { SLUG } = usePartnerEnv()
 	const [form] = Form.useForm<TLoginFormValues>()
 	const navigate = useNavigate()
+	const location = useLocation()
 
 	const [submitting, setSubmitting] = useState(false)
 	const [cooldownUntil, setCooldownUntil] = useState<number | null>(null)
 	const [secondsLeft, setSecondsLeft] = useState(0)
+
+	// 6-A2：讀 query string ?reason=password_changed 顯示提示
+	// reasonShownRef 避免 React 18 StrictMode 重渲染或 location 變動造成重複觸發
+	// LOW-1 (security): 用白名單比對，避免攻擊者塞任意字串造成 XSS / 訊息污染
+	const reasonShownRef = useRef<string | null>(null)
+	useEffect(() => {
+		const reason = new URLSearchParams(location.search).get('reason')
+		if (
+			reason &&
+			KNOWN_REASONS.has(reason) &&
+			reasonShownRef.current !== reason
+		) {
+			reasonShownRef.current = reason
+			if (reason === 'password_changed') {
+				notification.success({
+					message: '密碼已更新',
+					description: '請使用新密碼登入。',
+				})
+			}
+		}
+	}, [location.search])
 
 	// 倒數計時器
 	useEffect(() => {
