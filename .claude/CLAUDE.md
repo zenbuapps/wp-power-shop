@@ -55,7 +55,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C 完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端）
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A1 完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼）
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -191,19 +191,43 @@ pnpm release:major
 - composer lint 146/146 全綠；既有 4-A / 4-B / Phase 3-D / 3-E 完全 0 regression
 - 不引入新 npm / composer 套件
 
+### Phase 6-A1（Partner 自助修密碼）已完工（commit `e974ae4`）
+
+| 層 | 內容 | 路徑 |
+|----|------|------|
+| Domain ValueObject | `PartnerPassword`（密碼複雜度規則：≥ 8 codepoint + ≥ 1 英文 + ≥ 1 數字；`mb_strlen($value, 'UTF-8')` 以 codepoint 計，避免 byte / multibyte 語意混亂；不 trim、不 normalize、value() 原樣回傳） | `inc/classes/Domains/ProfitShop/Domain/ValueObject/PartnerPassword.php` |
+| Domain Exception | `WeakPassword`（final extends \DomainException，attr `reasons: string[]` + `getReasons()` getter；對映 422 `weak_password` + `data.reasons`） | `inc/classes/Domains/ProfitShop/Domain/Exception/WeakPassword.php` |
+| Application UseCase | `ChangePasswordUseCase`（流程嚴格鎖死：assert_not_blocked → find_by_id → verify_password → new PartnerPassword → save → reset → audit log；pseudo-slug `pwchange:{id}` 與 login slug 維度隔離；弱密碼**不**污染 rate-limit） | `inc/classes/Domains/ProfitShop/Application/UseCase/Partner/Auth/ChangePasswordUseCase.php` |
+| Application DTO | `ChangePasswordInput`（@internal，攜帶明文 current/new password，**不**提供 to_array）+ `ChangePasswordOutput`（success + password_changed_at，可安全序列化） | `inc/classes/Domains/ProfitShop/Application/DTO/ChangePasswordInput.php` + `ChangePasswordOutput.php` |
+| Service / TokenStore | `PartnerTokenStore::verify` L138-156 同秒撤銷契約（M-1 race window 修補）：`issued_at <= password_changed_at` 視為已撤銷（從 `<` 反轉為 `<=`，閉合「同秒簽發舊 token + 同秒改密」場景） | `inc/classes/Domains/ProfitShop/Application/Service/PartnerTokenStore.php` |
+| Presentation | V2Api 新增 `POST /partner-auth/change-password`（permission `partner_token`，body 不過 sanitize_text_field 保留密碼字面值；success path：Set-Cookie Max-Age=0 + Cache-Control no-store/no-cache/must-revalidate + Pragma no-cache；L-4 fail-fast `_partner_term_id <= 0` 拋 InvalidArgumentException 防污染 `pwchange:0` rate-limit）；`make_partner_login_rate_limiter()` factory 抽出（DRY，login + change-password 共用）；ExceptionMapper 加 `WeakPassword → 422 weak_password` + `data.reasons[]`（在 \DomainException fallback 之前判斷，否則被吞成 400 validation_failed） | `inc/classes/Domains/ProfitShop/Infrastructure/Rest/V2Api.php` + `Infrastructure/Rest/ExceptionMapper.php` |
+| 測試 | 35 個新 test method：8 method（PartnerPasswordTest）+ 3 method（WeakPasswordTest）+ 12 method（ChangePasswordUseCaseTest）+ 11 method（PartnerChangePasswordEndpointTest IT）+ 1 method（ExceptionMapperWeakPasswordTest IT）+ 反轉 PartnerTokenStorePasswordRotationTest 同秒 case 為「已撤銷」契約 | `tests/Unit/Domain/ValueObject/` + `tests/Unit/Domain/Exception/` + `tests/Unit/Application/UseCase/Partner/Auth/` + `tests/Integration/Infrastructure/Rest/` |
+
+**Phase 6-A1 完工要點**：
+- 8 條安全紀律：(1) current_password 必驗（防 cookie 偷取後改密鎖人）/ (2) pseudo-slug `pwchange:{id}` 與 login slug 維度隔離 / (3) 改密成功後 password_changed_at 寫入 + Set-Cookie Max-Age=0 → 舊 token 立即失效（M-1 同秒覆蓋）/ (4) 弱密碼不污染 rate-limit / (5) response 不洩漏密碼 / hash / token / (6) audit log 不含明文密碼 / (7) admin nonce 不能走此 endpoint（permission `partner_token`）/ (8) Cache-Control: no-store, no-cache, must-revalidate（success path）
+- M-1 race window 修補：`issued_at == password_changed_at` 同秒視為已撤銷（從 `<` 反轉為 `<=`），縱深防禦覆蓋「同秒簽發舊 token + 同秒改密」場景
+- L-2 multibyte 規則：PartnerPassword 長度檢查以 codepoint（mb_strlen UTF-8）為單位，避免 ASCII vs 中文 / emoji 字元語意不一致
+- L-4 fail-fast：V2Api callback 對 `_partner_term_id <= 0` 拋 InvalidArgumentException，防 permission_callback 流程缺陷被繞過時污染 `pwchange:0` rate-limit 維度
+- IP 取值流程與 partner login DRY：filter_var FILTER_VALIDATE_IP 防呆 + `power_shop_partner_login_client_ip` filter hook 共用
+- composer lint 全綠；既有 Phase 3-D PartnerTokenStorePasswordRotationTest 同秒 case 契約反轉為「已撤銷」（檔頭 docblock 同步）
+- 不引入新 npm / composer 套件 / 不動 Phase 4-A SPA / 4-B Portal / 4-C 賣場前台
+
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 
 優先順序：
-1. **regenerate-password 撤銷舊 token**（password_changed_at 比對機制部分已於 Phase 3-D Batch 2 落地；Partner 自助修密碼 endpoint 仍待）
-2. **Partner 自助修密碼**（需後端新 endpoint，Phase 4-B / 4-C 都不做）
-3. **'power-shop' dataProvider thin wrapper**（Phase 4-A1 自決踩坑紀錄遺留）：包 `{code, data}` 讓未來頁面能用 useTable / useForm
-4. **賣場前台 SEO 強化**：`pre_get_document_title` filter（與 SEO plugin 整合，4-C1 m-3）/ Open Graph / structured data
-5. **賣場前台 IP-based rate-limit**（4-C1 security LOW-1，跨 `/profit-shop/*/` URL 防爬）
-6. **賣場前台快取效能**（4-C1 security LOW-3：publish 賣場對未登入者送對 CDN 友善 headers）
-7. **rate-limit 5/15min 改 3 次**（reviewer L-3，產品決策層）
-8. **token 三條讀取路徑收斂**（reviewer M-5，目前已 PHPDoc 化但未刪路徑）
-9. **賣場前台 inline style 抽 CSS file**（4-C1 m-10）+ `img loading='lazy'`（m-6）等 NIT 微優化
-10. **`ProfitShop::has_item(int): bool` Domain method**（4-C2 INFO-2 DDD 重構，目前由 AddToCartHook 自己 foreach）
+1. **Phase 6-A2：partner 自助修密碼前端**（Partner Portal 新增 ChangePassword 頁面，使用 6-A1 的 `POST /partner-auth/change-password` endpoint）
+2. **LoginRateLimiter context-aware message provider**（reviewer 順手：audit log + admin email 在 `pwchange:{id}` pseudo-slug 場景目前語意誤導為「登入失敗」，需抽 message provider 區分 login / pwchange context）
+3. **partner-reports/{kpi,trend,settlements} 三 callback 缺 `_partner_term_id <= 0` fail-fast 一致性**（reviewer 順手，與 6-A1 L-4 對齊）
+4. **PartnerPasswordTest 補 multibyte / emoji / 中文邊界測試**（reviewer 順手，現有 8 method 已涵蓋 ASCII codepoint 但未顯式驗證 emoji / 中文與英文混排）
+5. **密碼強度規則升級**（產品決策層，例如 NIST SP 800-63B 12 字元 / pwned password 黑名單）
+6. **'power-shop' dataProvider thin wrapper**（Phase 4-A1 自決踩坑紀錄遺留）：包 `{code, data}` 讓未來頁面能用 useTable / useForm
+7. **賣場前台 SEO 強化**：`pre_get_document_title` filter（與 SEO plugin 整合，4-C1 m-3）/ Open Graph / structured data
+8. **賣場前台 IP-based rate-limit**（4-C1 security LOW-1，跨 `/profit-shop/*/` URL 防爬）
+9. **賣場前台快取效能**（4-C1 security LOW-3：publish 賣場對未登入者送對 CDN 友善 headers）
+10. **rate-limit 5/15min 改 3 次**（reviewer L-3，產品決策層）
+11. **token 三條讀取路徑收斂**（reviewer M-5，目前已 PHPDoc 化但未刪路徑）
+12. **賣場前台 inline style 抽 CSS file**（4-C1 m-10）+ `img loading='lazy'`（m-6）等 NIT 微優化
+13. **`ProfitShop::has_item(int): bool` Domain method**（4-C2 INFO-2 DDD 重構，目前由 AddToCartHook 自己 foreach）
 
 ### Reviewer 累積的「未來補強建議」（非 blocking）
 

@@ -790,6 +790,7 @@ components:
           - 409 partner_in_use: PartnerStillInUseException
           - 409 product_already_in_shop: ProductAlreadyInShop
           - 422 invalid_state_transition: InvalidStatusTransition
+          - 422 weak_password: WeakPassword（含 data.reasons[]，Phase 6-A1）
           - 422 legacy_unimportable: LegacyShopNotImportable（含 reason）
           - 429 rate_limited: TooManyAttempts / RateLimitExceeded（含 retry_after + Retry-After header）
           - 500 internal_error: PersistenceFailure / 其它 Throwable（含 error_id；生產環境 message 遮蔽）
@@ -806,6 +807,7 @@ components:
             - partner_in_use
             - product_already_in_shop
             - invalid_state_transition
+            - weak_password
             - legacy_unimportable
             - rate_limited
             - internal_error
@@ -825,6 +827,21 @@ components:
         error_id:
           type: string
           description: code=internal_error 時附加，格式 PS-{ts}-{rand}
+        data:
+          type: object
+          description: |
+            code=weak_password 時附加（Phase 6-A1）。
+            `data.reasons` 為違反的密碼複雜度規則代碼陣列（如 `['too_short', 'missing_letter', 'missing_digit']`），
+            前端據以做 i18n 並引導使用者修正（與 SlugConflictException 攜帶 conflicts 同模式）。
+          properties:
+            reasons:
+              type: array
+              items:
+                type: string
+                enum:
+                  - too_short
+                  - missing_letter
+                  - missing_digit
       required:
         - code
         - message
@@ -1281,6 +1298,52 @@ components:
           type: boolean
       required:
         - logged_out
+
+    ChangePasswordRequest:
+      type: object
+      description: |
+        Partner 自助修密碼請求 body（Phase 6-A1）。
+
+        - `current_password`：當前明文密碼（**不過 sanitize_text_field**，保留字面值）
+        - `new_password`：新明文密碼（**不過 sanitize_text_field**；
+          後端用 `PartnerPassword` ValueObject 驗證複雜度，違反拋 WeakPassword → 422 weak_password）
+
+        partner_term_id 鎖死於 token，**不出現**在此 body（永不接受 query / body 注入）。
+      properties:
+        current_password:
+          type: string
+          description: 當前明文密碼
+          example: 'Old1234ABC'
+        new_password:
+          type: string
+          description: 新明文密碼（複雜度規則：mb_strlen UTF-8 ≥ 8 + ≥ 1 英文 + ≥ 1 數字）
+          example: 'NewSecret123'
+      required:
+        - current_password
+        - new_password
+
+    ChangePasswordResponse:
+      type: object
+      description: |
+        Partner 自助修密碼成功回應（裸 payload，Phase 6-A1）。
+
+        永不含密碼 / hash / token；可安全序列化 / 可進 client cache（即使本 endpoint 響應強制 no-store）。
+        前端可選擇用 `password_changed_at` 顯示「上次改密時間」；
+        後端用同值寫入 termmeta `_partner_password_changed_at`，作為
+        `PartnerTokenStore::verify` 比對「token 簽發時間 <= password_changed_at → 視為已撤銷」的依據
+        （reviewer M-1：嚴格大於才通過，閉合同秒 race window）。
+      properties:
+        success:
+          type: boolean
+          description: 是否成功（目前 happy path 永遠 true，保留欄位以便未來擴充 partial success）
+          example: true
+        password_changed_at:
+          type: integer
+          description: 變更後的 password_changed_at（unix timestamp）
+          example: 1715000000
+      required:
+        - success
+        - password_changed_at
 
   parameters:
     PartnerToken:
@@ -3523,6 +3586,115 @@ paths:
                 $ref: '#/components/schemas/PartnerMeOutput'
         '401':
           description: unauthorized（token 缺失 / 已過期 / 已 revoke）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/partner-auth/change-password:
+    post:
+      tags:
+        - ProfitShopPartnerAuth
+      summary: Partner 自助修密碼（partner_token，Phase 6-A1）
+      description: |
+        Permission: `partner_token`（cookie / X-Partner-Token / Bearer 三選一）。
+        對應規格 §6.3。
+
+        **partner_term_id 鎖死於 token**：permission_callback 從 token 解出後寫入
+        `_partner_term_id`，**永不**從 body / query 取（防 cross-partner 越權）。
+        V2Api callback 對 `_partner_term_id <= 0` 立即拋（reviewer L-4 fail-fast，
+        防 permission 流程缺陷被繞過時污染 `pwchange:0` rate-limit 維度）。
+
+        **Body 不過 sanitize_text_field**（避免 strip tags / collapse 空白破壞密碼字面值）。
+
+        **流程**（嚴格順序）：
+          1. assert_not_blocked（pseudo-slug `pwchange:{partner_term_id}` + IP 雙維度，
+             與 partner login slug 維度**隔離**：登入失敗鎖不影響改密、改密失敗鎖不影響登入）
+          2. find_by_id → null 拋 PartnerNotFound（不 record_failure，避免 unknown id 噪音）
+          3. verify_password（current_password）→ false：record_failure → InvalidCredentials
+          4. new PartnerPassword(new_password)：弱密碼拋 WeakPassword（rate-limit 不動，
+             避免使用者按錯 5 次格式就被鎖）
+          5. PartnerRepository::save（內部 update `_partner_password_changed_at` termmeta）
+          6. reset 雙維度 rate-limit
+          7. audit log（不含明文密碼 / hash / token）
+          8. 回 `{success: true, password_changed_at: int}`
+
+        **Success 副作用**：
+          - `Set-Cookie profit_partner_token=; Max-Age=0`：強制 partner 重新登入
+            （path 與 set 時一致才能清除）
+          - `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`：
+            防 proxy / browser 快取響應內容
+          - 舊 token 在 `PartnerTokenStore::verify` 比對 `issued_at <= password_changed_at`
+            立即失效（Phase 6-A1 reviewer M-1 同秒撤銷契約）
+
+        **密碼複雜度規則**（PartnerPassword ValueObject，spec §6.3）：
+          - `too_short`：mb_strlen UTF-8 < 8
+          - `missing_letter`：不含 `[a-zA-Z]`
+          - `missing_digit`：不含 `[0-9]`
+          - 違反時 422 weak_password 攜帶 `data.reasons[]`（cumulative）
+
+        **安全紀律**（不可違反）：
+          - response 永不洩漏密碼明文 / hash / token
+          - audit log 不含明文密碼
+          - admin nonce 不能走此 endpoint（permission 非 WPNonce）
+      operationId: partnerChangePassword
+      security:
+        - PartnerToken: []
+        - PartnerBearer: []
+        - PartnerCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: 改密成功（裸 payload，附 Set-Cookie 清空 + Cache-Control no-store）
+          headers:
+            Set-Cookie:
+              required: true
+              schema:
+                type: string
+                example: 'profit_partner_token=; HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=0'
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+                example: 'no-store, no-cache, must-revalidate'
+            Pragma:
+              required: true
+              schema:
+                type: string
+                example: 'no-cache'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangePasswordResponse'
+        '400':
+          description: validation_failed（欄位缺失 / `_partner_term_id <= 0` fail-fast）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: unauthorized（current_password 錯，已 record_failure 雙維度）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '422':
+          description: weak_password（new_password 不符複雜度，含 data.reasons[]，未 record_failure）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '429':
+          description: rate_limited（pseudo-slug 或 IP 達 5 次失敗，含 Retry-After header）
+          headers:
+            Retry-After:
+              schema:
+                type: integer
           content:
             application/json:
               schema:

@@ -220,7 +220,8 @@ inc/classes/Domains/ProfitShop/
 │   ├── Service/                     # PriceCalculator / ProfitCalculator / RoundingStrategy interface
 │   ├── Repository/                  # ProfitShopRepository / PartnerRepository / SettlementRepository（Interface only）
 │   ├── Snapshot/, Criteria/         # ProductSnapshot / PartnerSnapshot / FilterCriteria
-│   └── Exception/                   # 18 個 final extends \DomainException（PartnerNotFound、SlugConflict、TooManyAttempts...）
+│   ├── ValueObject/PartnerPassword # Phase 6-A1，Partner 自助修密碼複雜度 VO（mb_strlen UTF-8 ≥ 8 + ≥ 1 英文 + ≥ 1 數字）
+│   └── Exception/                   # 19 個 final extends \DomainException（PartnerNotFound、SlugConflict、TooManyAttempts、WeakPassword[Phase 6-A1]...）
 │
 ├── Application/                     # 編排業務流程，依賴 Domain + Port interface
 │   ├── DTO/                         # 13 個 immutable readonly DTO（PartnerInput / ProfitShopInput / KpiReport / SlugValidationOutput...）
@@ -233,9 +234,9 @@ inc/classes/Domains/ProfitShop/
 │   │                                #     4-interface DI + hash_hmac + password_changed_at 撤銷）/
 │   │                                #     LoginRateLimiter（Phase 3-D 升級：per-slug + per-IP 雙維度，IP hash_hmac）/
 │   │                                #     CartPriceSignatureService（Phase 3-D 新增：HMAC-SHA256 cart 簽章）
-│   └── UseCase/                     # 26 個 UseCase
+│   └── UseCase/                     # 27 個 UseCase
 │       ├── Shop/                    #   9 個（CRUD + publish/unpublish/duplicate + ValidateSlugUseCase[Phase 3-E]）
-│       ├── Partner/                 #   5 admin CRUD + 4 Auth + 3 Report
+│       ├── Partner/                 #   5 admin CRUD + 5 Auth（含 ChangePasswordUseCase[Phase 6-A1]）+ 3 Report
 │       ├── Migration/               #   2 個（list legacy / import）
 │       └── Settings/                #   3 個（get / update / reset）
 │
@@ -251,8 +252,9 @@ inc/classes/Domains/ProfitShop/
 │   ├── WooCommerce/                 # Phase 3-D 新層：CartPriceOverrideHook（前台 cart 價格防竄改，
 │   │                                #   add_cart_item_data + get_cart_item_from_session +
 │   │                                #   before_calculate_totals priority 999 + draft shop fallback）
-│   └── Rest/                        # ExceptionMapper（Domain Exception → HTTP，Phase 3-E：+filter test seam）+
-│   │                                #   V2Api（26 endpoint：Phase 3-E +validate-slug）
+│   └── Rest/                        # ExceptionMapper（Domain Exception → HTTP，Phase 3-E：+filter test seam；
+│   │                                #   Phase 6-A1：+WeakPassword → 422 weak_password + data.reasons[]）+
+│   │                                #   V2Api（27 endpoint：Phase 3-E +validate-slug、Phase 6-A1 +partner-auth/change-password）
 │
 └── Loader.php                       # ProfitShop sub-loader，由 Domains\Loader 註冊
 ```
@@ -281,7 +283,7 @@ plugin.php
                       ├→ Infrastructure/WooCommerce/AddToCartHook::instance(...)   # Phase 4-C2，priority 5（早於 CartPriceOverrideHook 的 10），DI ProfitShopRepositoryInterface
                       ├→ Infrastructure/WooCommerce/CartPriceOverrideHook::instance() # Phase 3-D，priority 10 / 999，admin context guard
                       ├→ Infrastructure/WooCommerce/CartItemMetaDisplay::instance(...) # Phase 4-C2，woocommerce_get_item_data filter，涵蓋 mini-cart / cart / checkout
-                      └→ Infrastructure/Rest/V2Api::instance() # 26 個 endpoint
+                      └→ Infrastructure/Rest/V2Api::instance() # 27 個 endpoint（Phase 6-A1 +partner-auth/change-password）
 ```
 
 ### Partner Portal 載入流程（Phase 4-B）

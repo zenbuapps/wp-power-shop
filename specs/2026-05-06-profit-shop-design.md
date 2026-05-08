@@ -723,6 +723,89 @@ $cart_item_data['_actual_price'] = $actual;
 - **Token TTL**：1 小時（可在 `profit-settings` 調整）
 - **登出**：`delete_transient` + `setcookie('', expires=past)`
 
+#### 6.3.1 Partner 自助修密碼（Phase 6-A1）
+
+Partner 可透過 `POST /partner-auth/change-password`（permission `partner_token`）自助修改密碼。
+與 admin `regenerate-password` 互不相通（後者是站長重設、前者是 partner 自助）。
+
+| 維度 | Admin regenerate-password | Partner 自助修密碼 |
+|------|---------------------------|---------------------|
+| Permission | `manage_options` + `X-WP-Nonce` | `partner_token`（cookie / Bearer / X-Partner-Token） |
+| 觸發者 | 站長 | partner 本人 |
+| 密碼來源 | `wp_generate_password(12, false)` 系統產生 | partner 提供 new_password 明文 |
+| current_password 驗證 | 不需要（admin 直接重設） | **必驗**（防 cookie 偷取後改密鎖人） |
+| 強度檢查 | 不需要（系統產生保證） | `PartnerPassword` ValueObject |
+| Response | 含明文（前端僅展示一次） | 不含密碼，只回 `{success, password_changed_at}` |
+| Set-Cookie Max-Age=0 | 不需要 | **必須**（強制 partner 重新登入） |
+| Cache-Control | `no-store, no-cache, must-revalidate` | 同左 |
+
+**密碼複雜度規則**（`PartnerPassword` ValueObject，cumulative）：
+
+- `too_short`：`mb_strlen($value, 'UTF-8') < 8`（以 codepoint 計，避免 byte / multibyte 語意不一致）
+- `missing_letter`：不含 `[a-zA-Z]`
+- `missing_digit`：不含 `[0-9]`
+
+違反任一條 → 拋 `WeakPassword(reasons[])` → ExceptionMapper 對映 422 `weak_password` + `data.reasons[]`。
+ValueObject **不 trim、不 normalize、不 mask**，`value()` 原樣回傳輸入字串（normalization 控制權留給 caller）。
+
+**UseCase 流程**（`ChangePasswordUseCase`，嚴格順序）：
+
+1. `pseudo_slug = "pwchange:" . $partner_term_id` → `assert_not_blocked($pseudo_slug, $ip)` 雙維度檢查
+   （pseudo-slug 與 partner login slug 維度**隔離**：登入失敗鎖不影響改密、改密失敗鎖不影響登入）
+2. `find_by_id($partner_term_id)` → null 拋 `PartnerNotFound`（**不** record_failure，避免 unknown id 噪音）
+3. `verify_password($partner_term_id, $current_password)` → false：
+   `record_failure($pseudo_slug, $ip)` → 拋 `InvalidCredentials`
+4. `new PartnerPassword($new_password)` → 弱拋 `WeakPassword(reasons)`（**rate-limit 不動**，
+   避免使用者按錯 5 次格式就被鎖）
+5. `PartnerRepository::save($snapshot, $new_password)`（內部 update `_partner_password_changed_at` termmeta）
+6. `reset($pseudo_slug, $ip)` 清雙維度計數
+7. audit log（**不含**明文密碼 / hash / token，過濾 `\r \n \t` 防 log injection）
+8. 回 `ChangePasswordOutput{success: true, password_changed_at}`
+
+**安全紀律 8 條**（違反 = 退回重做）：
+
+1. `current_password` 必驗（防 cookie 偷取後改密鎖人）
+2. pseudo-slug `pwchange:{id}` 與 login slug 維度隔離
+3. 改密成功 → password_changed_at 寫入 + Set-Cookie Max-Age=0 → 舊 token 在 `PartnerTokenStore::verify`
+   立即失效（M-1 同秒覆蓋，見 §6.3.2）
+4. 弱密碼**不**污染 rate-limit
+5. response 不洩漏密碼 / hash / token
+6. audit log 不含明文密碼
+7. admin nonce 不能走此 endpoint（permission `partner_token` 不接受 `X-WP-Nonce`）
+8. success path：`Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`
+
+**L-4 fail-fast 縱深防禦**：V2Api callback 對 `_partner_term_id <= 0` 立即拋 `InvalidArgumentException`
+（→ ExceptionMapper fallback 400 validation_failed）。permission_callback 應已透過 `set_param` 寫入合法
+partner_term_id；若未寫入而落到此處（=0 / 負數），代表 permission 流程缺陷或被繞過，直接拋以避免污染
+`pwchange:0` rate-limit 維度。
+
+**IP 取值流程與 partner login DRY**：`filter_var FILTER_VALIDATE_IP` 防呆 +
+`power_shop_partner_login_client_ip` filter hook 共用（reverse proxy 場景插入 trust proxy header 解析）。
+
+#### 6.3.2 PartnerTokenStore 同秒撤銷契約（Phase 6-A1 reviewer M-1）
+
+`PartnerTokenStore::verify` 比對 `issued_at` 與 `password_changed_at` 時，使用**嚴格大於**判斷視為通過：
+
+```php
+// ✅ 正確（Phase 6-A1 reviewer M-1 後）
+if ( null !== $password_changed_at && $issued_at <= $password_changed_at ) {
+    return null;  // 視為已撤銷
+}
+```
+
+**為何要從 `<` 反轉為 `<=`**：閉合「同秒簽發舊 token + 同秒改密」race window：
+
+```
+[時間 T 秒]
+  - 攻擊者持有 partner A 的 cookie / token（issued_at=T）
+  - partner A 在 T 秒（同一秒內）改密 → password_changed_at=T
+  - 若用 issued_at < password_changed_at（T < T = false），舊 token 仍被視為有效
+  - 修補後 issued_at <= password_changed_at（T <= T = true），舊 token 立即失效
+```
+
+換言之，`password_changed_at == issued_at` 同秒視為「已撤銷」，**必須嚴格大於** `password_changed_at`
+才通過。`PartnerTokenStorePasswordRotationTest` 同秒 case 在 Phase 6-A1 已從「視為有效」反轉為「視為已撤銷」契約。
+
 ### 6.4 防暴破（Login）
 
 ```php
