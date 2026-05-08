@@ -878,13 +878,18 @@ delete_transient($key);
 
 ### 6.11 CPT slug 修改的衝突檢查
 
-衝突來源（按嚴重度）：
+衝突來源（按嚴重度，**v2 修訂**：BUG-1 補上第 6 / 7 類，原 v1 漏寫）：
 
 1. **WP 保留字**：`wp-admin`、`wp-json`、`wp-content`、`wp-includes`、`feed`、`comments`、`search`、`author`、`category`、`tag`、`page`
 2. **WooCommerce 核心 page slugs**：`shop`、`cart`、`checkout`、`my-account`、`product`、`product-category`、`product-tag`（`wc_get_page_id()` 動態抓）
-3. **其他已註冊 CPT** rewrite slug
-4. **既有 page slugs**（撈所有 publish/draft `page` 的 `post_name`）
-5. **其他自訂 rewrite rules**（`$wp_rewrite->rules` prefix）
+3. **其他已註冊 CPT** rewrite slug（不含自家 `powershop`，避免自我衝突誤報）
+4. **既有 page slugs**（撈所有 publish/draft `post_type='page'` 的 `post_name`）
+5. **其他自訂 rewrite rules**（`$wp_rewrite->rules` / `extra_rules` / `extra_rules_top` prefix）
+6. **既有 powershop CPT slug**（BUG-1 補洞）：撈 `post_type='powershop' AND post_status IN ('publish','draft')` 的 `post_name`
+   - 必須涵蓋 `draft`：`Phase 4-C1 ProfitShopRenderer` 對 draft shop 開放 `edit_post($shop->id)` 預覽路徑，draft slug 已實際被佔用
+   - 必須**排除** `trash`：trashed shop 的 slug 釋放回池
+7. **既有 profit_partner term slug**（BUG-1 補洞）：`get_term_by('slug', $slug, 'profit_partner')` 命中
+   - 與 `CreatePartner` 內部 slug 預檢用同一個 `conflict_kind = 'profit_partner'`（machine code 統一）
 
 衝突回 422：
 
@@ -893,16 +898,30 @@ delete_transient($key);
   "code": "slug_conflict",
   "message": "URL 前綴衝突",
   "data": {
-    "slug": "shop",
-    "conflicts_with": [
-      {"type": "wc_page", "label": "WooCommerce 商店頁", "url": "/shop/"},
-      {"type": "page", "id": 42, "label": "店面介紹"}
+    "slug": "summer-sale",
+    "conflicts": [
+      {"conflict_kind": "wc_page", "conflicting_slug": "summer-sale", "conflicting_id": null, "conflicting_label": "WooCommerce 商店頁"},
+      {"conflict_kind": "page", "conflicting_slug": "summer-sale", "conflicting_id": 42, "conflicting_label": "店面介紹"},
+      {"conflict_kind": "powershop", "conflicting_slug": "summer-sale", "conflicting_id": 123, "conflicting_label": "Profit Shop 賣場「夏季活動」"},
+      {"conflict_kind": "profit_partner", "conflicting_slug": "summer-sale", "conflicting_id": 7, "conflicting_label": "分潤夥伴「Jerry」"}
     ]
   }
 }
 ```
 
-前端 UX：debounce 呼叫 `profit-settings/validate-slug?slug=xxx` → 即時顯示「✅ 可用」「❌ 已被 WooCommerce 商店頁佔用」。
+`conflict_kind` machine code 列表（與 `specs/api/api.yml` `SlugConflict.conflict_kind` enum 同步鎖死）：
+
+| 值 | 衝突來源 |
+|----|----------|
+| `wp_reserved` | 第 1 類 WordPress 保留字 |
+| `wc_page` | 第 2 類 WooCommerce 核心 page slug |
+| `cpt` | 第 3 類 其他已註冊 CPT 的 rewrite slug |
+| `page` | 第 4 類 既有 page post_name |
+| `rewrite` | 第 5 類 自訂 rewrite rule prefix |
+| `powershop` | 第 6 類 既有 powershop CPT slug（BUG-1 新增） |
+| `profit_partner` | 第 7 類 既有 profit_partner term slug（BUG-1 新增；CreatePartner 也用此值） |
+
+前端 UX：debounce 呼叫 `GET /profit-shops/validate-slug?slug=xxx` → 即時顯示「✅ 可用」「❌ 已被 WooCommerce 商店頁佔用」「❌ 已被 Profit Shop 賣場『夏季活動』佔用」。
 
 變更後**自動 `flush_rewrite_rules()`**。
 

@@ -1,6 +1,6 @@
 <?php
 /**
- * Slug 衝突查找介面（spec §6.11 五類）
+ * Slug 衝突查找介面（spec §6.11 v2 七類，BUG-1 修補後）
  */
 
 declare(strict_types=1);
@@ -12,12 +12,14 @@ namespace J7\PowerShop\Domains\ProfitShop\Application\Service;
  *
  * 對應規格：specs/2026-05-06-profit-shop-design.md §6.11
  *
- * 五類衝突來源：
+ * 涵蓋衝突來源（Detector 會逐一查詢並彙總，與 spec §6.11 v2 編號對齊）：
  * 1. WordPress 保留字
  * 2. WooCommerce 核心 page slugs
- * 3. 其他已註冊 CPT rewrite slug
- * 4. 既有 page slugs
+ * 3. 其他已註冊 CPT rewrite slug（不含自家 powershop）
+ * 4. 既有 page slugs（post_type='page' 的 post_name）
  * 5. 自訂 rewrite rules prefix
+ * 6. 既有 powershop CPT slug（post_type='powershop'，publish/draft 狀態；BUG-1 補 spec gap）
+ * 7. 既有 profit_partner term slug（taxonomy='profit_partner'；BUG-1 補 spec gap）
  *
  * 命中時回傳人類可讀 label（或含 id 的對照陣列），無命中時回 null。
  */
@@ -67,4 +69,27 @@ interface SlugConflictLookupInterface {
 	 * @return string|null 命中時回 label，否則回 null
 	 */
 	public function find_conflicting_rewrite( string $slug ): ?string;
+
+	/**
+	 * 是否與既有 powershop CPT 實例的 post_name 衝突（BUG-1 補洞）
+	 *
+	 * 對應 spec §6.11 第 3 類「既有 powershop CPT slug」。
+	 * 必須涵蓋 publish 與 draft（draft 預覽會走 /profit-shop/{slug}/）；trash 排除。
+	 *
+	 * @param string $slug 候選 slug
+	 *
+	 * @return array{int, string}|null 命中時回 [post_id, label]，否則回 null
+	 */
+	public function find_conflicting_powershop_slug( string $slug ): ?array;
+
+	/**
+	 * 是否與既有 profit_partner term slug 衝突（BUG-1 副作用補洞）
+	 *
+	 * 對應 spec §6.11 第 4 類「既有 profit_partner term slug」。
+	 *
+	 * @param string $slug 候選 slug
+	 *
+	 * @return array{int, string}|null 命中時回 [term_id, label]，否則回 null
+	 */
+	public function find_conflicting_partner_term_slug( string $slug ): ?array;
 }

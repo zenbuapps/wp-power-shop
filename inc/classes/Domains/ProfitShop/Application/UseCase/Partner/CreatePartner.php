@@ -48,11 +48,13 @@ final class CreatePartner {
 		$slug = new PartnerSlug( $input->slug ); // 觸發 InvalidPartnerSlug
 
 		// 預先檢查 slug 是否已被佔用，回 409 slug_conflict（避免 wp_insert_term 拋 term_exists 走 500）。
+		// conflict_kind 與 SlugConflictDetector / WpSlugConflictLookup 統一為 'profit_partner'
+		// （與 taxonomy slug 一致；BUG-1 雙審 BLOCKING-2 修正：統一 partner conflict 命名）。
 		if ( null !== $this->partnerRepo->find_by_slug( $slug->value() ) ) {
 			throw new SlugConflictException(
 				[
 					new SlugConflict(
-						conflict_kind: 'partner',
+						conflict_kind: 'profit_partner',
 						conflicting_slug: $slug->value(),
 						conflicting_id: null,
 						conflicting_label: '已存在同名 Partner'

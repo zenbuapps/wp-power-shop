@@ -848,11 +848,21 @@ components:
 
     SlugConflict:
       type: object
-      description: Slug 衝突來源（spec §6.11，5 類）
+      description: |
+        Slug 衝突來源（spec §6.11）。BUG-1 修補後 conflict_kind 使用 enum 鎖死，
+        且補上「既有 powershop CPT slug」與「既有 profit_partner term slug」兩類。
       properties:
         conflict_kind:
           type: string
-          description: 衝突類型 machine code（profit_shop / product / page / term / reserved）
+          description: 衝突類型 machine code（與 SlugConflictDetector / CreatePartner 共用枚舉）
+          enum:
+            - wp_reserved      # WordPress 保留字
+            - wc_page          # WooCommerce 核心 page slug
+            - cpt              # 其他已註冊 CPT 的 rewrite slug（不含自家 powershop）
+            - page             # 既有 page post_name
+            - rewrite          # 自訂 rewrite rule prefix
+            - powershop        # 既有 powershop CPT slug（BUG-1 補洞，spec §6.11 第 6 類）
+            - profit_partner   # 既有 profit_partner term slug（BUG-1 補洞 + CreatePartner 統一）
         conflicting_slug:
           type: string
         conflicting_id:

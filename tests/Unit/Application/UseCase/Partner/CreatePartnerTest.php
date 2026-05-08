@@ -17,6 +17,7 @@ use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerOutput;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\CreatePartner;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\InvalidPartnerSlug;
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\SlugConflictException;
 use PHPUnit\Framework\TestCase;
 use Tests\Unit\Application\Fakes\InMemoryPartnerRepository;
 
@@ -84,6 +85,52 @@ final class CreatePartnerTest extends TestCase {
 
 		$this->expectException( InvalidPartnerSlug::class );
 		$useCase->execute( $input );
+	}
+
+	/**
+	 * BUG-1 BLOCKING-2：slug 已被佔用 → 拋 SlugConflictException，
+	 * 且 conflict_kind 必為 'profit_partner'（與 SlugConflictDetector / taxonomy slug 一致）
+	 *
+	 * 雙審紀錄：BUG-1 反轉 conflict_kind 'partner' → 'profit_partner'，
+	 * 防止與 ValidateSlugUseCase 偵測到的 partner term 衝突命名分裂。
+	 *
+	 * @group error
+	 * @group bug_1
+	 */
+	public function test_slug_conflict_uses_unified_profit_partner_kind(): void {
+		// 預先建立同名 partner，模擬 slug 被佔用
+		$useCase  = new CreatePartner( partnerRepo: $this->partnerRepo );
+		$existing = PartnerInput::from_array(
+			[
+				'name'     => 'Existing',
+				'slug'     => 'duplicate-jerry',
+				'password' => 'p',
+			]
+		);
+		$useCase->execute( $existing );
+
+		// 第二次同 slug 必拋 SlugConflictException
+		$dup = PartnerInput::from_array(
+			[
+				'name'     => 'Another Jerry',
+				'slug'     => 'duplicate-jerry',
+				'password' => 'p',
+			]
+		);
+
+		try {
+			$useCase->execute( $dup );
+			$this->fail( 'duplicate slug 必須拋 SlugConflictException' );
+		} catch ( SlugConflictException $e ) {
+			$conflicts = $e->getConflicts();
+			$this->assertCount( 1, $conflicts );
+			$this->assertSame(
+				'profit_partner',
+				$conflicts[0]->conflict_kind,
+				"BUG-1 BLOCKING-2：partner slug 衝突 conflict_kind 必為 'profit_partner'，不可為 'partner'"
+			);
+			$this->assertSame( 'duplicate-jerry', $conflicts[0]->conflicting_slug );
+		}
 	}
 
 	/**

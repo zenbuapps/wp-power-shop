@@ -126,6 +126,34 @@ final class WpSlugConflictLookup implements SlugConflictLookupInterface {
 	}
 
 	/**
+	 * 共用 helper：以 post_type + slug 查 publish/draft 的單筆 post（BUG-1 MAJOR-3 抽 DRY）
+	 *
+	 * 涵蓋 publish + draft，排除 trash（trashed slug 釋放回池）.
+	 * `find_conflicting_page` 與 `find_conflicting_powershop_slug` 共用此 helper，
+	 * 各自處理 label 組裝（page 用 post_title、powershop 用「Profit Shop 賣場「post_title」」）.
+	 *
+	 * @param string $post_type post_type 名稱（'page' / 'powershop' 等）
+	 * @param string $slug      候選 slug（會作為 post_name 查詢）
+	 *
+	 * @return \stdClass|null 命中時回 stdClass{ID:int|string, post_title:string}；無命中回 null
+	 */
+	private function find_post_by_post_type_and_slug( string $post_type, string $slug ): ?\stdClass {
+		global $wpdb;
+
+		// 使用 prepare 防 SQL injection；雙保險 trash 排除（post_status IN 白名單）。
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_name = %s AND post_status IN ('publish', 'draft') LIMIT 1",
+				$post_type,
+				$slug
+			)
+		);
+
+		return $row instanceof \stdClass ? $row : null;
+	}
+
+	/**
 	 * 是否與既有 page slug（post_name）衝突
 	 *
 	 * @param string $slug 候選 slug
@@ -133,23 +161,78 @@ final class WpSlugConflictLookup implements SlugConflictLookupInterface {
 	 * @return array{int, string}|null
 	 */
 	public function find_conflicting_page( string $slug ): ?array {
-		global $wpdb;
+		$row = $this->find_post_by_post_type_and_slug( 'page', $slug );
 
-		// 使用 prepare 防 SQL injection。
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-		$row = $wpdb->get_row(
-			$wpdb->prepare(
-				"SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_name = %s AND post_status IN ('publish', 'draft') LIMIT 1",
-				'page',
-				$slug
-			)
-		);
-
-		if ( ! $row ) {
+		if ( null === $row ) {
 			return null;
 		}
 
 		return [ (int) $row->ID, (string) $row->post_title ];
+	}
+
+	/**
+	 * 是否與既有 powershop CPT 實例的 post_name 衝突（BUG-1 補洞）
+	 *
+	 * 對應 spec §6.11 第 6 類「既有 powershop CPT slug」（v2 修訂後編號）。
+	 * 涵蓋 publish + draft（draft 預覽會走 /profit-shop/{slug}/，4-C1 ProfitShopRenderer），
+	 * 排除 trash（trashed shop slug 釋放回池）.
+	 *
+	 * 補 spec gap 紀錄：BUG-1 雙審 MAJOR-2 修正 spec §6.11 v1 漏寫第 6 / 7 類，
+	 * 本 method 是補 spec gap，不是補實作 gap.
+	 *
+	 * @param string $slug 候選 slug
+	 *
+	 * @return array{int, string}|null 命中時回 [post_id, label]，否則回 null
+	 */
+	public function find_conflicting_powershop_slug( string $slug ): ?array {
+		$row = $this->find_post_by_post_type_and_slug( CptRegistrar::POST_TYPE, $slug );
+
+		if ( null === $row ) {
+			return null;
+		}
+
+		$title = (string) $row->post_title;
+		$label = '' === $title
+		? \__( 'Profit Shop 賣場', 'power_shop' )
+		: \sprintf(
+				/* translators: %s: 賣場標題 */
+				\__( 'Profit Shop 賣場「%s」', 'power_shop' ),
+				$title
+			);
+
+		return [ (int) $row->ID, $label ];
+	}
+
+	/**
+	 * 是否與既有 profit_partner term slug 衝突（BUG-1 副作用補洞）
+	 *
+	 * 對應 spec §6.11 第 7 類「既有 profit_partner term slug」（v2 修訂後編號）.
+	 * 與 CreatePartner UseCase 內部 slug 預檢使用同一個 conflict_kind = 'profit_partner'.
+	 *
+	 * 補 spec gap 紀錄：BUG-1 雙審 MAJOR-2 修正 spec §6.11 v1 漏寫第 6 / 7 類，
+	 * 本 method 是補 spec gap，不是補實作 gap.
+	 *
+	 * @param string $slug 候選 slug
+	 *
+	 * @return array{int, string}|null 命中時回 [term_id, label]，否則回 null
+	 */
+	public function find_conflicting_partner_term_slug( string $slug ): ?array {
+		$term = \get_term_by( 'slug', $slug, TaxonomyRegistrar::TAXONOMY );
+
+		if ( ! $term instanceof \WP_Term ) {
+			return null;
+		}
+
+		$name  = (string) $term->name;
+		$label = '' === $name
+		? \__( '分潤夥伴', 'power_shop' )
+		: \sprintf(
+				/* translators: %s: 夥伴名稱 */
+				\__( '分潤夥伴「%s」', 'power_shop' ),
+				$name
+			);
+
+		return [ (int) $term->term_id, $label ];
 	}
 
 	/**

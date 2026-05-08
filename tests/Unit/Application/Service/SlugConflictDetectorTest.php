@@ -130,29 +130,70 @@ final class SlugConflictDetectorTest extends TestCase {
 	}
 
 	/**
+	 * 衝突類型 6（BUG-1 補洞）：既有 powershop CPT slug
+	 *
+	 * @group error
+	 * @group bug_1
+	 */
+	public function test_detects_existing_powershop_slug_conflict(): void {
+		$lookup   = $this->makeLookup( powershops: [ 'summer-sale' => [ 123, 'Profit Shop 賣場「夏季活動」' ] ] );
+		$detector = new SlugConflictDetector( lookup: $lookup );
+
+		$conflicts = $detector->detect( 'summer-sale', 'profit_shop_slug' );
+
+		$this->assertCount( 1, $conflicts );
+		$this->assertSame( 'powershop', $conflicts[0]->conflict_kind );
+		$this->assertSame( 123, $conflicts[0]->conflicting_id );
+		$this->assertSame( 'Profit Shop 賣場「夏季活動」', $conflicts[0]->conflicting_label );
+	}
+
+	/**
+	 * 衝突類型 7（BUG-1 副作用補洞）：既有 profit_partner term slug
+	 *
+	 * @group error
+	 * @group bug_1
+	 */
+	public function test_detects_existing_profit_partner_term_slug_conflict(): void {
+		$lookup   = $this->makeLookup( partner_terms: [ 'jerry' => [ 7, '分潤夥伴「Jerry」' ] ] );
+		$detector = new SlugConflictDetector( lookup: $lookup );
+
+		$conflicts = $detector->detect( 'jerry', 'profit_shop_slug' );
+
+		$this->assertCount( 1, $conflicts );
+		$this->assertSame( 'profit_partner', $conflicts[0]->conflict_kind );
+		$this->assertSame( 7, $conflicts[0]->conflicting_id );
+	}
+
+	/**
 	 * 動態建立 SlugConflictLookup 替身（avoid fatal during file include）
 	 *
-	 * @param array<string, string>             $wp_reserved slug => label
-	 * @param array<string, string>             $wc_pages    slug => label
-	 * @param array<string, array{int, string}> $cpts        slug => [post_type_id_placeholder, label]
-	 * @param array<string, array{int, string}> $pages       slug => [post_id, label]
-	 * @param array<string, string>             $rewrites    slug => label
+	 * @param array<string, string>             $wp_reserved   slug => label
+	 * @param array<string, string>             $wc_pages      slug => label
+	 * @param array<string, array{int, string}> $cpts          slug => [post_type_id_placeholder, label]
+	 * @param array<string, array{int, string}> $pages         slug => [post_id, label]
+	 * @param array<string, string>             $rewrites      slug => label
+	 * @param array<string, array{int, string}> $powershops    slug => [post_id, label]（BUG-1 補洞）
+	 * @param array<string, array{int, string}> $partner_terms slug => [term_id, label]（BUG-1 副作用補洞）
 	 */
 	private function makeLookup(
 		array $wp_reserved = [],
 		array $wc_pages = [],
 		array $cpts = [],
 		array $pages = [],
-		array $rewrites = []
+		array $rewrites = [],
+		array $powershops = [],
+		array $partner_terms = []
 	): SlugConflictLookupInterface {
-		return new class( $wp_reserved, $wc_pages, $cpts, $pages, $rewrites ) implements SlugConflictLookupInterface {
+		return new class( $wp_reserved, $wc_pages, $cpts, $pages, $rewrites, $powershops, $partner_terms ) implements SlugConflictLookupInterface {
 
 			public function __construct(
 				private readonly array $wp_reserved,
 				private readonly array $wc_pages,
 				private readonly array $cpts,
 				private readonly array $pages,
-				private readonly array $rewrites
+				private readonly array $rewrites,
+				private readonly array $powershops,
+				private readonly array $partner_terms
 			) {}
 
 			public function is_wp_reserved( string $slug ): ?string {
@@ -173,6 +214,14 @@ final class SlugConflictDetectorTest extends TestCase {
 
 			public function find_conflicting_rewrite( string $slug ): ?string {
 				return $this->rewrites[ $slug ] ?? null;
+			}
+
+			public function find_conflicting_powershop_slug( string $slug ): ?array {
+				return $this->powershops[ $slug ] ?? null;
+			}
+
+			public function find_conflicting_partner_term_slug( string $slug ): ?array {
+				return $this->partner_terms[ $slug ] ?? null;
 			}
 		};
 	}

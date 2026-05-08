@@ -96,6 +96,28 @@ final class SlugConflictDetector implements SlugConflictDetectorInterface {
 			);
 		}
 
+		// BUG-1 補洞：既有 powershop CPT slug（spec §6.11 第 3 類）
+		$powershop = $this->lookup->find_conflicting_powershop_slug( $slug );
+		if ( null !== $powershop ) {
+			$conflicts[] = new SlugConflict(
+				conflict_kind: 'powershop',
+				conflicting_slug: $slug,
+				conflicting_id: (int) ( $powershop[0] ?? 0 ),
+				conflicting_label: (string) ( $powershop[1] ?? '' )
+			);
+		}
+
+		// BUG-1 副作用補洞：既有 profit_partner term slug（spec §6.11 第 4 類）
+		$partner = $this->lookup->find_conflicting_partner_term_slug( $slug );
+		if ( null !== $partner ) {
+			$conflicts[] = new SlugConflict(
+				conflict_kind: 'profit_partner',
+				conflicting_slug: $slug,
+				conflicting_id: (int) ( $partner[0] ?? 0 ),
+				conflicting_label: (string) ( $partner[1] ?? '' )
+			);
+		}
+
 		return $conflicts;
 	}
 }
