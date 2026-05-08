@@ -12,8 +12,10 @@
  *   2. issue() payload 新增 issued_at = clock->now()
  *   3. verify()：取出 token 的 issued_at + partners->get_password_changed_at()
  *      - password_changed_at === null → 不檢查（向後相容；從未變更密碼）
- *      - issued_at >= password_changed_at → 通過（同秒視為「同時或之後簽發」）
- *      - issued_at < password_changed_at → 視為已撤銷，回 null
+ *      - issued_at > password_changed_at → 通過（必須嚴格大於）
+ *      - issued_at <= password_changed_at → 視為已撤銷，回 null
+ *        （Phase 6-A1 reviewer M-1 契約反轉：縱深防禦覆蓋同秒 race window，
+ *         舊契約為 issued_at >= changed_at 通過，新契約為嚴格大於）
  *   4. hash_token() 改 hash_hmac('sha256', $token, $salt_provider->get('auth'))
  *
  * 紅燈狀態：
@@ -168,25 +170,29 @@ final class PartnerTokenStorePasswordRotationTest extends TestCase {
 	/**
 	 * 關鍵邊界：issued_at == password_changed_at（同秒）
 	 *
-	 * 規範：>= 不撤銷（同時或之後簽發都算合法）
+	 * Phase 6-A1 reviewer M-1：契約反轉。
+	 *   - 原契約：>= 不撤銷（同時或之後簽發都算合法）
+	 *   - 新契約：> 才通過；同秒視為已撤銷（縱深防禦覆蓋 race window）
+	 *
+	 * 改密 endpoint 在 1 秒內可能完成「issue 舊 token → 改密 → 該 token 後續被使用」，
+	 * 若沿用 `issued_at >= changed_at` 通過，舊 token 在同秒視窗內仍被誤判有效.
+	 * 改成 `issued_at > changed_at`（同秒視為撤銷）以閉合此 race window.
 	 *
 	 * @group security
 	 * @group edge
 	 */
-	public function test_verify_treats_same_second_password_change_as_not_revoked(): void {
-		// password_changed_at 預先設成 100
+	public function test_verify_treats_same_second_password_change_as_revoked(): void {
+		// Phase 6-A1 reviewer M-1：契約反轉。
+		// 原契約：issued_at == password_changed_at（同秒）→ 仍視為有效。
+		// 新契約：issued_at == password_changed_at（同秒）→ 視為已撤銷（race window 縱深防禦）。
 		$this->partners->set_password_changed_at( self::PARTNER_TERM_ID, 100 );
-
 		$store = $this->make_store();
-
-		// 同秒簽發 token（issued_at=100）
 		$this->clock->set_to( 100 );
 		$result = $store->issue( self::PARTNER_TERM_ID );
 
-		$this->assertSame(
-			self::PARTNER_TERM_ID,
+		$this->assertNull(
 			$store->verify( $result['token'] ),
-			'issued_at == password_changed_at（同秒）視為「同時或之後簽發」→ 不撤銷'
+			'issued_at == password_changed_at（同秒）視為已撤銷 → 縱深覆蓋 race window'
 		);
 	}
 

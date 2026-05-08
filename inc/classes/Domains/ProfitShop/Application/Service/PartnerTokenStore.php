@@ -100,10 +100,12 @@ final class PartnerTokenStore {
 	 *   1. 空字串 → null
 	 *   2. transient 不存在或格式錯誤 → null
 	 *   3. 內層 expires_at 過期 → null
-	 *   4. password_changed_at 撤銷比對：
+	 *   4. password_changed_at 撤銷比對（Phase 6-A1 reviewer M-1：縱深防禦覆蓋同秒 race window）：
 	 *      - 為 null（從未變更） → 不檢查
-	 *      - issued_at >= password_changed_at → 通過（同秒視為「同時或之後簽發」）
-	 *      - issued_at < password_changed_at → 視為已撤銷，回 null
+	 *      - issued_at > password_changed_at → 通過（必須嚴格大於）
+	 *      - issued_at <= password_changed_at → 視為已撤銷，回 null
+	 *      （issued_at == password_changed_at 同秒視為已撤銷，
+	 *       閉合「同秒簽發 + 同秒改密」的 race window）
 	 *   5. 通過 → 回 partner_term_id
 	 *
 	 * @param string $token 明文 token
@@ -135,7 +137,7 @@ final class PartnerTokenStore {
 		$partner_id = (int) $payload['partner_term_id'];
 		$issued_at  = (int) $payload['issued_at'];
 
-		// password rotation 撤銷比對（spec §6.3）
+		// password rotation 撤銷比對（spec §6.3 + Phase 6-A1 reviewer M-1）
 		// fail-closed：DB 異常一律視為驗證失敗（reviewer LOW-T2-2）.
 		// 若 partner repo 拋（例如 DB 連線失敗），不該讓 token 「順利通過」造成繞過撤銷邏輯.
 		try {
@@ -149,7 +151,10 @@ final class PartnerTokenStore {
 			);
 			return null;
 		}
-		if ( null !== $password_changed_at && $issued_at < $password_changed_at ) {
+		// Phase 6-A1 reviewer M-1：縱深防禦覆蓋同秒 race window。
+		// issued_at == password_changed_at 視為已撤銷（必須嚴格大於才通過）,
+		// 防範「同秒簽發舊 token + 同秒改密」場景下舊 token 仍被誤判為有效.
+		if ( null !== $password_changed_at && $issued_at <= $password_changed_at ) {
 			return null;
 		}
 

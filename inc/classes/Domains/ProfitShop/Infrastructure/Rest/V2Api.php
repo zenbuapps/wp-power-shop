@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest;
 
+use J7\PowerShop\Domains\ProfitShop\Application\DTO\ChangePasswordInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerLoginInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\ProfitShopInput;
@@ -19,6 +20,7 @@ use J7\PowerShop\Domains\ProfitShop\Application\Service\SettingsRepository;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\SlugConflictDetector;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Migration\ImportLegacyShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Migration\ListImportableLegacyShops;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\ChangePasswordUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\GetCurrentPartnerUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\LoginPartnerUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\LogoutPartnerUseCase;
@@ -266,6 +268,12 @@ final class V2Api extends ApiBase {
 			[
 				'endpoint' => 'partner-auth/me',
 				'method' => 'get',
+				'permission_callback' => $partner_token,
+			],
+			// §6.3 partner 自助修密碼（Phase 6-A1）
+			[
+				'endpoint' => 'partner-auth/change-password',
+				'method' => 'post',
 				'permission_callback' => $partner_token,
 			],
 			// §4.5 PartnerReports（partner token 認證）
@@ -1031,6 +1039,122 @@ final class V2Api extends ApiBase {
 		}
 	}
 
+	/**
+	 * POST /partner-auth/change-password
+	 *
+	 * Partner 自助修密碼（Phase 6-A1）。對應規格：specs/2026-05-06-profit-shop-design.md §6.3。
+	 *
+	 * 認證：partner_token_permission（cookie / X-Partner-Token / Bearer 三選一），
+	 * permission_callback 已將 partner_term_id 從 token 解出並寫入 `_partner_term_id`，
+	 * **永不從 query string / body 讀 partner_term_id**（防 cross-partner 越權）。
+	 *
+	 * Body：{ current_password: string, new_password: string }（**不過 sanitize_text_field**，
+	 * 避免 strip tags / collapse 空白破壞密碼字面值）。
+	 *
+	 * 200 回應：
+	 *   - body：{ success: true, password_changed_at: int }（裸 payload，與其他 partner endpoint 一致）
+	 *   - Set-Cookie：profit_partner_token 清空 + Max-Age=0（強制重新登入；
+	 *     password_changed_at 寫入 termmeta 後，舊 token 在 PartnerTokenStore::verify
+	 *     會被識別為已撤銷，這裡的 cookie 清空是 UX 層的同步釋放）
+	 *   - Cache-Control：no-store, no-cache, must-revalidate（防 proxy / browser 快取響應內容）
+	 *
+	 * 失敗對映：
+	 *   - 401 unauthorized：未帶 cookie / token（permission_callback 拒絕）
+	 *   - 400 validation_failed：缺欄位（fallback InvalidArgumentException → DomainException）
+	 *   - 401 unauthorized：current_password 錯（InvalidCredentials → 既有 mapping）
+	 *   - 422 weak_password：new_password 弱（WeakPassword → ExceptionMapper 攜帶 reasons）
+	 *   - 429 rate_limited：失敗 5 次後第 6 次（TooManyAttempts → 含 Retry-After）
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_partner_auth_change_password_callback( $request ): \WP_REST_Response {
+		try {
+			// partner_term_id 鎖死於 token（permission_callback 寫入 `_partner_term_id`）
+			$partner_term_id = (int) $request->get_param( '_partner_term_id' );
+
+			// reviewer L-4 phase 6-A1：defense-in-depth fail-fast.
+			// permission_callback 應已透過 set_param 寫入合法 partner_term_id；
+			// 若未寫入而落到此處（=0 / 負數），代表 permission 流程缺陷或被繞過，
+			// 直接拋以避免污染 'pwchange:0' rate-limit 維度.
+			// 走 ExceptionMapper fallback → 400 validation_failed（與既有 missing field 一致）.
+			if ( $partner_term_id <= 0 ) {
+				throw new \InvalidArgumentException( '無效的 partner_term_id（permission_callback 應已 set_param）' );
+			}
+
+			// JSON body：**不**過 sanitize_text_field（密碼欄位的 strip tags / collapse 空白會破壞字面值）
+			$params = $request->get_json_params();
+			if ( ! is_array( $params ) ) {
+				$params = $request->get_body_params();
+			}
+			if ( ! is_array( $params ) ) {
+				$params = [];
+			}
+
+			$current_password = isset( $params['current_password'] ) && is_string( $params['current_password'] )
+			? $params['current_password']
+			: '';
+			$new_password     = isset( $params['new_password'] ) && is_string( $params['new_password'] )
+			? $params['new_password']
+			: '';
+
+			if ( '' === $current_password || '' === $new_password ) {
+				// 透過 InvalidArgumentException 走 ExceptionMapper fallback → 400 validation_failed
+				throw new \InvalidArgumentException( '缺少必要欄位：current_password / new_password' );
+			}
+
+			// IP 取值流程與 partner login 一致（DRY）：filter_var 防呆 + filter hook 支援 trust proxy
+			$ip_raw = isset( $_SERVER['REMOTE_ADDR'] )
+			? \sanitize_text_field( \wp_unslash( (string) $_SERVER['REMOTE_ADDR'] ) )
+			: '';
+			/** @var string|false $validated */
+			$validated = '' === $ip_raw ? false : filter_var( $ip_raw, FILTER_VALIDATE_IP );
+			$ip        = false === $validated ? null : (string) $validated;
+
+			/**
+			 * Filter the resolved client IP for partner change-password rate-limit.
+			 *
+			 * 與 partner login 共用同一個 filter hook（reviewer M-1）.
+			 *
+			 * @param string|null      $ip      已 filter_var FILTER_VALIDATE_IP 驗證過的 IP，無效為 null.
+			 * @param \WP_REST_Request $request 當前 REST request.
+			 */
+			$ip = \apply_filters( 'power_shop_partner_login_client_ip', $ip, $request );
+
+			$input   = new ChangePasswordInput(
+				partner_term_id: $partner_term_id,
+				current_password: $current_password,
+				new_password: $new_password,
+			);
+			$useCase = new ChangePasswordUseCase(
+				partnerRepo: PartnerTermRepository::instance(),
+				limiter: self::make_partner_login_rate_limiter(),
+				clock: SystemClock::instance(),
+			);
+			$output  = $useCase->execute( $input, $ip );
+
+			$response = new \WP_REST_Response( $output->to_array(), 200 );
+
+			// 清空 cookie：強制 partner 重新登入（path 與 set 時一致才能清除）
+			$response->header(
+				'Set-Cookie',
+				sprintf(
+					'profit_partner_token=; HttpOnly; Secure; SameSite=Lax; Path=%s; Max-Age=0',
+					self::PARTNER_COOKIE_PATH
+				)
+			);
+
+			// 強制不快取：防 proxy / browser 快取響應（success-only path 加，與 regenerate-password 一致）
+			$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate' );
+			$response->header( 'Pragma', 'no-cache' );
+
+			return $response;
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
 	// ========== §4.5 partner-reports callbacks ==========
 
 	/**
@@ -1130,18 +1254,28 @@ final class V2Api extends ApiBase {
 	 * @return PartnerAuthService
 	 */
 	private static function make_partner_auth_service(): PartnerAuthService {
-		$limiter = new LoginRateLimiter(
+		return new PartnerAuthService(
+			partnerRepo: PartnerTermRepository::instance(),
+			limiter: self::make_partner_login_rate_limiter(),
+		);
+	}
+
+	/**
+	 * 建立 LoginRateLimiter（partner login 與 partner change-password 共用）
+	 *
+	 * 與 partner login 同樣 max_attempts=5 + window_seconds=900；slug 維度由 caller 決定
+	 * （login 用 partner slug；change-password 用 pseudo-slug "pwchange:{id}"）.
+	 *
+	 * @return LoginRateLimiter
+	 */
+	private static function make_partner_login_rate_limiter(): LoginRateLimiter {
+		return new LoginRateLimiter(
 			transients: WpTransientStore::instance(),
 			clock: SystemClock::instance(),
 			email: WpAdminEmailNotifier::instance(),
 			salt_provider: new WpSaltProvider(),
 			max_attempts: 5,
 			window_seconds: 900,
-		);
-
-		return new PartnerAuthService(
-			partnerRepo: PartnerTermRepository::instance(),
-			limiter: $limiter,
 		);
 	}
 

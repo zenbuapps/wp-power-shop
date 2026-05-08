@@ -26,6 +26,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Exception\ProfitShopNotFound;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\RateLimitExceeded;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\SlugConflictException;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
+use J7\PowerShop\Domains\ProfitShop\Domain\Exception\WeakPassword;
 
 /**
  * Domain Exception 對映成 WP_REST_Response 的工具
@@ -37,6 +38,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
  *   400 validation_failed      InvalidPriceOverride / InvalidProfitRate / InvalidPartnerSlug / InvalidVariation
  *   409 slug_conflict          SlugConflictException（payload 帶 conflicts）
  *   422 invalid_state_transition InvalidStatusTransition
+ *   422 weak_password          WeakPassword（body.data.reasons 攜帶弱密碼原因）
  *   409 partner_in_use         PartnerStillInUseException
  *   401 unauthorized           InvalidCredentials
  *   429 rate_limited           TooManyAttempts / RateLimitExceeded（含 Retry-After header）
@@ -131,6 +133,18 @@ final class ExceptionMapper {
 		// 422 invalid_state_transition
 		if ( $e instanceof InvalidStatusTransition ) {
 			return [ 422, 'invalid_state_transition', [], [] ];
+		}
+
+		// 422 weak_password（partner 自助修密碼新密碼弱；body.data.reasons 攜帶 reason 代碼）
+		// 對映模式對齊 SlugConflictException：將結構化原因放在 data 子物件，前端據以做 i18n。
+		// 必須**在 \DomainException fallback 之前**判斷，否則會被 fallback 對映成 400 validation_failed。
+		if ( $e instanceof WeakPassword ) {
+			return [
+				422,
+				'weak_password',
+				[ 'data' => [ 'reasons' => $e->getReasons() ] ],
+				[],
+			];
 		}
 
 		// 422 legacy_unimportable
