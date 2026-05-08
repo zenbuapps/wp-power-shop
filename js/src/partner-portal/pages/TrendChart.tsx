@@ -35,7 +35,7 @@ import { init as echartsInit, type ECharts, type EChartsOption } from 'echarts'
 import { debounce } from 'lodash-es'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { type TTrendInterval } from '../api/reports'
+import { type TTrendInterval, type TTrendPoint } from '../api/reports'
 import { useTrend } from '../hooks/useTrend'
 import { formatAmount } from '../utils/format'
 import { mapPartnerException } from '../utils/partnerExceptionMapper'
@@ -86,19 +86,26 @@ const TrendChartComponent: React.FC<TTrendChartProps> = ({
 		}
 	}, [])
 
+	// BUG-2 防禦縱深：即使 useTrend 已 normalize 為陣列，
+	// 元件端再加 Array.isArray guard，避免 hook 簽名變動時 component 立刻崩。
+	const points = useMemo<TTrendPoint[]>(
+		() => (Array.isArray(data) ? data : []),
+		[data]
+	)
+
 	// 計算 series 是否全為 0（empty state 判斷）
 	const isEmpty = useMemo(() => {
-		if (!data || data.length === 0) return true
-		return data.every((point) => parseFloat(point.profit ?? '0') === 0)
-	}, [data])
+		if (points.length === 0) return true
+		return points.every((point) => parseFloat(point.profit ?? '0') === 0)
+	}, [points])
 
 	// 推送資料到 echarts
 	useEffect(() => {
 		const chart = chartInstanceRef.current
-		if (!chart || !data) return
+		if (!chart) return
 
-		const xAxisData = data.map((point) => point.date)
-		const seriesData = data.map((point) => {
+		const xAxisData = points.map((point) => point.date)
+		const seriesData = points.map((point) => {
 			const num = parseFloat(point.profit ?? '0')
 			return Number.isNaN(num) ? 0 : num
 		})
@@ -120,7 +127,7 @@ const TrendChartComponent: React.FC<TTrendChartProps> = ({
 				type: 'category',
 				data: xAxisData,
 				axisLabel: {
-					rotate: data.length > 14 ? 45 : 0,
+					rotate: points.length > 14 ? 45 : 0,
 				},
 			},
 			yAxis: {
@@ -142,7 +149,7 @@ const TrendChartComponent: React.FC<TTrendChartProps> = ({
 		}
 
 		chart.setOption(option, true)
-	}, [data])
+	}, [points])
 
 	const handleIntervalChange = (value: string | number): void => {
 		setIntervalValue(value as TTrendInterval)

@@ -94,8 +94,17 @@ export type TTrendPoint = {
 	total: string
 }
 
-/** /partner-reports/trend 後端回傳 payload（依 spec api.yml TrendOutput 為陣列） */
-export type TTrendOutput = TTrendPoint[]
+/**
+ * /partner-reports/trend 後端回傳 payload
+ *
+ * BUG-2 修補：對齊 OpenAPI spec `TrendOutput`（specs/api/api.yml L1200-1209）
+ * 與後端 `TrendReport::to_array()`（DTO 序列化為 `{series: [...]}`）。
+ * 之前誤將前端 type 寫成裸陣列，導致 TrendChart 拿到 `{series: [...]}` 物件後
+ * 呼叫 `data.every(...)` 拋 `TypeError: a.every is not a function`。
+ */
+export type TTrendOutput = {
+	series: TTrendPoint[]
+}
 
 /**
  * 取得 partner 趨勢報表（GET /partner-reports/trend）
