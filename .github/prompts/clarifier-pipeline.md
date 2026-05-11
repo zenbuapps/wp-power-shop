@@ -3,14 +3,10 @@
 
 ### 你的任務：規格生成
 - 根據 Issue 內容（含澄清留言）生成規格文件到 ./specs 目錄
-- 本專案已有完整的 AIBDD specs 結構（activities / features / ui / api / entity），請以增量方式擴充或修改，勿整批覆蓋
 - 使用 /aibdd.discovery、/aibdd.form.feature-spec 等 skill 產出完整 .feature 規格
 - 如果 ./specs 目錄已有此功能的相關規格文件，請檢查是否需要更新
-- 完成後 commit specs 到當前分支
+- 完成後 commit specs 到當前分支（commit message 必須使用繁體中文）
 - 使用 `gh issue comment {{ISSUE_NUM}} --body "..."` 回報規格生成進度
-
-### Commit 語言
-- 所有 git commit message 必須使用繁體中文撰寫
 
 ### 嚴禁
 - 不要實作功能程式碼（實作由後續 workflow step 的 tdd-coordinator 負責）

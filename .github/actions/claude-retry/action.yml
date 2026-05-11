@@ -36,15 +36,16 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # ── Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin) ──
+    - name: "Ensure ~/.local/bin exists (attempt 1)"
+      shell: bash
+      run: mkdir -p ~/.local/bin
+
     # ── Attempt 1/3 ──
     - name: "Attempt 1/3"
       id: attempt_1
       continue-on-error: true
       uses: anthropics/claude-code-action@v1
-      env:
-        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"
-        MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES: "3"
-        ZENBU_HOOKS_ENABLED: "1"
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         additional_permissions: |
@@ -67,16 +68,18 @@ runs:
         echo "::warning::Attempt 1 failed, retrying in 30s..."
         sleep 30
 
+    # ── Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin) ──
+    - name: "Ensure ~/.local/bin exists (attempt 2)"
+      if: steps.attempt_1.outcome == 'failure'
+      shell: bash
+      run: mkdir -p ~/.local/bin
+
     # ── Attempt 2/3 ──
     - name: "Attempt 2/3"
       id: attempt_2
       if: steps.attempt_1.outcome == 'failure'
       continue-on-error: true
       uses: anthropics/claude-code-action@v1
-      env:
-        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"
-        MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES: "3"
-        ZENBU_HOOKS_ENABLED: "1"
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         additional_permissions: |
@@ -99,16 +102,18 @@ runs:
         echo "::warning::Attempt 2 failed, retrying in 60s..."
         sleep 60
 
+    # ── Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin) ──
+    - name: "Ensure ~/.local/bin exists (attempt 3)"
+      if: steps.attempt_1.outcome == 'failure' && steps.attempt_2.outcome == 'failure'
+      shell: bash
+      run: mkdir -p ~/.local/bin
+
     # ── Attempt 3/3 (final) ──
     - name: "Attempt 3/3 (final)"
       id: attempt_3
       if: steps.attempt_1.outcome == 'failure' && steps.attempt_2.outcome == 'failure'
       continue-on-error: true
       uses: anthropics/claude-code-action@v1
-      env:
-        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"
-        MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES: "3"
-        ZENBU_HOOKS_ENABLED: "1"
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         additional_permissions: |

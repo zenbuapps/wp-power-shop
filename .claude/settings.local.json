@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf output/playwright/browser-test/screenshots/* output/playwright/browser-test/videos/*)",
+      "Bash(mkdir -p output/playwright/browser-test/screenshots output/playwright/browser-test/videos)"
+    ]
+  }
+}

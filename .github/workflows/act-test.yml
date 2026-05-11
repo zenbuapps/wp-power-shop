@@ -7,16 +7,12 @@
 #     --container-options "--privileged" \
 #     --artifact-server-path "C:/Users/$env:USERNAME/AppData/Local/Temp/act-artifacts"
 #
-# ⚠️ 此檔案僅供本機 act 測試用（workflow_dispatch 觸發），不會自動執行
+# ⚠️ 此檔案不應 commit，僅供本地測試
 # NOTE: act on Windows 的 artifact server v4 有 bug，artifact 下載會失敗但不影響結構驗證
 #
 # 測試範圍（刻意 mock 掉 wp-env 和 Claude Code，只驗結構）：
 #   integration-tests job：安裝依賴 + build + 上傳 auth artifact
-#   ai-acceptance job：auth artifact 預檢 + 下載 + 驗證
-#
-# Power Shop 特性：
-#   - 無 PHPUnit（mock 掉），改 Mock E2E 結果
-#   - 無 'capability' 行（移除 LC bypass step）
+#   ai-acceptance job：LC bypass + auth artifact 預檢 + 下載 + 驗證
 
 name: Act Test (Multi-Job Structure Validation)
 
@@ -30,21 +26,10 @@ jobs:
     env:
       WP_CLI_ALLOW_ROOT: 1
     outputs:
-      e2e_ok: ${{ steps.mock_e2e.outcome }}
+      phpunit_ok: ${{ steps.mock_phpunit.outcome }}
     steps:
-      # LOCAL-ONLY：此 workflow 僅供本機 act 使用，拒絕在真實 GitHub runner 執行
-      - name: 確認 LOCAL-ONLY（僅 act 環境可執行）
-        env:
-          ACT: ${{ env.ACT }}
-        run: |
-          if [ "${ACT:-false}" != "true" ]; then
-            echo "::error::act-test.yml 僅供本機 act 執行，禁止在 GitHub runner 上跑"
-            exit 1
-          fi
-          echo "✅ 偵測到 act 環境，繼續執行"
-
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 設定 Node.js
         uses: actions/setup-node@v4
@@ -64,15 +49,15 @@ jobs:
           composer --version
 
       - name: 安裝 Composer 依賴
-        run: composer install --no-interaction --prefer-dist --ignore-platform-reqs
+        run: composer install --no-interaction --prefer-dist
 
       - name: 建置前端（驗證 TypeScript 編譯正常）
         run: pnpm run build
 
-      - name: Mock Playwright E2E 結果（act 環境跳過 wp-env）
-        id: mock_e2e
+      - name: Mock PHPUnit 結果（act 環境跳過 wp-env）
+        id: mock_phpunit
         run: |
-          echo "✅ [Mock] Playwright E2E 已略過（act 環境不啟動 wp-env）"
+          echo "✅ [Mock] PHPUnit 已略過（act 環境不啟動 wp-env）"
           echo "status=passed" >> $GITHUB_OUTPUT
 
       - name: 建立模擬 auth state（供 ai-acceptance job 使用）
@@ -94,17 +79,17 @@ jobs:
           echo "✅ integration-tests job 完成"
           echo "  - 前端 build: ✅"
           echo "  - auth artifact 已上傳: ✅"
-          echo "  - outputs.e2e_ok: ${{ steps.mock_e2e.outcome }}"
+          echo "  - outputs.phpunit_ok: ${{ steps.mock_phpunit.outcome }}"
 
   ai-acceptance:
     name: AI 驗收
     needs: integration-tests
-    if: needs.integration-tests.outputs.e2e_ok == 'success'
+    if: needs.integration-tests.outputs.phpunit_ok == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 設定 Node.js
         uses: actions/setup-node@v4
@@ -124,27 +109,58 @@ jobs:
           composer --version
 
       - name: 安裝 Composer 依賴（主機端）
-        run: composer install --no-interaction --prefer-dist --ignore-platform-reqs
+        run: composer install --no-interaction --prefer-dist
 
-      # ── Power Shop plugin.php 無 'capability' 行 → 跳過 LC bypass，僅標記 .e2e-progress.json ──
-      - name: 標記 .e2e-progress.json
+      # ── 新步驟：LC Bypass 驗證 ────────────────────────
+      - name: 套用 LC Bypass（跳過外掛授權驗證）
         run: |
-          if [ -f .e2e-progress.json ]; then
-            node -e "
-              const fs = require('fs');
-              const p = JSON.parse(fs.readFileSync('.e2e-progress.json','utf-8'));
-              p.last_updated = new Date().toISOString();
-              fs.writeFileSync('.e2e-progress.json', JSON.stringify(p, null, '\t'));
-              console.log('✅ .e2e-progress.json updated');
-            "
+          node -e "
+            const fs = require('fs');
+            const CAPABILITY_LINE = \"'capability'  => 'manage_woocommerce',\";
+            const LC_LINE = \"\t\t\t\t\t'lc'          => false,\";
+            const content = fs.readFileSync('plugin.php', 'utf-8');
+            if (!content.includes(\"'lc'\")) {
+              const modified = content.replace(CAPABILITY_LINE, CAPABILITY_LINE + '\n' + LC_LINE);
+              if (modified !== content) {
+                fs.writeFileSync('plugin.php', modified);
+                console.log('✅ LC bypass applied to plugin.php');
+              } else {
+                console.warn('⚠️ capability line not found in plugin.php, skipping LC bypass');
+              }
+            } else {
+              console.log('ℹ️ LC bypass already applied');
+            }
+            const p = JSON.parse(fs.readFileSync('.e2e-progress.json', 'utf-8'));
+            p.lc_bypass_applied = true;
+            fs.writeFileSync('.e2e-progress.json', JSON.stringify(p, null, '\t'));
+            console.log('✅ .e2e-progress.json: lc_bypass_applied = true');
+          "
+
+      - name: 驗證 LC Bypass 結果
+        run: |
+          echo "=== plugin.php LC bypass 驗證 ==="
+          if grep -q "'lc'" plugin.php; then
+            echo "✅ plugin.php 已成功注入 'lc' => false"
+            grep -n "lc" plugin.php | head -5
           else
-            echo "ℹ️ .e2e-progress.json 不存在，略過"
+            echo "❌ plugin.php 未找到 'lc' bypass，請檢查 capability line 是否存在"
+            exit 1
+          fi
+
+          echo ""
+          echo "=== .e2e-progress.json 驗證 ==="
+          LCB=$(node -e "const p=JSON.parse(require('fs').readFileSync('.e2e-progress.json','utf-8')); console.log(p.lc_bypass_applied)")
+          if [ "$LCB" = "true" ]; then
+            echo "✅ .e2e-progress.json lc_bypass_applied = true"
+          else
+            echo "❌ .e2e-progress.json lc_bypass_applied 未更新（值：$LCB）"
+            exit 1
           fi
 
       - name: 建置前端（驗證第二個 job 也能 build）
         run: pnpm run build
 
-      # ── auth-state artifact 預檢 ─────────────
+      # ── 新步驟：auth-state artifact 預檢 ─────────────
       # act 環境下 gh api 無法查詢 artifact，改用 mock（直接設 exists=true）
       - name: 模擬 auth-state artifact 預檢（act 替代）
         id: check_auth
@@ -171,12 +187,15 @@ jobs:
             # act on Windows 有 artifact server bug，此步驟僅作警告
             echo "⚠️  auth-state artifact 下載失敗（act on Windows 已知限制，不計失敗）"
             echo "    → 真實 CI 環境下 artifact 傳遞正常"
+            echo "    → 重點：下載步驟有條件執行（check_auth.outputs.exists == true），且不再噴 Error 紅字"
           fi
 
       - name: 確認 ai-acceptance job 完成
         run: |
           echo "✅ ai-acceptance job 完成"
-          echo "  - needs.integration-tests.outputs.e2e_ok: ${{ needs.integration-tests.outputs.e2e_ok }}"
+          echo "  - needs.integration-tests.outputs.phpunit_ok: ${{ needs.integration-tests.outputs.phpunit_ok }}"
+          echo "  - LC bypass: ✅"
+          echo "  - .e2e-progress.json updated: ✅"
           echo "  - 前端 build（第二個 job）: ✅"
           echo "  - auth artifact 跨 job 下載: ✅（or known act limitation）"
           echo "  - 多 job 結構驗證完成"
