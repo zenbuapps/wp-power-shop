@@ -36,7 +36,8 @@ module.exports = {
 		tagName: 'v${version}',
 		commitArgs: ['-n'],
 		push: release,
-		requireCleanWorkingDir: release,
+		requireCleanWorkingDir: false,
+		addUntrackedFiles: true,
 	},
 	hooks: {
 		'before:init': [
