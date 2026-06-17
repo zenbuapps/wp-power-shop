@@ -1,5 +1,10 @@
-import { useCustomMutation, useApiUrl, useInvalidate } from '@refinedev/core'
-import { ModalProps, Modal, Form, Skeleton, App } from 'antd'
+import {
+	useCustomMutation,
+	useApiUrl,
+	useInvalidate,
+	useNotification,
+} from '@refinedev/core'
+import { ModalProps, Modal, Form, Skeleton } from 'antd'
 import { useAtomValue } from 'jotai'
 import { isEqual as _isEqual } from 'lodash-es'
 import { useEffect, useMemo, useState } from 'react'
@@ -39,7 +44,9 @@ const ModalForm = ({
 	modalProps: ModalProps
 	close: () => void
 }) => {
-	const { message } = App.useApp()
+	// 使用 Refine notification 機制（App1.tsx 已配置 notificationProvider），
+	// 與「快速修改」按鈕及各 useForm 一致，避免依賴 antd <App> 祖先導致通知 silent no-op
+	const { open } = useNotification()
 	const products = useAtomValue(selectedProductsAtom)
 	const ids = products.map((product) => product.id)
 	const [form] = Form.useForm<TFormValues>()
@@ -83,7 +90,11 @@ const ModalForm = ({
 
 		// 2. 驗證失敗就擋下並提示
 		if (!parsed.success) {
-			message.error('商品資料格式有誤，請檢查後再送出')
+			open?.({
+				type: 'error',
+				message: '商品資料格式有誤，請檢查後再送出',
+				key: 'bulk-update-products',
+			})
 			return
 		}
 
@@ -92,7 +103,12 @@ const ModalForm = ({
 
 		const variationParentIds = Object.keys(variationGroups)
 		if (!simpleUpdates.length && !variationParentIds.length) {
-			message.warning('沒有可更新的商品')
+			// Refine notification 無 warning type，改用 error
+			open?.({
+				type: 'error',
+				message: '沒有可更新的商品',
+				key: 'bulk-update-products',
+			})
 			return
 		}
 
@@ -117,7 +133,11 @@ const ModalForm = ({
 
 			await Promise.all(requests)
 
-			message.success(`商品 ${ids.map((id) => `#${id}`).join(', ')} 已修改成功`)
+			open?.({
+				type: 'success',
+				message: `商品 ${ids.map((id) => `#${id}`).join(', ')} 已修改成功`,
+				key: 'bulk-update-products',
+			})
 
 			// 重新整理商品列表，讓表格反映最新資料
 			invalidate({
@@ -127,7 +147,11 @@ const ModalForm = ({
 
 			close()
 		} catch (error) {
-			message.error('批量修改失敗，請稍後再試')
+			open?.({
+				type: 'error',
+				message: '批量修改失敗，請稍後再試',
+				key: 'bulk-update-products',
+			})
 			// eslint-disable-next-line no-console
 			console.error('批量修改失敗', error)
 		} finally {
