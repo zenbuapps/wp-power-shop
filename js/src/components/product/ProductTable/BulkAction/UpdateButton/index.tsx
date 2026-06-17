@@ -22,7 +22,7 @@ const UpdateButton = () => {
 	const products = useAtomValue(selectedProductsAtom)
 	const ids = products.map((product) => product.id)
 	const [canUpdate, setCanUpdate] = useState(false)
-	const { show, modalProps } = useModal()
+	const { show, modalProps, close } = useModal()
 
 	const { mutate, isLoading } = useUpdateMany({
 		resource: 'products',
@@ -91,7 +91,7 @@ const UpdateButton = () => {
 					</Item>
 				</div>
 			</Form>
-			<ModalForm modalProps={modalProps} />
+			<ModalForm modalProps={modalProps} close={close} />
 		</>
 	)
 }
