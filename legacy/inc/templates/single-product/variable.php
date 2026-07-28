@@ -1,5 +1,6 @@
 <?php
 use J7\PowerShopV2\Bootstrap;
+use J7\PowerShopV2\Functions;
 
 [
 	'product'           => $product,
@@ -16,16 +17,25 @@ $name = $product->get_name();
 $product_id = $meta['productId'] ?? '';
 $variations = $meta['variations'] ?? [];
 
+// 保險：快取的 power_shop_meta 缺變體資料時（issue #76），直接現查 WooCommerce 變體，避免價格區塊整塊空白
+if (empty($variations)) {
+	$variations = Functions::format_variations($product);
+}
+
 $price_arr         = [];
 $regular_price_arr = [];
 
 foreach ($variations as $variation) {
-	if (empty( (int) $variation['salesPrice'])) {
-		$price_arr[] = (int) $variation['regularPrice'];
+	// 部分寫入的變體可能缺價格欄位，補預設值避免 undefined array key 與價格算錯
+	$sales_price   = (int) ( $variation['salesPrice'] ?? 0 );
+	$regular_price = (int) ( $variation['regularPrice'] ?? 0 );
+
+	if (empty($sales_price)) {
+		$price_arr[] = $regular_price;
 	} else {
-		$price_arr[] = (int) $variation['salesPrice'];
+		$price_arr[] = $sales_price;
 	}
-	$regular_price_arr[] = (int) $variation['regularPrice'];
+	$regular_price_arr[] = $regular_price;
 }
 
 $filtered_price_arr = array_filter(

@@ -213,12 +213,16 @@ final class Functions {
 		$product_data['backorders']           = $product->get_backorders(); // "yes" | "no" | "notify"
 
 		if ( 'simple' === $product->get_type() ) {
-			$product_data['regularPrice']    = $meta['regularPrice'];
-			$product_data['salesPrice']      = $meta['salesPrice'];
-			$product_data['extraBuyerCount'] = $meta['extraBuyerCount'];
+			// 價格備援取未稅原始價，沒生效中的特價時為 0，避免前台 Price 元件渲染出假特價（詳見 format_variations）
+			$product_data['regularPrice']    = $meta['regularPrice'] ?? (float) $product->get_regular_price();
+			$product_data['salesPrice']      = $meta['salesPrice'] ?? self::get_active_sale_price( $product );
+			$product_data['extraBuyerCount'] = $meta['extraBuyerCount'] ?? null;
 		}
-		if ( 'variable' === $product->get_type() && ! empty( $meta['variations'] ) ) {
-			$variation_meta                       = $meta['variations']; // Undefined array key "variations"
+		if ( 'variable' === $product->get_type() ) {
+			// 不再要求 $meta['variations'] 必須存在
+			// 賣場頁快取的 power_shop_meta 可能缺 variations（見 issue #76），
+			// 此時仍要組出變體資料，價格改用 WooCommerce 現值當備援，否則前台無法選規格下單
+			$variation_meta                       = $meta['variations'] ?? [];
 			$product_data['variations']           = [];
 			$product_data['variation_attributes'] = $product->get_variation_attributes();
 			$attributes_arr                       = [];
@@ -255,21 +259,73 @@ final class Functions {
 			$product_data['attributes'] = $attributes_arr;
 
 			foreach ( $product->get_available_variations() as $key => $variation ) {
-				$variation_id                       = $variation['variation_id'];
-				$variation_product                  = \wc_get_product( $variation_id );
-				$theMeta                            = find( $variation_meta, [ 'variationId' => $variation_id ] );
+				$variation_id      = $variation['variation_id'];
+				$variation_product = \wc_get_product( $variation_id );
+				if ( ! ( $variation_product instanceof \WC_Product ) ) {
+					continue;
+				}
+				$theMeta                            = find( $variation_meta, [ 'variationId' => $variation_id ] ) ?? [];
 				$product_data['variations'][ $key ] = $variation;
-				$product_data['variations'][ $key ]['regularPrice']    = $theMeta['regularPrice'];
-				$product_data['variations'][ $key ]['salesPrice']      = $theMeta['salesPrice'];
+				// 備援價取未稅原始價，沒生效中的特價時為 0，避免假特價與含稅重複課稅（詳見 format_variations）
+				$product_data['variations'][ $key ]['regularPrice']    = $theMeta['regularPrice'] ?? (float) $variation_product->get_regular_price();
+				$product_data['variations'][ $key ]['salesPrice']      = $theMeta['salesPrice'] ?? self::get_active_sale_price( $variation_product );
 				$product_data['variations'][ $key ]['stock']           = [
 					'manageStock'   => $variation_product->get_manage_stock(),
 					'stockQuantity' => $variation_product->get_stock_quantity(),
 					'stockStatus'   => $variation_product->get_stock_status(),
 				];
-				$product_data['variations'][ $key ]['extraBuyerCount'] = $theMeta['extraBuyerCount'];
+				$product_data['variations'][ $key ]['extraBuyerCount'] = $theMeta['extraBuyerCount'] ?? null;
 			}
 		}
 
 		return $product_data;
+	}
+
+	/**
+	 * 將 WooCommerce 可變商品的變體，格式化成 power_shop_meta 的 variations 結構
+	 *
+	 * 價格一律取未稅原始價，與編輯器寫入的格式對齊（編輯器用 Number(sale_price)，沒特價時為 0）。
+	 * 不可改用 get_available_variations() 的 display_price / display_regular_price：
+	 * display_price 是「現行有效價」，沒特價時會等於原價，前台 Price 元件會因此渲染出
+	 * 「刪除線原價 + 同價紅字特價」的假特價；且該值經過 wc_get_price_to_display() 套用
+	 * 稅務顯示設定，站台設為含稅時會被 Cart::price_refresh() 當未稅基價再課一次稅。
+	 *
+	 * @param \WC_Product $product 商品物件
+	 * @return array<int, array{variationId: int, regularPrice: float, salesPrice: float}>
+	 */
+	public static function format_variations( \WC_Product $product ): array {
+		if ( ! ( $product instanceof \WC_Product_Variable ) ) {
+			return [];
+		}
+
+		$formatted_variations = [];
+		foreach ( $product->get_available_variations() as $variation ) {
+			$variation_product = \wc_get_product( $variation['variation_id'] );
+			if ( ! ( $variation_product instanceof \WC_Product ) ) {
+				continue;
+			}
+			$formatted_variations[] = [
+				'variationId'  => $variation['variation_id'],
+				'regularPrice' => (float) $variation_product->get_regular_price(),
+				'salesPrice'   => self::get_active_sale_price( $variation_product ),
+			];
+		}
+
+		return $formatted_variations;
+	}
+
+	/**
+	 * 取得「目前實際生效」的特價，沒有生效中的特價時回傳 0
+	 *
+	 * 不可直接用 get_sale_price()：它回傳的是 _sale_price 欄位原值，
+	 * 即使特價已排程但尚未開始（is_on_sale() 為 false）也會有值，
+	 * 寫進 power_shop_meta 後會讓前台提早顯示特價，並被 Cart::price_refresh()
+	 * 拿去 set_price()，造成尚未開賣的特價提前結帳。
+	 *
+	 * @param \WC_Product $product 商品或變體物件
+	 * @return float
+	 */
+	public static function get_active_sale_price( \WC_Product $product ): float {
+		return $product->is_on_sale() ? (float) $product->get_sale_price() : 0.0;
 	}
 }
