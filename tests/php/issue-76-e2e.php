@@ -5,8 +5,14 @@
  * → 實際跑 shortcode → 驗證前台價格與 React appData → 刪除臨時頁。
  *
  * 用法：wp eval-file tests/php/issue-76-e2e.php
- * 需求：站上要有至少一個含變體的 publish variable 商品。
- * 離開碼 0 = 全過，1 = 有失敗。
+ * 離開碼 0 = 全過，1 = 有失敗或無法執行。
+ *
+ * 前提：
+ * 1. 站上要有至少一個含變體的 publish variable 商品。
+ * 2. wp-cli 必須連得到 DB。Local (Flywheel) 的 wp-config.php 寫死 DB_HOST = 'localhost'，
+ *    但 MySQL 其實跑在自訂 port，wp-cli 走 localhost 會連到別的 MySQL 而失敗。
+ *    此時用 --exec 覆寫（不要改 wp-config.php），port 見 Local 的 sites.json：
+ *      wp --exec="define('DB_HOST','127.0.0.1:<port>');" eval-file tests/php/issue-76-e2e.php
  */
 
 $GLOBALS['__e2e_pass'] = 0;
@@ -40,8 +46,9 @@ foreach ( wc_get_products( [ 'type' => 'variable', 'limit' => 20, 'status' => 'p
 	}
 }
 if ( ! $product_id ) {
-	echo "站上沒有含變體的 publish variable 商品，無法執行端到端驗證\n";
-	return;
+	// 不可靜默 return：CI 會拿到 exit 0 卻零斷言，看起來像全過
+	echo "FAIL 站上沒有含變體的 publish variable 商品，無法執行端到端驗證\n";
+	WP_CLI::halt( 1 );
 }
 printf( "使用商品 #%d %s\n", $product_id, wc_get_product( $product_id )->get_name() );
 
@@ -111,7 +118,8 @@ try {
 			var_export( $v['salesPrice'], true )
 		);
 	}
-	e2e_ok( '備援路徑無假特價（R1）', 0 === $pre_fake, 'fake=' . $pre_fake );
+	// 綁上 count > 0：變體為空時迴圈不跑、$pre_fake 恆為 0，這條會「真空通過」
+	e2e_ok( '備援路徑無假特價（R1）', ! empty( $pre['variations'] ) && 0 === $pre_fake, 'variations=' . count( $pre['variations'] ?? [] ) . ' fake=' . $pre_fake );
 	e2e_ok( 'get_products_info() 未觸發自癒寫入', empty( json_decode( get_post_meta( $post_id, 'power_shop_meta', true ), true )[0]['variations'] ) );
 
 	echo "\n";
