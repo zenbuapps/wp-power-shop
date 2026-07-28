@@ -26,17 +26,20 @@ namespace {
 		public $type          = 'simple';
 		public $regular_price = '';
 		public $sale_price    = '';
+		public $on_sale       = null; // null = 依 sale_price 自動判斷；false = 已排程但未生效
 		public $children      = [];
-		public function __construct( $id, $type = 'simple', $regular = '', $sale = '' ) {
+		public function __construct( $id, $type = 'simple', $regular = '', $sale = '', $on_sale = null ) {
 			$this->id            = $id;
 			$this->type          = $type;
 			$this->regular_price = $regular;
 			$this->sale_price    = $sale;
+			$this->on_sale       = $on_sale;
 		}
 		public function get_id() { return $this->id; }
 		public function get_type() { return $this->type; }
 		public function get_regular_price() { return $this->regular_price; }
 		public function get_sale_price() { return $this->sale_price; }
+		public function is_on_sale() { return null === $this->on_sale ? '' !== $this->sale_price : $this->on_sale; }
 	}
 
 	class WC_Product_Variable extends WC_Product {
@@ -150,6 +153,18 @@ namespace {
 		'got=' . var_export( $fv[1]['salesPrice'], true )
 	);
 	ok( '無特價變體 regularPrice=800', 800.0 === $fv[1]['regularPrice'] );
+
+	echo "\n=== T1b 已排程但尚未生效的特價，不得寫入 ===\n";
+	// _sale_price 有值但 is_on_sale() 為 false（例如特價排在下週開始）
+	$GLOBALS['__wc_products'][601] = new WC_Product( 601, 'variation', '20', '1', false );
+	$GLOBALS['__wc_products'][130] = new WC_Product_Variable( 130, [ [ 'variation_id' => 601 ] ] );
+	$scheduled                     = Functions::format_variations( $GLOBALS['__wc_products'][130] );
+	ok(
+		'未生效的排程特價 salesPrice=0（否則會提前以特價結帳）',
+		0.0 === $scheduled[0]['salesPrice'],
+		'got=' . var_export( $scheduled[0]['salesPrice'], true )
+	);
+	ok( 'regularPrice 仍為 20', 20.0 === $scheduled[0]['regularPrice'] );
 
 	echo "\n=== T2 format_variations() 對非可變商品 ===\n";
 	ok( 'simple 商品回空陣列', [] === Functions::format_variations( new WC_Product( 7, 'simple', '100' ) ) );

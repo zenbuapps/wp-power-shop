@@ -213,9 +213,9 @@ final class Functions {
 		$product_data['backorders']           = $product->get_backorders(); // "yes" | "no" | "notify"
 
 		if ( 'simple' === $product->get_type() ) {
-			// 價格備援取未稅原始價，沒特價時為 0，避免前台 Price 元件渲染出假特價（詳見 format_variations）
+			// 價格備援取未稅原始價，沒生效中的特價時為 0，避免前台 Price 元件渲染出假特價（詳見 format_variations）
 			$product_data['regularPrice']    = $meta['regularPrice'] ?? (float) $product->get_regular_price();
-			$product_data['salesPrice']      = $meta['salesPrice'] ?? (float) $product->get_sale_price();
+			$product_data['salesPrice']      = $meta['salesPrice'] ?? self::get_active_sale_price( $product );
 			$product_data['extraBuyerCount'] = $meta['extraBuyerCount'] ?? null;
 		}
 		if ( 'variable' === $product->get_type() ) {
@@ -266,9 +266,9 @@ final class Functions {
 				}
 				$theMeta                            = find( $variation_meta, [ 'variationId' => $variation_id ] ) ?? [];
 				$product_data['variations'][ $key ] = $variation;
-				// 備援價取未稅原始價，沒特價時為 0，避免假特價與含稅重複課稅（詳見 format_variations）
+				// 備援價取未稅原始價，沒生效中的特價時為 0，避免假特價與含稅重複課稅（詳見 format_variations）
 				$product_data['variations'][ $key ]['regularPrice']    = $theMeta['regularPrice'] ?? (float) $variation_product->get_regular_price();
-				$product_data['variations'][ $key ]['salesPrice']      = $theMeta['salesPrice'] ?? (float) $variation_product->get_sale_price();
+				$product_data['variations'][ $key ]['salesPrice']      = $theMeta['salesPrice'] ?? self::get_active_sale_price( $variation_product );
 				$product_data['variations'][ $key ]['stock']           = [
 					'manageStock'   => $variation_product->get_manage_stock(),
 					'stockQuantity' => $variation_product->get_stock_quantity(),
@@ -307,10 +307,25 @@ final class Functions {
 			$formatted_variations[] = [
 				'variationId'  => $variation['variation_id'],
 				'regularPrice' => (float) $variation_product->get_regular_price(),
-				'salesPrice'   => (float) $variation_product->get_sale_price(),
+				'salesPrice'   => self::get_active_sale_price( $variation_product ),
 			];
 		}
 
 		return $formatted_variations;
+	}
+
+	/**
+	 * 取得「目前實際生效」的特價，沒有生效中的特價時回傳 0
+	 *
+	 * 不可直接用 get_sale_price()：它回傳的是 _sale_price 欄位原值，
+	 * 即使特價已排程但尚未開始（is_on_sale() 為 false）也會有值，
+	 * 寫進 power_shop_meta 後會讓前台提早顯示特價，並被 Cart::price_refresh()
+	 * 拿去 set_price()，造成尚未開賣的特價提前結帳。
+	 *
+	 * @param \WC_Product $product 商品或變體物件
+	 * @return float
+	 */
+	public static function get_active_sale_price( \WC_Product $product ): float {
+		return $product->is_on_sale() ? (float) $product->get_sale_price() : 0.0;
 	}
 }
