@@ -44,6 +44,8 @@
     "arts/elementor-stubs": "^3.35"
   },
   "scripts": {
-    "lint": "phpcs"
+    "lint": "phpcs",
+    "test:php": "php tests/php/issue-76-unit.php",
+    "test:php:e2e": "wp eval-file tests/php/issue-76-e2e.php"
   }
 }
