@@ -26,12 +26,16 @@ $price_arr         = [];
 $regular_price_arr = [];
 
 foreach ($variations as $variation) {
-	if (empty( (int) $variation['salesPrice'])) {
-		$price_arr[] = (int) $variation['regularPrice'];
+	// 部分寫入的變體可能缺價格欄位，補預設值避免 undefined array key 與價格算錯
+	$sales_price   = (int) ( $variation['salesPrice'] ?? 0 );
+	$regular_price = (int) ( $variation['regularPrice'] ?? 0 );
+
+	if (empty($sales_price)) {
+		$price_arr[] = $regular_price;
 	} else {
-		$price_arr[] = (int) $variation['salesPrice'];
+		$price_arr[] = $sales_price;
 	}
-	$regular_price_arr[] = (int) $variation['regularPrice'];
+	$regular_price_arr[] = $regular_price;
 }
 
 $filtered_price_arr = array_filter(

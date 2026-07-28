@@ -213,8 +213,9 @@ final class Functions {
 		$product_data['backorders']           = $product->get_backorders(); // "yes" | "no" | "notify"
 
 		if ( 'simple' === $product->get_type() ) {
-			$product_data['regularPrice']    = $meta['regularPrice'] ?? $product->get_regular_price();
-			$product_data['salesPrice']      = $meta['salesPrice'] ?? $product->get_sale_price();
+			// 價格備援取未稅原始價，沒特價時為 0，避免前台 Price 元件渲染出假特價（詳見 format_variations）
+			$product_data['regularPrice']    = $meta['regularPrice'] ?? (float) $product->get_regular_price();
+			$product_data['salesPrice']      = $meta['salesPrice'] ?? (float) $product->get_sale_price();
 			$product_data['extraBuyerCount'] = $meta['extraBuyerCount'] ?? null;
 		}
 		if ( 'variable' === $product->get_type() ) {
@@ -258,12 +259,16 @@ final class Functions {
 			$product_data['attributes'] = $attributes_arr;
 
 			foreach ( $product->get_available_variations() as $key => $variation ) {
-				$variation_id                       = $variation['variation_id'];
-				$variation_product                  = \wc_get_product( $variation_id );
+				$variation_id      = $variation['variation_id'];
+				$variation_product = \wc_get_product( $variation_id );
+				if ( ! ( $variation_product instanceof \WC_Product ) ) {
+					continue;
+				}
 				$theMeta                            = find( $variation_meta, [ 'variationId' => $variation_id ] ) ?? [];
 				$product_data['variations'][ $key ] = $variation;
-				$product_data['variations'][ $key ]['regularPrice']    = $theMeta['regularPrice'] ?? $variation['display_regular_price'];
-				$product_data['variations'][ $key ]['salesPrice']      = $theMeta['salesPrice'] ?? $variation['display_price'];
+				// 備援價取未稅原始價，沒特價時為 0，避免假特價與含稅重複課稅（詳見 format_variations）
+				$product_data['variations'][ $key ]['regularPrice']    = $theMeta['regularPrice'] ?? (float) $variation_product->get_regular_price();
+				$product_data['variations'][ $key ]['salesPrice']      = $theMeta['salesPrice'] ?? (float) $variation_product->get_sale_price();
 				$product_data['variations'][ $key ]['stock']           = [
 					'manageStock'   => $variation_product->get_manage_stock(),
 					'stockQuantity' => $variation_product->get_stock_quantity(),
@@ -279,8 +284,14 @@ final class Functions {
 	/**
 	 * 將 WooCommerce 可變商品的變體，格式化成 power_shop_meta 的 variations 結構
 	 *
+	 * 價格一律取未稅原始價，與編輯器寫入的格式對齊（編輯器用 Number(sale_price)，沒特價時為 0）。
+	 * 不可改用 get_available_variations() 的 display_price / display_regular_price：
+	 * display_price 是「現行有效價」，沒特價時會等於原價，前台 Price 元件會因此渲染出
+	 * 「刪除線原價 + 同價紅字特價」的假特價；且該值經過 wc_get_price_to_display() 套用
+	 * 稅務顯示設定，站台設為含稅時會被 Cart::price_refresh() 當未稅基價再課一次稅。
+	 *
 	 * @param \WC_Product $product 商品物件
-	 * @return array<int, array{variationId: int, regularPrice: mixed, salesPrice: mixed}>
+	 * @return array<int, array{variationId: int, regularPrice: float, salesPrice: float}>
 	 */
 	public static function format_variations( \WC_Product $product ): array {
 		if ( ! ( $product instanceof \WC_Product_Variable ) ) {
@@ -289,10 +300,14 @@ final class Functions {
 
 		$formatted_variations = [];
 		foreach ( $product->get_available_variations() as $variation ) {
+			$variation_product = \wc_get_product( $variation['variation_id'] );
+			if ( ! ( $variation_product instanceof \WC_Product ) ) {
+				continue;
+			}
 			$formatted_variations[] = [
 				'variationId'  => $variation['variation_id'],
-				'regularPrice' => $variation['display_regular_price'],
-				'salesPrice'   => $variation['display_price'],
+				'regularPrice' => (float) $variation_product->get_regular_price(),
+				'salesPrice'   => (float) $variation_product->get_sale_price(),
 			];
 		}
 

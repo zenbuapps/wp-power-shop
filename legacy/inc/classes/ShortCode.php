@@ -186,11 +186,15 @@ final class ShortCode {
 					continue;
 				}
 
-				$shop_meta[ $key ] = [
+				$rebuilt_meta = [
 					'productId'   => $product_id,
 					'productType' => $product_type,
 					'variations'  => $formatted_variations,
 				];
+
+				// 型態改變時整筆重建，捨棄已失效的舊欄位（例如 simple 時期的 regularPrice）
+				// 型態沒變、只是補回缺失的 variations 時用合併，保留該筆其他自訂欄位（例如團購設定）
+				$shop_meta[ $key ] = $is_type_mismatch ? $rebuilt_meta : array_merge( $meta, $rebuilt_meta );
 				$need_update       = true;
 				continue;
 			}

@@ -120,7 +120,7 @@ final class Cart {
 			// 加入購物車 可變商品
 			$the_variations_meta = $the_product_meta['variations'] ?? [];
 			$the_variation_meta  = find($the_variations_meta, [ 'variationId' => $variation_id ]) ?? [];
-			// 找不到變體的賣場自訂價時留空，讓 Cart::add_cart_item_data 不覆寫價格，改用 WooCommerce 原價（issue #76）
+			// 找不到變體的賣場自訂價時留空，讓 Cart::price_refresh() 不覆寫價格，改用 WooCommerce 原價（issue #76）
 			\WC()->cart->add_to_cart(
 				$product_id,
 				$quantity,
