@@ -73,8 +73,12 @@ final class ShortCode {
 				<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-8">
 			<?php
 			foreach ( $handled_shop_meta as $meta ) {
-				$product_id        = $meta['productId'];
-				$product           = \wc_get_product( $product_id );
+				$product_id = $meta['productId'] ?? 0;
+				$product    = \wc_get_product( $product_id );
+				if ( ! ( $product instanceof \WC_Product ) ) {
+					// 商品已被刪除，略過避免 fatal error
+					continue;
+				}
 				$product_type      = $product->get_type();
 				$default_image_src = Plugin::$url . '/legacy/js/src/assets/images/defaultImage.jpg';
 				switch ( $product_type ) {
@@ -128,8 +132,8 @@ final class ShortCode {
 	}
 
 	/**
-	 * 檢查 shop_meta 裡面的商品與 woocommerce 裡面的商品是否 type 一致
-	 * 如果不一致，就更新 shop_meta 裡面的 data
+	 * 檢查 shop_meta 裡面的商品與 woocommerce 裡面的商品是否一致
+	 * 不一致（type 改變、或可變商品缺變體資料）就更新 shop_meta 裡面的 data
 	 *
 	 * @param array $shop_meta The shop meta data.
 	 * @return array
@@ -145,43 +149,55 @@ final class ShortCode {
 				$meta_product_type   = $is_variable_product ? 'variable' : 'simple';
 			}
 
-			$product_id   = $meta['productId'];
-			$product      = \wc_get_product( $product_id );
+			$product_id = $meta['productId'] ?? 0;
+			$product    = \wc_get_product( $product_id );
+			if ( ! ( $product instanceof \WC_Product ) ) {
+				// 商品已被刪除，略過避免 fatal error
+				continue;
+			}
 			$product_type = $product->get_type();
 
-			if ( $meta_product_type !== $product_type ) {
-				$need_update = true;
-				// 如果不一致，就更新 shop_meta 裡面的 productType
-				$shop_meta[ $key ]['productType'] = $product_type;
+			$is_type_mismatch = $meta_product_type !== $product_type;
+			// type 相符、但可變商品缺 variations 時也必須重建 (issue #76)
+			// 編輯器存檔時若變體 API 尚未回應，會寫入 productType = variable 卻沒有 variations，
+			// 舊條件只比對 type，這種資料永遠不會被自癒，導致前台無價格、無法下單
+			$is_variations_missing = $product_type === 'variable' && empty( $meta['variations'] );
 
-				if ( $product_type === 'simple' ) {
-					$shop_meta[ $key ] = [
-						'productId'    => $product_id,
-						'productType'  => $product_type,
-						'regularPrice' => $product->get_regular_price(),
-						'salesPrice'   => $product->get_sale_price(),
-					];
-				}
-
-				if ( $product_type === 'variable' ) {
-					$variations          = $product->get_available_variations();
-					$formattedVariations = [];
-
-					foreach ( $variations as $variation ) {
-						$formattedVariations[] = [
-							'variationId'  => $variation['variation_id'],
-							'regularPrice' => $variation['display_regular_price'],
-							'salesPrice'   => $variation['display_price'],
-						];
-					}
-
-					$shop_meta[ $key ] = [
-						'productId'   => $product_id,
-						'productType' => $product_type,
-						'variations'  => $formattedVariations,
-					];
-				}
+			if ( ! $is_type_mismatch && ! $is_variations_missing ) {
+				continue;
 			}
+
+			if ( $product_type === 'simple' ) {
+				$shop_meta[ $key ] = [
+					'productId'    => $product_id,
+					'productType'  => $product_type,
+					'regularPrice' => $product->get_regular_price(),
+					'salesPrice'   => $product->get_sale_price(),
+				];
+				$need_update       = true;
+				continue;
+			}
+
+			if ( $product_type === 'variable' ) {
+				$formatted_variations = Functions::format_variations( $product );
+
+				// 沒抓到變體就不寫回，避免「沒有變體的可變商品」每次載入頁面都重複寫入 post meta
+				if ( ! $is_type_mismatch && empty( $formatted_variations ) ) {
+					continue;
+				}
+
+				$shop_meta[ $key ] = [
+					'productId'   => $product_id,
+					'productType' => $product_type,
+					'variations'  => $formatted_variations,
+				];
+				$need_update       = true;
+				continue;
+			}
+
+			// 其他型態（grouped / external…）只同步 productType
+			$shop_meta[ $key ]['productType'] = $product_type;
+			$need_update                      = true;
 		}
 
 		if ( $need_update ) {

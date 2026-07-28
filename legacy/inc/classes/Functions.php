@@ -213,12 +213,15 @@ final class Functions {
 		$product_data['backorders']           = $product->get_backorders(); // "yes" | "no" | "notify"
 
 		if ( 'simple' === $product->get_type() ) {
-			$product_data['regularPrice']    = $meta['regularPrice'];
-			$product_data['salesPrice']      = $meta['salesPrice'];
-			$product_data['extraBuyerCount'] = $meta['extraBuyerCount'];
+			$product_data['regularPrice']    = $meta['regularPrice'] ?? $product->get_regular_price();
+			$product_data['salesPrice']      = $meta['salesPrice'] ?? $product->get_sale_price();
+			$product_data['extraBuyerCount'] = $meta['extraBuyerCount'] ?? null;
 		}
-		if ( 'variable' === $product->get_type() && ! empty( $meta['variations'] ) ) {
-			$variation_meta                       = $meta['variations']; // Undefined array key "variations"
+		if ( 'variable' === $product->get_type() ) {
+			// 不再要求 $meta['variations'] 必須存在
+			// 賣場頁快取的 power_shop_meta 可能缺 variations（見 issue #76），
+			// 此時仍要組出變體資料，價格改用 WooCommerce 現值當備援，否則前台無法選規格下單
+			$variation_meta                       = $meta['variations'] ?? [];
 			$product_data['variations']           = [];
 			$product_data['variation_attributes'] = $product->get_variation_attributes();
 			$attributes_arr                       = [];
@@ -257,19 +260,42 @@ final class Functions {
 			foreach ( $product->get_available_variations() as $key => $variation ) {
 				$variation_id                       = $variation['variation_id'];
 				$variation_product                  = \wc_get_product( $variation_id );
-				$theMeta                            = find( $variation_meta, [ 'variationId' => $variation_id ] );
+				$theMeta                            = find( $variation_meta, [ 'variationId' => $variation_id ] ) ?? [];
 				$product_data['variations'][ $key ] = $variation;
-				$product_data['variations'][ $key ]['regularPrice']    = $theMeta['regularPrice'];
-				$product_data['variations'][ $key ]['salesPrice']      = $theMeta['salesPrice'];
+				$product_data['variations'][ $key ]['regularPrice']    = $theMeta['regularPrice'] ?? $variation['display_regular_price'];
+				$product_data['variations'][ $key ]['salesPrice']      = $theMeta['salesPrice'] ?? $variation['display_price'];
 				$product_data['variations'][ $key ]['stock']           = [
 					'manageStock'   => $variation_product->get_manage_stock(),
 					'stockQuantity' => $variation_product->get_stock_quantity(),
 					'stockStatus'   => $variation_product->get_stock_status(),
 				];
-				$product_data['variations'][ $key ]['extraBuyerCount'] = $theMeta['extraBuyerCount'];
+				$product_data['variations'][ $key ]['extraBuyerCount'] = $theMeta['extraBuyerCount'] ?? null;
 			}
 		}
 
 		return $product_data;
+	}
+
+	/**
+	 * 將 WooCommerce 可變商品的變體，格式化成 power_shop_meta 的 variations 結構
+	 *
+	 * @param \WC_Product $product 商品物件
+	 * @return array<int, array{variationId: int, regularPrice: mixed, salesPrice: mixed}>
+	 */
+	public static function format_variations( \WC_Product $product ): array {
+		if ( ! ( $product instanceof \WC_Product_Variable ) ) {
+			return [];
+		}
+
+		$formatted_variations = [];
+		foreach ( $product->get_available_variations() as $variation ) {
+			$formatted_variations[] = [
+				'variationId'  => $variation['variation_id'],
+				'regularPrice' => $variation['display_regular_price'],
+				'salesPrice'   => $variation['display_price'],
+			];
+		}
+
+		return $formatted_variations;
 	}
 }

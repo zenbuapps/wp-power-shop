@@ -1,5 +1,6 @@
 <?php
 use J7\PowerShopV2\Bootstrap;
+use J7\PowerShopV2\Functions;
 
 [
 	'product'           => $product,
@@ -15,6 +16,11 @@ $name = $product->get_name();
 
 $product_id = $meta['productId'] ?? '';
 $variations = $meta['variations'] ?? [];
+
+// 保險：快取的 power_shop_meta 缺變體資料時（issue #76），直接現查 WooCommerce 變體，避免價格區塊整塊空白
+if (empty($variations)) {
+	$variations = Functions::format_variations($product);
+}
 
 $price_arr         = [];
 $regular_price_arr = [];
