@@ -1,3 +1,4 @@
+import { ExportOutlined } from '@ant-design/icons'
 import {
 	Form,
 	Input,
@@ -9,6 +10,7 @@ import {
 } from 'antd'
 import { memo } from 'react'
 
+import { useEnv } from '@/hooks'
 import { PartnerSelector } from '@/pages/admin/ProfitPartner/components/PartnerSelector'
 import { ItemsEditor } from '@/pages/admin/ProfitShop/components/ItemsEditor'
 import { SlugInput } from '@/pages/admin/ProfitShop/components/SlugInput'
@@ -53,6 +55,16 @@ const ProfitShopFormComponent = ({
 	submitting,
 	mode,
 }: TProfitShopFormProps) => {
+	const { SITE_URL, KEBAB } = useEnv()
+
+	/**
+	 * 分潤夥伴管理頁的完整 admin URL
+	 *
+	 * 用完整 URL（而非 Refine `<Link>`）才能 target="_blank" 開新分頁，
+	 * 讓使用者建完夥伴後回到本頁不遺失填到一半的表單內容。
+	 */
+	const partnerAdminUrl = `${SITE_URL}/wp-admin/admin.php?page=${KEBAB}#/profit-partner`
+
 	return (
 		<Form
 			form={form}
@@ -123,15 +135,24 @@ const ProfitShopFormComponent = ({
 						message: '請選擇有效的分潤夥伴',
 					},
 				]}
-				extra="若清單為空，請先到「分潤夥伴」頁面建立夥伴"
+				extra={
+					<>
+						若清單為空，請先到
+						<a href={partnerAdminUrl} target="_blank" rel="noopener noreferrer">
+							「分潤夥伴」
+							<ExportOutlined className="ml-1" />
+						</a>
+						頁面建立夥伴
+					</>
+				}
 			>
 				<PartnerSelector />
 			</Item>
 
 			<Item label="分潤比例">
-				<div className="tw-flex tw-items-center tw-gap-4">
+				<div className="flex items-center gap-4">
 					<Item name="rate" noStyle rules={RATE_RULES}>
-						<Slider className="tw-flex-1" min={0} max={100} step={1} />
+						<Slider className="flex-1" min={0} max={100} step={1} />
 					</Item>
 					<Item name="rate" noStyle rules={RATE_RULES}>
 						<InputNumber
