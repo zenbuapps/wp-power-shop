@@ -16,20 +16,6 @@ declare( strict_types=1 );
 // 載入 Composer autoloader
 require_once dirname( __DIR__ ) . '/vendor/autoload.php';
 
-// Stub WordPress Abilities API（WP 6.9 前尚未進 core，部份依賴會用到）
-if ( ! function_exists( 'wp_get_ability' ) ) {
-	function wp_get_ability( string $name ): ?array { return null; }
-}
-if ( ! function_exists( 'wp_get_abilities' ) ) {
-	function wp_get_abilities(): array { return []; }
-}
-if ( ! function_exists( 'wp_register_ability' ) ) {
-	function wp_register_ability( string $name, array $args = [] ): void {}
-}
-if ( ! function_exists( 'wp_register_ability_category' ) ) {
-	function wp_register_ability_category( string $slug, array $args = [] ): void {}
-}
-
 // 取得 wp-phpunit 提供的測試目錄路徑
 $_tests_dir = getenv( 'WP_TESTS_DIR' );
 
@@ -56,6 +42,23 @@ require_once "{$_tests_dir}/includes/functions.php";
  * （Powerhouse 提供 J7\WpUtils 工具庫，必須最先）
  */
 function _power_shop_manually_load_plugin(): void {
+	// 0. Stub WordPress Abilities API（WP 6.9 起已進 core，僅在舊版補上）
+	// 必須在此 hook 內判斷：本檔頂部執行時 WP core 尚未載入（core 在檔尾
+	// require bootstrap.php 才載入），function_exists 必為 false，
+	// 會與 WP 6.9+ 的 wp-includes/abilities-api.php 重複宣告造成 Fatal。
+	if ( ! function_exists( 'wp_get_ability' ) ) {
+		function wp_get_ability( string $name ): ?array { return null; }
+	}
+	if ( ! function_exists( 'wp_get_abilities' ) ) {
+		function wp_get_abilities(): array { return []; }
+	}
+	if ( ! function_exists( 'wp_register_ability' ) ) {
+		function wp_register_ability( string $name, array $args = [] ): void {}
+	}
+	if ( ! function_exists( 'wp_register_ability_category' ) ) {
+		function wp_register_ability_category( string $slug, array $args = [] ): void {}
+	}
+
 	// 1. 載入 Powerhouse（提供 J7\WpUtils 工具庫）
 	$powerhouse_path = WP_PLUGIN_DIR . '/powerhouse/plugin.php';
 	if ( file_exists( $powerhouse_path ) ) {
