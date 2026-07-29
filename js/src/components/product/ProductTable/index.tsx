@@ -1,23 +1,7 @@
-import { useTable } from '@refinedev/antd'
-import { HttpError } from '@refinedev/core'
-import { Table, FormInstance, TableProps, CardProps } from 'antd'
-import {
-	useRowSelection,
-	defaultTableProps,
-	getDefaultPaginationProps,
-	Card,
-} from 'antd-toolkit'
-import {
-	ProductFilter,
-	TProductFilterProps,
-	onProductSearch as onSearch,
-	FilterTags,
-	objToCrudFilters,
-	initialFilteredValues,
-	ActionArea,
-	SelectedItem,
-} from 'antd-toolkit/refine'
-import { productKeyLabelMapper, isVariation } from 'antd-toolkit/wp'
+import { TableProps } from 'antd'
+import { useRowSelection } from 'antd-toolkit'
+import { ActionArea, SelectedItem } from 'antd-toolkit/refine'
+import { isVariation } from 'antd-toolkit/wp'
 import { useAtom } from 'jotai'
 import { memo, useEffect } from 'react'
 
@@ -28,35 +12,17 @@ import {
 	useValueLabelMapper,
 	useColumns,
 } from '@/components/product/ProductTable/hooks'
+import { ProductTableBody } from '@/components/product/ProductTable/ProductTableBody'
+import { useProductTableQuery } from '@/components/product/ProductTable/useProductTableQuery'
 import { TProductRecord } from '@/components/product/types'
 import { useProductsOptions } from '@/hooks'
 
-const ProductTableComponent = ({
-	cardProps,
-}: {
-	cardProps?: CardProps & { showCard?: boolean }
-}) => {
+const ProductTableComponent = () => {
 	const [selectedProducts, setSelectedProducts] = useAtom(selectedProductsAtom)
 	const selectedProductIds = selectedProducts.map((product) => product.id)
 
-	const { searchFormProps, tableProps, filters } = useTable<
-		TProductRecord,
-		HttpError,
-		TProductFilterProps
-	>({
-		resource: 'products',
-		onSearch,
-		filters: {
-			initial: objToCrudFilters(initialFilteredValues),
-			permanent: objToCrudFilters({
-				meta_keys: ['_variation_description'],
-			}),
-			defaultBehavior: 'replace',
-		},
-		pagination: {
-			pageSize: 20,
-		},
-	})
+	// 不傳 syncWithLocation：繼承 Refine 全域的 true，維持網址同步（R-1）
+	const { searchFormProps, tableProps, filters } = useProductTableQuery()
 
 	const { valueLabelMapper } = useValueLabelMapper()
 
@@ -133,42 +99,26 @@ const ProductTableComponent = ({
 	const columns = useColumns()
 	const options = useProductsOptions()
 
+	/*
+	 * antd-toolkit 的 useRowSelection 型別宣告上游有誤
+	 * （`rowSelection: TableProps<T_1>`，T_1 是懸空泛型），抽成 props 後型別對不上。
+	 * ProductTableBody 對外維持正確的 antd 型別，這裡收斂上游的錯誤宣告；
+	 * 執行期物件形狀本來就正確。
+	 */
+	const typedRowSelection =
+		rowSelection as TableProps<TProductRecord>['rowSelection']
+
 	return (
 		<>
-			<Card title="篩選" className="mb-4">
-				<ProductFilter searchFormProps={searchFormProps} options={options} />
-				<div className="mt-2">
-					<FilterTags<TProductFilterProps>
-						form={
-							{ ...searchFormProps?.form } as FormInstance<TProductFilterProps>
-						}
-						keyLabelMapper={productKeyLabelMapper}
-						valueLabelMapper={valueLabelMapper}
-						booleanKeys={[
-							'featured',
-							'downloadable',
-							'virtual',
-							'sold_individually',
-						]}
-					/>
-				</div>
-			</Card>
-			<Card>
-				<CreateButton className="mb-4" />
-				<Table
-					{...(defaultTableProps as unknown as TableProps<TProductRecord>)}
-					{...tableProps}
-					pagination={{
-						...tableProps.pagination,
-						...getDefaultPaginationProps({ label: '商品' }),
-					}}
-					rowSelection={rowSelection}
-					columns={columns}
-					scroll={{
-						x: 1400,
-					}}
-				/>
-			</Card>
+			<ProductTableBody
+				searchFormProps={searchFormProps}
+				tableProps={tableProps}
+				columns={columns}
+				valueLabelMapper={valueLabelMapper}
+				options={options}
+				rowSelection={typedRowSelection}
+				tableHeader={<CreateButton className="mb-4" />}
+			/>
 			{!!selectedProducts.length && (
 				<ActionArea>
 					<BulkAction />

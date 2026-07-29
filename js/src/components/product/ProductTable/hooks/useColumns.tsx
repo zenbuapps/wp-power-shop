@@ -16,7 +16,18 @@ import { ProductActions } from '@/components/product/ProductTable/ProductActions
 import { TProductRecord, TProductVariation } from '@/components/product/types'
 import { useProductsOptions } from '@/hooks'
 
-export const useColumns = () => {
+/**
+ * useColumns 參數
+ *
+ * `showActions`：是否顯示逐列「操作」欄。預設 `true` ——
+ * `#/products` 不傳參數即維持原行為；ProductPickerModal 只做勾選、
+ * 不做逐列操作，需明確傳 `false`。
+ */
+type TUseColumnsOpts = {
+	showActions?: boolean
+}
+
+export const useColumns = ({ showActions = true }: TUseColumnsOpts = {}) => {
 	const { width } = useWindowSize()
 	const { edit } = useNavigation()
 	const { product_cats = [], product_tags = [] } = useProductsOptions()
@@ -86,7 +97,10 @@ export const useColumns = () => {
 				return <ProductCat categories={categories} tags={tags} />
 			},
 		},
-		{
+	]
+
+	if (showActions) {
+		columns.push({
 			title: '操作',
 			dataIndex: '_actions',
 			align: 'center',
@@ -95,8 +109,8 @@ export const useColumns = () => {
 				!isVariation(record?.type as string) && (
 					<ProductActions record={record} />
 				),
-		},
-	]
+		})
+	}
 
 	return columns
 }
