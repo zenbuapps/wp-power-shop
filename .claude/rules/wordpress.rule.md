@@ -349,3 +349,55 @@ $encrypt_env = PowerhouseUtils::simple_encrypt([
 - **PHPStan** (`phpstan.neon`) — level 9，包含 WordPress + WooCommerce stubs 及 `powerhouse` plugin stubs。
 
 > Lint 指令見 `CLAUDE.md`。
+
+---
+
+## 11. 測試環境（wp-env + PHPUnit）
+
+> 測試組織與 Profit Shop 相關測試清單見 `.claude/rules/profit-shop.rule.md` §9。本節只記錄環境設定與執行方式的踩坑（Phase 7 實測整理）。
+
+### 11.1 `.wp-env.json` core 版本必須釘住
+
+最新版 WooCommerce 要求 WordPress ≥ 6.9。若 `.wp-env.json` 的 `core` 欄位沒有釘版本（或釘到不相容的舊版），`wp-env start` 會在啟動時就 `Error: No plugins activated.`——測試環境沒有 WooCommerce，任何 IT（Integration Test）都跑不了。
+
+目前設定：`core: "WordPress/WordPress#6.9.5"`。
+
+⚠ **`wp-env start` 的 exit code 是 0（假成功）**，即使 core / plugin 沒有正確啟用，指令本身仍回報成功。錯誤訊息只會出現在 stdout 中段，**不能只信 exit code**，要看 output 內容確認 plugin 真的 activated。
+
+### 11.2 `tests/bootstrap.php` 的 polyfill 必須掛在 `muplugins_loaded`，不能寫在檔案頂部
+
+WordPress 6.9 的 `wp-includes/abilities-api.php` 已內建 `wp_register_ability()` 等函式。`tests/bootstrap.php` 若在**檔案頂部**（core 尚未載入的時間點）用 `function_exists()` 判斷要不要 polyfill 這些函式，`function_exists()` 此時必為 `false`（因為 core 還沒載入），polyfill 一定會執行——等到檔尾 `require` 把 core 載入後，就會撞上 `Fatal error: Cannot redeclare wp_register_ability()`。
+
+**正確做法**：polyfill 移進掛在 `muplugins_loaded` hook 的函式（例如 `_power_shop_manually_load_plugin()`）內，此時 core 已載入，`function_exists()` 才能正確反映實際狀態。舊版 WordPress（尚未內建 Abilities API）仍會正常補上 polyfill，不影響向後相容。
+
+### 11.3 `composer test` 在 Windows host 上無法執行純 Unit 測試
+
+`phpunit.xml.dist` 的 `bootstrap` 屬性是**全域設定**，`unit` 與 `integration` 兩個 testsuite 共用同一份 bootstrap——這代表**連指定 `--testsuite unit` 也會嘗試啟動 WordPress**，在 Windows host（沒有跑 wp-env 容器）上會直接 Fatal error。
+
+**正確指令**（透過 wp-env 容器跑）：
+
+```bash
+./tests/e2e/node_modules/.bin/wp-env run tests-cli --env-cwd=wp-content/plugins/power-shop \
+  -- vendor/bin/phpunit -c phpunit.xml.dist --testsuite unit --colors=never
+```
+
+⚠ 用 `./tests/e2e/node_modules/.bin/wp-env`，**不要**用 `npx wp-env`（會抓到已棄用的 shim）。`wp-env` 自身參數（`run` / `--env-cwd`）與容器內要執行的指令之間要用 `--` 分隔。
+
+### 11.4 CI 目前只跑 `integration` testsuite，`unit` testsuite 從未執行
+
+```bash
+grep -rn "testsuite" .github/workflows/*.yml
+# pipe.yml:681 / :722 / :762 三處全是 --testsuite integration
+```
+
+任何只寫在 `tests/Unit/**` 的新測試，**CI 不會執行**，只能靠本機 / wp-env 容器手動跑（見 11.3）驗證。新增 Unit 測試時不要誤以為 CI 綠燈 = 該測試有跑。此項已登記為技術債，見 `specs/tech-debt.md`。
+
+### 11.5 `@group` 陷阱：每個 `test_*` method 都要各自標 group，class-level 標籤不夠
+
+`phpunit.xml.dist` 只 `<include>` 這 5 個 group：`smoke` / `happy` / `error` / `edge` / `security`。
+
+如果只在 **class-level** docblock 標了領域 group（例如 `@group profit_shop`、`@group application`、`@group usecase`），這些 group **都不在 include 名單內**——PHPUnit 會**靜默跳過**沒有標到 5 個 include group 之一的 method，測試檔案「執行完畢、0 failure」，但實際上一個 method 都沒真的跑，會出現「測試通過」的假象。
+
+**規則**：每個 `test_*` method 的 docblock 都要**各自**帶上 `smoke` / `happy` / `error` / `edge` / `security` 其中至少一個 group，不能只靠 class-level 標籤。
+
+**驗證方式**：跑 `--filter XxxTest --testdox` 列出的筆數，必須等於該檔案內 `test_` 開頭的方法數——數字對不上就代表有 method 被漏標、靜默跳過了。

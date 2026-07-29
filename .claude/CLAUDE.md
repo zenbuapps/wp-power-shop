@@ -20,11 +20,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Frontend
 pnpm dev              # Vite dev server (HMR, port 5178)
 pnpm build            # Production build → js/dist/
-pnpm lint             # ESLint
+pnpm lint:ts          # ESLint。⚠ 實際指令含 --fix，會改檔案；唯讀檢查改用 npx eslint "js/src/**/*.{ts,tsx}"（不加 --fix）
 npx tsc --noEmit      # TypeScript type-check
 
 # PHP
-composer lint          # PHPCS (WordPress-Core/Docs/Extra, config: phpcs.xml)
+composer lint          # PHPCS 唯讀檢查 (WordPress-Core/Docs/Extra, config: phpcs.xml)
+pnpm lint:php          # ⚠ 實際指令含 phpcbf（自動修正，會改檔案）+ phpcs + phpstan；唯讀檢查改用上面的 composer lint + 下面的 phpstan analyse
 vendor/bin/phpstan analyse inc --memory-limit=1G   # PHPStan level 9 (config: phpstan.neon)
 
 # Release
@@ -33,6 +34,8 @@ pnpm release:patch    # Bump + build + GitHub Release + ZIP
 pnpm release:minor
 pnpm release:major
 ```
+
+> **注意**：`package.json` 沒有 `lint` 這個腳本，只有 `lint:ts` / `lint:php`（見 `package.json:12-13`）。照舊文件寫的 `pnpm lint` 執行會直接失敗（`ERR_PNPM_NO_SCRIPT`）。
 
 ## Common Pitfalls
 
@@ -49,6 +52,11 @@ pnpm release:major
 11. **Partner self-service portal** 是**獨立 SPA bundle**（mount 點 `#profit_partner_portal`，URL `/profit-report/{slug}/`），與 admin SPA 完全隔離。Auth 走 cookie + sessionStorage metadata（永不存 token）；不用 Refine / dataProvider，直接 axios + `useCustom`/`useCustomMutation`；不打包 admin（grep `App1` / `Refine` 0 命中為驗收）。
 12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**（**非 React**）。原因：customer-facing + SEO（自然流量重點）+ 不破壞 WC cart / checkout 既有流程。AddToCart 用 **query string `profit_shop_id`** + WC `woocommerce_add_cart_item_data` filter 在 cart_item_data 注入分潤標記，再交給 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。
 13. **Always** 讓 admin 列表頁遵循 `.claude/rules/admin-list-ui.rule.md` 的「篩選卡片 + 實體列表 & 新增按鈕」標準版型（基準範本 `#/products`）：兩張 `antd-toolkit` 的 `Card`、新增按鈕在列表卡片內 Table 之上、Table 鋪 `defaultTableProps` + `getDefaultPaginationProps({label})`。**Don't** 用 Refine `<List>` 當列表頁外框、**Don't** 用 `antd` 的 `Card`。
+14. **Don't** 假設 `pnpm lint` 存在——實際腳本是 `pnpm lint:ts`（含 `--fix`）與 `pnpm lint:php`（含 `phpcbf`，會改檔案）；CI / agent 唯讀檢查用 `npx eslint "js/src/**/*.{ts,tsx}"`（不加 `--fix`）與 `composer lint`。
+15. **Don't** 把 antd `<Form>`（尤其 `type="submit"` 按鈕）直接放進 `antd-toolkit` 的 `SimpleModal` 而不處理事件冒泡——遮罩對所有冒泡 click 呼叫 `preventDefault()`，會連帶取消表單送出且無任何錯誤訊息。修法與清單見 `react.rule.md` §6.4 與 `admin-list-ui.rule.md` §7。
+16. **Don't** 對 `wc-rest` resource 只設 `pagination.pageSize` 就假設分頁生效——WC REST API 只認 `per_page`，要把它當 **filter** 送才會生效，否則靜默退回每頁 10 筆。詳見 `react.rule.md` §3。
+17. **Don't** 用 `agent-browser` 之類的瀏覽器自動化 CLI 截圖時假設呼叫端 shell 的 `cd` 會影響它的相對路徑——`agent-browser` 是**獨立行程**，相對路徑是相對於它自己的工作目錄（通常是專案根），**不是**呼叫端 shell 當下所在目錄。截圖 / 輸出檔案一律傳**絕對路徑**，否則檔案會落在專案根目錄，混進 `git status` 的 untracked 清單，有被 `git add -A` 誤收進版本庫的風險。
+18. **Don't** 以為 Refine dataProvider 的錯誤物件（`HttpError`）帶有 `error.response.data`——Refine 只保留 `{ message, statusCode }`，原始 response body（含後端 `code` / `data`）已經不見，`statusCode` 甚至可能與真實 HTTP 狀態碼不符。錯誤訊息解析要 fallback 到 `error.message`，不要假設一定讀得到 `response.data.code`。詳見 `react.rule.md` §3。
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -56,7 +64,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端）
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端 + 商品選擇器 Modal 化）。Phase 7 尚未 commit（實作變更見 `git status`），已知問題與技術債見 `specs/tech-debt.md`。
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -236,6 +244,44 @@ pnpm release:major
 - 0 admin SPA 修改 / 0 新 npm 套件 / 0 後端變動（純前端 UI 串接 Phase 6-A1 endpoint）
 - TS partner-portal 範圍 0 errors（admin baseline 129 不變）/ ESLint partner-portal 0 errors / 0 warnings / pnpm build 39.90s ✓
 
+### Phase 7（賣場編輯頁商品選擇器重構）已完工（尚未 commit）
+
+> 上游規格：`specs/clarify/2026-07-29-profit-shop-product-selector.md` + `specs/plan/2026-07-29-profit-shop-product-selector-plan.md`（695 行，含資料流分析、錯誤/失敗處理登記表、48 條驗收清單）
+
+| 階段 | 範圍 | 檔案 |
+|------|------|------|
+| 第一階段 | BUG-A 契約對齊：`types.ts` items 改巢狀（`override{regular_price,sale_price,signup_fee}` + `variations`）、`Edit/index.tsx` 填表 / 送出兩路徑對齊、`ItemsEditor` 價格欄改 2 欄（原價覆寫 / 特價覆寫）、新增 `ProfitShopHydratorTest`（Unit）+ `ProfitShopItemsRoundTripTest`（IT） | `js/src/pages/admin/ProfitShop/types.ts` + `Edit/index.tsx` + `components/ItemsEditor.tsx` + `components/ProfitShopForm.tsx` + 2 個新測試檔 |
+| 第二階段 | 抽 `ProductTableBody` 共用子元件（純重構，`#/products` 零 regression）：`useProductTableQuery.ts` 抽出 `useTable` 設定、`ProductTableBody.tsx` presentational 主體、`useColumns` 加 `showActions` 參數 | `js/src/components/product/ProductTable/`（`index.tsx` 改外殼 + 2 個新檔） |
+| 第三階段 | 新增 `ProductPickerModal`：`SimpleModal` 內嵌 `ProductTableBody`，跨頁勾選、三重 disabled（變體 / 已加入 / 破 100 上限）、`syncWithLocation: false` 隔離 URL 污染、選取狀態自帶 `useState`（不接 Jotai atom） | `js/src/pages/admin/ProfitShop/components/ProductPickerModal/` |
+| 第四階段 | `ItemsEditor` 接上 Modal：移除舊 `useSelect` + `Select`，改「選擇商品」按鈕；`handleBatchAdd` 雙層 dedupe + 100/500 上限提示 | `js/src/pages/admin/ProfitShop/components/ItemsEditor.tsx` |
+| 第五階段 | 商品顯示補齊：`useShopItemProducts`（`wc-rest` `include=` 分 5 chunk，每 chunk 100）+ `_enrichState` 四分支降級顯示（ok / missing / failed / pending） | `js/src/pages/admin/ProfitShop/hooks.ts` |
+
+**Phase 7 完工要點**：
+- **BUG-A 修正**：前端過去送後端從未定義的扁平欄位 `price_override` / `variation_id`，PHP 只讀巢狀 `override` / `variations` → 使用者設定的價格覆寫存檔後消失。**PHP 端零產品程式碼變更**——`ProfitShopHydrator` / `CptProfitShopRepository` / `ItemValidator` 本來就已經讀寫巢狀契約，成因 100% 在前端；PHP 端工作只有補測試鎖契約（`ProfitShopHydrator` 先前零測試覆蓋，是 BUG-A 能潛伏數個 Phase 的根本原因）。詳見 `.claude/rules/profit-shop.rule.md` §7
+- `ProductTableBody` 共用子元件：`useTable` 刻意留在 caller（shell 或 Modal），不移進 body——shell 需要 `searchFormProps` / `tableProps.dataSource` 給 Jotai 同步 effect 用，這個設計讓 `#/products` 的 diff 是純 JSX 搬移，是零 regression 最強的保證
+- `ProductPickerModal` 三重 disabled：`isVariation(record.type) || existingIds.has(Number(record.id)) || (selected.length >= 100 && !isSelected)`；跨頁勾選以 `record` 物件累積（不依賴當前頁 `dataSource`），關閉 Modal 時 reset
+- 100 筆單次批次上限（硬）、500 筆賣場總數軟上限，皆僅前端擋，後端無對應數量驗證（記為技術債，見 `specs/tech-debt.md`）
+- 全域閘門：實測數據見下方「驗證數據」表（tsc / eslint / build / 既有 SPA regression 全數確認）
+- 專案無前端單元測試框架（vitest / testing-library），UI 行為以型別 + lint 閘門 + 48 條手動驗收清單把關；BUG-A 契約回歸另補 API-level e2e spec（`tests/e2e/06-profit-shop/profit-shop-items.spec.ts`，沿用既有 `request.put` + `X-WP-Nonce` pattern，非 UI 驅動）
+- 過程中發現並修正 3 個 unrelated 環境問題（隨手修，非本次 scope 但擋路必須先解決）：`main.tsx` 缺 `<AntdApp>` provider（第四階段發現，詳見 `react.rule.md` §2）、`.wp-env.json` core 版本釘住、`tests/bootstrap.php` Abilities API polyfill 時序（後兩者詳見 `.claude/rules/wordpress.rule.md` §11）
+- 13 條踩坑知識分別寫入 `react.rule.md`（元件架構 + SimpleModal / AntdApp provider / wc-rest 分頁三條踩坑）、`admin-list-ui.rule.md`（Modal 情境必須關閉的元素清單）、`wordpress.rule.md`（測試環境 5 條）、`specs/tech-debt.md`（跨領域已知問題，含既有 21 個 pre-existing integration 測試失敗、`phpstan analyse inc` 在 HEAD 就跑不起來等，皆與本次改動無關）、Common Pitfalls #17（`agent-browser` 截圖絕對路徑）
+- 不引入新 npm / composer 套件；不動 Domain 層（`PriceCalculator` / `CartPriceOverrideHook` / `OverrideItem` Entity / `PriceOverride` VO 一律未改）
+
+**驗證數據**（實測，2026-07-29）：
+
+| 層級 | 結果 | 說明 |
+|------|------|------|
+| Unit | 338 / 669 assertions / 1 failure | 327 baseline + 11 新增（`ProfitShopHydratorTest`）；failure 是 pre-existing 的 `LoginRateLimiterIpDimensionTest`（見 `specs/tech-debt.md` TD-2） |
+| Integration | 168 / 723 assertions / 21 failures | 158 baseline + 10 新增（`ProfitShopItemsRoundTripTest`）；21 個全部 pre-existing（見 `specs/tech-debt.md` TD-1） |
+| e2e `06-profit-shop` | 4 passed | 新增（`profit-shop-items.spec.ts`） |
+| e2e `01`～`05` | 162 passed（27.6 分鐘） | 既有，零 regression |
+| `npx tsc --noEmit` | 127 | baseline 129，降 2（刪除死 prop `cardProps` 順帶消掉既有 unused 錯誤） |
+| `npx eslint "js/src/**/*.{ts,tsx}"` | 0 errors / 135 warnings | baseline 0 errors / 136 warnings |
+| `pnpm build` | 成功 | 各階段 37.94s ～ 48.62s |
+| `git diff --name-only -- inc/` | 0 | PHP 產品程式碼零修改，BUG-A 純前端成因的直接證據 |
+
+BUG-A 修正有**三層鎖**：Unit 11 + Integration 10 + e2e 4，扁平契約想復活會在三個層級同時被擋下，任何一層被繞過或誤刪，另外兩層仍會抓到回歸。詳見 `.claude/rules/profit-shop.rule.md` §7。
+
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 
 優先順序：
@@ -277,3 +323,5 @@ Complete specs live in `specs/` using AIBDD Discovery multi-view architecture. S
 | UI | `specs/ui/*.md` | 9 pages |
 | API | `specs/api/api.yml` | OpenAPI 3.0 |
 | Entity | `specs/entity/erm.dbml` | 9 tables |
+
+> **已知問題與技術債**：跨領域、暫不處理的項目（測試環境缺口、CI 設定、第三方套件契約落差、既有 UX 限制等）統一登記在 `specs/tech-debt.md`。單一領域內的已知落差（例如列表頁版型尚未對齊）記在對應的 `.claude/rules/*.rule.md`。

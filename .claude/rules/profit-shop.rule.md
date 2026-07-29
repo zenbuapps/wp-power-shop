@@ -246,6 +246,44 @@ if ( null !== $password_changed_at && $issued_at < $password_changed_at ) {
 
 換言之，password_changed_at = issued_at 同秒視為「已撤銷」，**必須嚴格大於** password_changed_at 才通過。`PartnerTokenStorePasswordRotationTest` 的同秒 case 在 Phase 6-A1 已從「視為有效」反轉為「視為已撤銷」契約（檔頭 docblock 同步更新）。
 
+### OverrideItem items 契約必須是巢狀，不可扁平化（Phase 7，BUG-A 修正史）
+
+`ProfitShop.items` 的 wire 契約（`OverrideItemInput` / `OverrideItemOutput`，`specs/api/api.yml:905-952`）**一律是巢狀**：
+
+```json
+{
+  "product_id": 101,
+  "inflated_count": 0,
+  "override": { "regular_price": "50000", "sale_price": "49900", "signup_fee": null },
+  "variations": { "1031": { "override": { "regular_price": null, "sale_price": "990", "signup_fee": null } } }
+}
+```
+
+`ProfitShopHydrator::from_input`（`Application/UseCase/Shop/Support/ProfitShopHydrator.php:113-128`）、`CptProfitShopRepository`（序列化 `:284-295` / 反序列化 `:346-370`）、`ItemValidator::validate`（`:62-76`）**從一開始就只讀寫這個巢狀形狀**，PHP 端沒有任何一處讀取過扁平的 `price_override` / `variation_id` 欄位。
+
+**BUG-A**：前端 `ItemsEditor` 曾經一直送出後端從未定義的扁平欄位 `{ product_id, variation_id, price_override, inflated_count, sku?, name? }`。PHP 端安靜地忽略了這些從未被讀取的欄位（不是驗證失敗，是根本沒有對應的讀取路徑），使用者在後台設定的價格覆寫「儲存成功」（HTTP 200）但實際上從未寫進 DB，重新整理後價格覆寫消失。因為 PHP 端行為完全正常，這個 bug 潛伏了數個 Phase 都沒被抓到。
+
+**根因診斷（Phase 7 planner 逐檔驗證）**：
+
+```bash
+grep -rn "price_override" inc/
+# 只命中 build_price_override() 方法名（Hydrator/Repository 內部命名）
+# 與 Cart hook 的 _profit_price_override meta（不同語意，Phase 3-D HMAC 簽章用途）
+# PHP 端沒有任何一處讀取扁平的 price_override / variation_id 請求欄位
+```
+
+**修正（Phase 7）**：**PHP 產品程式碼零變更**。前端 `types.ts` 改為送巢狀 `{ product_id, inflated_count, override: {...}, variations: {...} }`（UI 元件細節見 `react.rule.md` §6.5「items 巢狀契約 + 商品顯示資訊補齊」），PHP 端唯一的工作是**補測試鎖契約**——`ProfitShopHydrator` 在 BUG-A 修正前是**零測試覆蓋**，這正是它能潛伏數個 Phase 的根本原因：
+
+- `tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php`（Unit，不啟 WP，**11 method**）：巢狀 `override` 正確寫入 / 缺欄位為 null / `variations` 數字鍵 / **扁平 `price_override` 被忽略（回歸鎖）** / `product_id <= 0` 靜默跳過 / 字串 `'101'` product_id 轉 int / 非法價格拋 `InvalidPriceOverride`
+- `tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php`（IT，**10 method**）：PUT 巢狀 items → GET 斷言原樣還原；`sale > regular` → 400；不存在 product → 404；未包含的商品視為整體覆寫（被移除）
+- `tests/e2e/06-profit-shop/profit-shop-items.spec.ts`（API-level，**4 case**）：PUT 巢狀 items → GET 還原；PUT 扁平 items → 斷言價格不被寫入
+
+**三層鎖死 BUG-A 復發**：扁平契約想復活，會同時被三個層級擋下——Unit（`ProfitShopHydratorTest` 11 method）驗證 Hydrator 本身只認巢狀輸入、Integration（`ProfitShopItemsRoundTripTest` 10 method）驗證 HTTP round-trip、e2e（`profit-shop-items.spec.ts` 4 case）驗證真實部署環境下的行為。三層各自獨立、覆蓋範圍不重疊（單元邏輯 / API 契約 / 端到端），任何一層被繞過、誤刪、或未來重構時漏改，另外兩層仍會抓到回歸——這是刻意的縱深防禦設計，不是重複勞動。
+
+**型別選擇**：`override.regular_price` / `sale_price` / `signup_fee` 都是 `string | null`，不是 `number | null`——`PriceOverride` VO 本身是 nullable **string**（`PriceOverride.php:34-48`），用 `bccomp` 走十進位字串比較避免浮點誤差（`PriceOverride.php:66`）。前端若「簡化」改回 `number` 會需要在邊界處重新序列化成字串，且會重新引入十進位 / 浮點誤差風險——**不要**這樣做。
+
+**契約並存期風險評估（低風險，已確認）**：前後端同一 plugin bundle 同時發版，不存在「舊前端 + 新後端」或「新前端 + 舊後端」的過渡期。即使存在，PHP 本來就忽略扁平欄位，行為等同現況，不會更差。DB 內既有 items 資料一直是巢狀 + null（舊前端送的扁平值從未寫入），**不需要 migration**，IT round-trip 測試驗證既有資料可正常讀取。
+
 ---
 
 ## 8. Slug 衝突（spec §6.11）
@@ -293,6 +331,13 @@ Phase 6-A1 新增測試（Partner 自助修密碼）：
 - `tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest`（11 method）：HTTP 端到端（200 / 401 / 422 / 429）+ Set-Cookie Max-Age=0 + Cache-Control no-store / Pragma no-cache + 改密成功後舊 token 立即失效（PartnerTokenStore::verify 同秒 race window）+ admin nonce 不能走此 endpoint
 - `tests/Integration/Infrastructure/Rest/ExceptionMapperWeakPasswordTest`（1 method）：`WeakPassword → 422 weak_password` + `data.reasons[]` 對映完整性，且優先於 `\DomainException` fallback
 
+Phase 7 新增測試（賣場編輯頁商品選擇器，PHP 端僅測試、無產品程式碼變更）——三層鎖死 BUG-A 復發，見 §7「OverrideItem items 契約」：
+- `tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php`（**11 method**）：`ProfitShopHydrator` 首次測試覆蓋（BUG-A 潛伏數個 Phase 的根本原因）
+- `tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php`（**10 method**）：items 巢狀契約 PUT → GET round-trip，對應 `save-shop-item-overrides.feature` 全 7 Rule
+- `tests/e2e/06-profit-shop/profit-shop-items.spec.ts`（**4 case**）：API-level（沿用既有 `request.put` + `X-WP-Nonce` pattern），鎖死「扁平 items 契約已死」——PUT 扁平欄位 → 斷言價格不被寫入
+
+**實測結果**（2026-07-29）：Unit 338 / 669 assertions / 1 failure（327 baseline + 11 新增）；Integration 168 / 723 assertions / 21 failures（158 baseline + 10 新增）；e2e `06-profit-shop` 4 passed；e2e `01`～`05` 162 passed 零 regression。`composer test` 的 21 個 integration 失敗 + 1 個 unit 失敗**全部 pre-existing**，與 Phase 7 改動無關（已用「移出新測試檔案再單獨跑」的方式驗證）。PHP 測試環境（`.wp-env.json` / `tests/bootstrap.php` / `@group` 陷阱）見 `wordpress.rule.md` §11；完整已知問題清單見 `specs/tech-debt.md`。
+
 ---
 
 ## 10. 註冊流程
@@ -333,6 +378,7 @@ Phase 6-A1 新增測試（Partner 自助修密碼）：
 | Phase 5-C（累積 NIT 清理：PHP + JS 共 10 條）| `32b9d5a` |
 | Phase 6-A1（Partner 自助修密碼：PartnerPassword VO + WeakPassword Exception + ChangePasswordUseCase + V2Api `/partner-auth/change-password` + PartnerTokenStore M-1 同秒撤銷）| `e974ae4` |
 | Phase 6-A2（Partner 自助修密碼前端 UI：ChangePassword.tsx HIGH-RISK + useChangePassword + forceLogoutAndRedirect + Login `?reason=password_changed` + partnerExceptionMapper context-aware）| `c80b4cc` |
+| Phase 7（賣場編輯頁商品選擇器重構：`ProductTableBody` 抽取 + `ProductPickerModal` + items 巢狀契約修正 BUG-A + `ProfitShopHydratorTest` / `ProfitShopItemsRoundTripTest`）| （尚未 commit，見 `git status` 與 `specs/plan/2026-07-29-profit-shop-product-selector-plan.md`） |
 
 設計與決策來源：
 - `specs/2026-05-06-profit-shop-design.md`（含 Q1-Q6 plan 階段決策、§4 endpoint、§6.11 slug 衝突、§7 例外對映）
@@ -340,9 +386,9 @@ Phase 6-A1 新增測試（Partner 自助修密碼）：
 
 ---
 
-## 12. 前端 SPA 架構（Phase 4-A + 4-B + 6-A2）
+## 12. 前端 SPA 架構（Phase 4-A + 4-B + 6-A2 + 7）
 
-兩個獨立的 React SPA bundle：商家後台 admin SPA（4-A）+ Partner self-service portal（4-B / 6-A2）。前者掛在 `admin.php?page=power-shop`，後者掛在 `/profit-report/{slug}/`。詳細元件結構與目錄樹見 `react.rule.md` §6.5（admin Profit Shop 系列）與 §6.6（Partner Portal）。
+兩個獨立的 React SPA bundle：商家後台 admin SPA（4-A，Phase 7 商品選擇器重構仍在此 bundle 內）+ Partner self-service portal（4-B / 6-A2）。前者掛在 `admin.php?page=power-shop`，後者掛在 `/profit-report/{slug}/`。詳細元件結構與目錄樹見 `react.rule.md` §6.4（`ProductTableBody` 共用元件）、§6.5（admin Profit Shop 系列，含 §12.9 商品選擇器）與 §6.6（Partner Portal）。
 
 ### 12.1 Resource 路由
 
@@ -694,3 +740,19 @@ $raw = $_GET['profit_shop_id'] ?? $_POST['profit_shop_id'] ?? null;
 #### DRY：URL prefix 統一用 `RewriteRules::SHOP_REWRITE_PREFIX`
 
 凡是要組 `/profit-shop/{slug}/` URL 的地方（CartItemMetaDisplay、未來的 ProfitShopRenderer 內部組 canonical 等），**必須**從 `RewriteRules::SHOP_REWRITE_PREFIX` 取，不要 hardcode 字串 `'profit-shop'`，避免日後改前綴時遺漏。
+
+### 12.9 商品選擇器 ProductPickerModal（Phase 7）
+
+`#/profit-shop/edit/{id}` 的商品選擇器從單選 `Select` 改為「按鈕開啟 `SimpleModal` + 完整篩選器 + 分頁列表 + 跨頁勾選」，解決 10 萬商品規模下無法篩選的問題。UI 元件架構、`ProductTableBody` 共用拆法、`SimpleModal` 踩坑細節見 `react.rule.md` §6.4 / §6.5；本節只記錄與 Profit Shop domain 契約相關的部分。
+
+**三層錯誤處理分工**（`specs/plan/2026-07-29-profit-shop-product-selector-plan.md` 錯誤處理策略）：
+
+1. **前端守門**（防止無效請求出門）：批次上限 100 disabled、dedupe、特價 > 原價的 Form rule、`Number.isFinite` 過濾非數字 id
+2. **後端 Domain 驗證（唯一真相）**：`ItemValidator`（商品 / 變體存在性）+ `PriceOverride` VO invariant（非負十進位、sale ≤ regular）。**不因前端已擋就放寬**——繞過前端直打 API 一樣會被 400 擋下
+3. **降級不阻斷**（顯示層失敗不影響業務）：補齊查詢失敗 / 商品已刪除 → 只影響顯示（`useShopItemProducts`，見 `react.rule.md` §6.5），編輯與儲存路徑完全不受影響
+
+**100 / 500 上限是前端專屬限制，後端沒有對應驗證**：單次批次上限 100 筆、賣場商品總數軟上限 500 筆，都只在前端擋（`ProductPickerModal` disabled + `notification.warning`）。後端 `ItemValidator` / `PriceOverride` 沒有數量上限檢查——這是刻意的（Q1 範圍邊界：不動 Domain 層），代表**繞過前端直接呼叫 API 可以送超過 500 筆的 items 陣列而不被拒絕**。若未來要把上限收斂成硬性業務規則，需要在 `ItemValidator` 或新的 UseCase 層補驗證，屬於後續產品決策（見 `specs/tech-debt.md`）。
+
+**Modal 只做新增，不做移除**：移除既有賣場商品仍在下方的商品列表操作，`ProductPickerModal` 內沒有移除入口（Q4 範圍邊界）。
+
+**變體不可選**：`variations` 契約結構保留（見 §7「OverrideItem items 契約」），但 Modal 內的變體子列 checkbox 維持 disabled，UI 不開放選變體（Q3 範圍邊界）。

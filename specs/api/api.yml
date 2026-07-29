@@ -876,35 +876,80 @@ components:
         - conflicting_slug
         - conflicting_label
 
+    PriceOverride:
+      type: object
+      description: |
+        單一價格覆寫（對應 Domain\ValueObject\PriceOverride）。
+        三個欄位皆為 nullable string，null 表示「不覆寫該欄位、沿用商品原價」。
+        非 null 值必須為合法非負十進位字串；
+        若 sale_price 與 regular_price 皆非 null，sale_price 必須 <= regular_price
+        （違反時 ExceptionMapper 回 400 validation_failed）。
+      properties:
+        regular_price:
+          type: string
+          nullable: true
+          description: 原價覆寫
+        sale_price:
+          type: string
+          nullable: true
+          description: 特價覆寫
+        signup_fee:
+          type: string
+          nullable: true
+          description: 訂閱型商品註冊費覆寫
+      required:
+        - regular_price
+        - sale_price
+        - signup_fee
+
     OverrideItemInput:
       type: object
-      description: 賣場商品覆寫項目（input 形式）
+      description: |
+        賣場商品覆寫項目（input 形式）。
+
+        ⚠️ BUG-A 修補（2026-07-29）：本 schema 原先定義為扁平的
+        `{ product_id, variation_id, price_override: integer, inflated_count }`，
+        與後端 Domain\Entity\OverrideItem::to_array() 的巢狀形狀不符。
+        ProfitShopHydrator::build_override_item() 只讀 `override` / `variations`，
+        導致前端送出的 `price_override` / `variation_id` 於儲存時被靜默丟棄。
+        現已對齊 Domain 形狀，扁平欄位不再使用。
       properties:
         product_id:
           type: integer
-        variation_id:
-          type: integer
-          default: 0
-        price_override:
-          type: integer
-          nullable: true
-          description: 售價覆寫（單位：元；null 表示沿用原價）
         inflated_count:
           type: integer
           default: 0
           description: 浮報數量（fake count，不影響庫存）
+        override:
+          allOf:
+            - $ref: '#/components/schemas/PriceOverride'
+          description: 商品自身的價格覆寫
+        variations:
+          type: object
+          description: |
+            variation_id => { override } 對照表。
+            key 為 variation ID 字串，value 物件僅含 override 欄位。
+            variation 必須屬於同筆的 product_id，否則 ItemValidator 拋 InvalidVariation。
+            目前 Admin UI 尚未開放編輯，保留供後續迭代。
+          additionalProperties:
+            type: object
+            properties:
+              override:
+                $ref: '#/components/schemas/PriceOverride'
+      required:
+        - product_id
 
     OverrideItemOutput:
       allOf:
         - $ref: '#/components/schemas/OverrideItemInput'
         - type: object
-          properties:
-            sku:
-              type: string
-              readOnly: true
-            name:
-              type: string
-              readOnly: true
+          description: |
+            ⚠️ 不含 sku / name / image。
+            商品名稱與 SKU 屬「商品當下狀態」而非賣場設定，
+            夾帶會造成商品改名後賣場顯示舊名的 stale 問題，
+            且違反 Domain 純度（Application 層為 UI 便利去 enrich WC 資料）。
+            前端改以 wc-rest `GET /wc/v3/products?include=…` 批次補齊，
+            見 specs/features/profit-shop/enrich-shop-item-display.feature。
 
     ProfitShopInput:
       type: object

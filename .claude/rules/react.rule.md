@@ -44,6 +44,16 @@ const MyPageComponent = () => {
 export const MyPage = memo(MyPageComponent)
 ```
 
+### `notification` / `message` 的前提：`main.tsx` 必須有 `<AntdApp>` provider（⚠ Phase 7 踩坑，已修）
+
+Ant Design v5 的 `App.useApp()` 要拿到可用的 `notification` / `message` / `modal` instance，**前提是元件樹被 antd 的 `<App>` context provider 包住**。`main.tsx` 若沒有這層 provider，`App.useApp()` 會回傳空物件 `{}`——`notification.success(...)` 這類呼叫在執行期才會發現 `notification` 是 `undefined`，呼叫當下直接 `throw`，**中斷該處後續所有程式碼**（例如成功訊息呼叫後面接的 `onClose()` / `refetch()` 都不會執行），而且通常沒有清楚的錯誤訊息可看，很難排查。
+
+這個問題曾經影響全專案 10 個檔案，包含三個 HIGH-RISK 元件：`RegeneratePasswordButton`（明文密碼展示）/ `ImportModal`（不可逆匯入）/ `ResetButton`（不可逆重設）——站長按下去之後，不管成功或失敗都看不到任何回饋；`ProfitShop/Edit` 的「已更新賣場」/「更新失敗」提示也從未真正出現過。
+
+**已修**：`main.tsx` 用 `<AntdApp component={false}>` 包住整棵樹（`component={false}` 讓它零 DOM 輸出，純粹提供 context，不影響版面）。
+
+**新元件開發規範**：任何要用 `App.useApp()` 拿 `notification` / `message` / `modal` 的元件，**先確認掛載點的 `main.tsx` 有 `<AntdApp>` provider**（admin SPA 與 partner-portal SPA 是各自獨立的 React root，要分別確認各自的 `main.tsx`）。若新增第三個獨立 SPA bundle，這是**必須**補上的 provider，不是可選項。
+
 ---
 
 ## 3. Data Provider 與 Refine Hooks
@@ -86,6 +96,29 @@ const { data } = useCustom<TDashboardStats>({
 })
 ```
 
+### ⚠️ Refine 的 `HttpError` 會吃掉 `response.data`，導致後端錯誤訊息全部失效（Phase 7 踩坑，影響全專案、優先度最高）
+
+**症狀**：後端明明回了詳細錯誤訊息（例如「商品 ID 999777 不存在」），前端 `notification` 卻只顯示通用的「操作失敗，請稍後再試」。
+
+**根因**：Refine 的 dataProvider 會把 axios error 轉成自己的 `HttpError` 型別，**只保留 `{ message, statusCode }`**，原始的 `error.response.data`（後端回的 `{code, message, data}` 或裸 payload）已經不存在。如果錯誤訊息解析函式（例如 `utils/profitShopExceptionMapper.ts` 的 `extractErrorBody()`）是讀 `error.response.data` 取 `code` 欄位，會拿到 `null`，走不到對應的友善訊息，只能 fallback 成通用句。
+
+**額外陷阱：不能靠 `statusCode` 判斷錯誤類型**。實測 `HttpError.statusCode` 回報 **500**，但 network log 顯示真正的 HTTP 狀態是 **404**——Refine 轉換過程中會弄丟正確的狀態碼，`statusCode` 與 `mapped.code` 都不可信。
+
+**影響範圍**：**所有走 Refine dataProvider 的錯誤處理**，不限 Profit Shop。後端辛苦寫的 Domain Exception 訊息，只要走這條路徑就到不了使用者眼前。
+
+**目前的因應**（`pages/admin/ProfitShop/Edit/index.tsx`）：解析不出 `code` 時（代表拿到的是 Refine `HttpError` 而非原始 response body），優先顯示後端錯誤原文（`error.message`，Refine 至少會把這個保留下來），不要退化成無資訊的通用句：
+
+```ts
+// 解析不出 code 時（Refine HttpError）優先用後端原文，別退化成無資訊的通用句
+description: mapped.code ? mapped.toastMessage : rawMessage || mapped.toastMessage
+```
+
+特定情境（例如賣場含已刪除商品）可再用正則比對後端原文，補上可行動的指引文字 + `duration: 0`（不自動消失，讓使用者來得及看到）。
+
+**驗證方式**：在任一 Refine mutation 的 `onError` 印出 `error`，會看到只剩 `message` / `statusCode` 兩個欄位——`error.response` 已經不在了。
+
+**已知延伸問題**：Refine dataProvider 失敗時會**自己再跳一則**內建錯誤通知，與上述自訂通知同時出現、視覺重複，目前尚未處理，見 `specs/tech-debt.md` TD-11。
+
 ### Profit Shop 系列特例（Phase 4-A）
 
 Profit Shop 4 個 resource（ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings）的後端 V2Api 統一回 `{code, message, data}` 包裹形狀，與 antd-toolkit 預設 dataProvider 預期的 WordPress REST API 形狀（讀 `x-wp-total` header、payload 直接是 array / object）**不相容**。
@@ -109,6 +142,33 @@ const list = data?.data?.data ?? []  // 注意要剝兩層
 ```
 
 未來若要改用 `useTable` / `useForm`，需先為 `'power-shop'` dataProvider 寫 thin wrapper 拆解 `{code, data}`。
+
+### ⚠️ 走 `wc-rest` 時 `pagination.pageSize` 完全無效（Phase 7 踩坑）
+
+6 個 dataProvider 共用同一份分頁序列化邏輯，一律把 Refine 的 `pagination` 轉成 Powerhouse 風格的 `paged` / `posts_per_page` query param。但 WooCommerce `wc/v3/products`（以及其他 `wc-rest` resource）**只認 `page` / `per_page`**，不認 `posts_per_page`——`posts_per_page` 會被 WC REST API 直接忽略，`per_page` 沒被送出就靜默退回 WooCommerce 預設**每頁 10 筆**。
+
+症狀：明明設定 `pagination: { pageSize: 100 }`，`useList` / `useTable` 卻只拿回 10 筆；如果下游邏輯拿這份結果去比對「查無的 id」，會把第 11 筆以後的合法商品誤判為「已失效 / 已刪除」。
+
+**修法**：把 `per_page` 當成 **filter** 送，不要只放在 `pagination`：
+
+```tsx
+// ❌ 錯誤：pageSize 對 wc-rest 無效，實際仍是每頁 10 筆
+useList<TProductRecord>({
+  resource: 'products',
+  dataProviderName: 'wc-rest',
+  pagination: { pageSize: 100 },
+})
+
+// ✅ 正確：per_page 當 filter 送（filter 會被序列化成 query string）
+useList<TProductRecord>({
+  resource: 'products',
+  dataProviderName: 'wc-rest',
+  filters: [{ field: 'per_page', operator: 'eq', value: 100 }],
+  pagination: { pageSize: 100 }, // 可保留同步顯示用，但實際生效的是上面的 filter
+})
+```
+
+**影響範圍**：全專案任何走 `wc-rest` 的 `useList` / `useTable`，不限 Profit Shop。新增走 `wc-rest` 的查詢時，若預期單頁筆數 > 10，務必用這個寫法驗證。`useShopItemProducts`（`pages/admin/ProfitShop/hooks.ts`，見 §6.5）的 `include=` 補齊查詢就是靠這個寫法才能一次拿到 100 筆。
 
 ### 禁止直接 API 呼叫
 
@@ -280,6 +340,87 @@ ProductEditTable 使用虛擬列表渲染，因 `Form.getFieldsValue` 不適用�
 
 ---
 
+## 6.4 ProductTable 共用元件架構（Phase 7：ProductTableBody + useProductTableQuery）
+
+`#/products` 的商品列表元件（`components/product/ProductTable/`）從單一頁面元件拆成三層，供 `#/products` 本身與 `ProductPickerModal`（§6.5）共用：
+
+```
+js/src/components/product/ProductTable/
+├── index.tsx                 # 外殼：#/products 頁面用。useTable / Jotai atom / useRowSelection /
+│                              #   3 個 useEffect（Jotai 同步）/ ActionArea / SelectedItem 全部住這裡
+├── ProductTableBody.tsx      # presentational only：篩選 Card + FilterTags + 列表 Card + Table
+│                              #   rowSelection 完全由 props 注入，不持有任何狀態
+├── useProductTableQuery.ts   # useTable 設定抽出：resource / onSearch / filters / pagination
+│                              #   簽名 useProductTableQuery(opts?: { syncWithLocation?: boolean })
+├── hooks/useColumns.tsx      # 加 { showActions?: boolean } 參數，預設 true（不傳 = #/products 行為不變）
+└── atom.tsx                  # 不動：module-level Jotai atom，只給 #/products 用（見 §6.5 隔離規則）
+```
+
+```tsx
+// #/products（不傳，showActions 預設 true）
+const columns = useColumns()
+
+// ProductPickerModal（不需要操作欄）
+const columns = useColumns({ showActions: false })
+```
+
+**關鍵設計決策：`useTable` 刻意留在 caller，不下放進 `ProductTableBody`。**
+
+`ProductTableBody` 是純 presentational 元件，props 包含 `searchFormProps` / `tableProps` / `columns` / `rowSelection` / `valueLabelMapper` / `options` / `tableHeader?: ReactNode` / `scrollX?: number` / `showCard?: boolean`（預設 `true`，見下方子節）。`tableHeader` 渲染在**列表 Card 內、Table 之上**（對齊 `admin-list-ui.rule.md` §1 規則 3，例如 `#/products` 傳 `<CreateButton />`、`ProductPickerModal` 傳達到上限時的 `<Alert>`）。
+
+原因：caller（`#/products` 的 `index.tsx` 或 `ProductPickerModal`）需要 `searchFormProps`（`SelectedItem.onSelected` 要重設表單）與 `tableProps.dataSource` / `filters` / `pagination`（Jotai 同步 `useEffect` 要讀）。若把 `useTable` 移進 `ProductTableBody`，caller 反而要開一堆 prop 洞把這些值傳回來。把 `useTable` 留在 caller，讓 `#/products` 的改動是**純 JSX 搬移**（`index.tsx` 兩張 Card 的 JSX 換成 `<ProductTableBody />`），這是零 regression 最強的保證。
+
+**消費者**：`#/products`（`pages/admin/Product/List/index.tsx`）與 `ProductPickerModal`（`pages/admin/ProfitShop/components/ProductPickerModal/`，見 §6.5）。全專案僅這兩處使用 `ProductTable` / `ProductTableBody`。
+
+### `syncWithLocation` 差異：shell 繼承全域、Modal 必須明確關閉
+
+`App1.tsx` 設定 Refine 全域 `syncWithLocation: true`（`useTable` 沒傳此參數時的預設值）。`#/products` 的 shell **不傳** `syncWithLocation`（沿用全域 `true`，網址列同步篩選 / 分頁，使用者可分享網址）；`ProductPickerModal` 內的 `useProductTableQuery({ syncWithLocation: false })` **必須明確傳 `false`**，否則 Modal 內的篩選 / 分頁會寫進當前頁（例如 `#/profit-shop/edit/{id}`）的 URL，污染編輯頁網址、關閉 Modal 後殘留。
+
+### ⚠️ SimpleModal 遮罩會阻斷 Modal 內所有表單送出（Phase 7 踩坑，任何人把 Form 放進 SimpleModal 都會撞上）
+
+`antd-toolkit` 的 `SimpleModal` 背景遮罩事件處理概念上是：
+
+```js
+onClick: (e) => {
+  e.stopPropagation()
+  e.preventDefault()          // ← 對所有冒泡上來的 click 都呼叫，不只是點在遮罩本身
+  e.target === e.currentTarget && close()
+}
+```
+
+`preventDefault()` 對**所有冒泡到遮罩層的 click** 都會執行。如果 Modal 內有 `<Form>` 且送出鈕是 `type="submit"`，這顆 `preventDefault()` 會連帶取消表單送出——症狀是「按下篩選 / 送出按鈕完全沒反應，連 request 都不會發出」，且不會有任何 console error，非常難排查。
+
+`#/products` 不在 Modal 裡所以沒事；既有的 `TaxonomyModal` 是用純 `onClick`（非 `type="submit"`）按鈕，剛好繞過這個坑。`ProductPickerModal` 內嵌 `ProductTableBody` 的篩選 `<Form>` 第一次踩到。
+
+**修法**：`SimpleModal` 的 children 外面包一層 `<div onClick={(e) => e.stopPropagation()}>`，把 click 事件在冒泡到遮罩前攔下。遮罩「點背景關閉」的判斷邏輯是 `e.target === e.currentTarget`（掛在遮罩自己身上，不是靠冒泡收），不受這層 `stopPropagation` 影響。
+
+```tsx
+// ProductPickerModal/index.tsx（示意）
+<SimpleModal {...modalProps} title="選擇商品" destroyOnHidden>
+  <div onClick={(e) => e.stopPropagation()}>
+    <ProductTableBody {...bodyProps} />
+  </div>
+</SimpleModal>
+```
+
+**任何未來要把 antd `<Form>`（尤其含 `type="submit"` 按鈕）放進 `SimpleModal` 的元件，都要套用這個包法**，不要等撞到才想起來。這條連同 Modal 情境其他必須關閉的元素，整理成清單見 `admin-list-ui.rule.md` §7。
+
+### `showCard` prop：antd-toolkit `Card` 的 `showCard={false}` 會連 `title` / `className` 一起消失（三輪改造踩坑）
+
+`ProductTableBody` 新增 `showCard?: boolean`（預設 `true`）。`antd-toolkit` 的 `Card` 元件在 `showCard={false}` 時是**直接回傳 `children`，整張 `Card` 不渲染**——這代表 `title` 與 `className`（包含用來留間距的 `mb-4`）會**一併消失**，不是「隱藏外框但保留內距」。
+
+**修法**：不要多包一層 wrapper div 去補間距，改成把間距下放到內層元素的**條件式 className**：
+
+```tsx
+<div className={showCard ? 'mt-2' : 'mt-2 mb-4'}>
+  {/* FilterTags 或其他需要間距的內容 */}
+</div>
+```
+
+這樣卡片模式下 DOM 結構零變化，只有非卡片模式（例如被當內嵌篩選器塞進其他版面）才會多墊一段 margin。`admin-list-ui.rule.md` §7 也記了這條，供 Modal 情境查閱。
+
+---
+
 ## 6.5 Profit Shop 系列前端架構（Phase 4-A）
 
 商家後台 Profit Shop CRUD UI，4 個 resource 對應 4 個 page module。
@@ -288,7 +429,7 @@ ProductEditTable 使用虛擬列表渲染，因 `Form.getFieldsValue` 不適用�
 
 ```
 js/src/pages/admin/
-├── ProfitShop/         # 賣場 CRUD（含 ItemsEditor、ShopActionsButtons）
+├── ProfitShop/         # 賣場 CRUD（含 ItemsEditor、ShopActionsButtons、ProductPickerModal[Phase 7]）
 ├── ProfitPartner/      # 分潤夥伴 CRUD（含 RegeneratePasswordButton ⚠ HIGH-RISK、PartnerSelector）
 ├── ProfitMigration/    # legacy 一頁商店匯入（含 ImportModal ⚠ HIGH-RISK）
 └── ProfitSettings/     # 全域設定（含 ResetButton ⚠ HIGH-RISK）
@@ -348,6 +489,110 @@ ProfitSettings 額外加 `lastFilledSettingsRef`（content-diff 比對）：rese
 - `useCustom` 的 `enabled` 切換（React Query 自動 cancel pending request）
 - `currentSlug` 比對：編輯模式下跳過驗證自己的 slug
 - `shouldQuery` 守門：欄位清空時 alert 不殘留（`enabled=false` 仍可能讀到 cache）
+
+### ProductPickerModal（Phase 7，商品選擇器 Modal）
+
+`pages/admin/ProfitShop/components/ProductPickerModal/`（`index.tsx` + `hooks.ts`）：`ItemsEditor` 舊版是 10 萬商品規模下無法用的單選 `useSelect` + `Select`，改成「選擇商品」按鈕開啟 `SimpleModal`，內嵌 §6.4 的 `ProductTableBody`，讓賣場編輯頁擁有和 `#/products` 相同的完整篩選器 + 分頁 + 跨頁勾選。
+
+**與 `#/products` 的差異（`useProductTableQuery` / `useColumns` 參數）**：
+
+| 設定 | `#/products` | `ProductPickerModal` |
+|------|--------------|-----------------------|
+| `useProductTableQuery` | 不傳 `syncWithLocation`（繼承全域 `true`） | `{ syncWithLocation: false }`（§6.4，防污染編輯頁 URL） |
+| `useColumns` | 不傳（`showActions` 預設 `true`） | `{ showActions: false }`（Modal 不需逐列操作欄） |
+| 選取狀態 | Jotai `selectedProductsAtom`（跨分頁 / 跨頁面持久） | **元件區域 `useState`**（`useProductPickerModal` hook 持有，Modal 關閉即丟棄） |
+| 新增商品按鈕 | 有（`tableHeader` 傳 `<CreateButton />`） | 無 |
+| `ActionArea` / `BulkAction` | 有 | 無 |
+
+**選取狀態絕不可接 `selectedProductsAtom`**：`selectedProductsAtom` 是 module-level 全域 atom，`ProductTable` mount 時會無條件 `setSelectedProducts([])`（既有行為，詳見 `specs/tech-debt.md` TD-8）。如果 `ProductPickerModal` 接了同一顆 atom，會與 `#/products` 雙向污染——在 Modal 裡勾選會清掉 `#/products` 的選取，反之亦然。`useProductPickerModal` hook 自帶 `useState<TProductRecord[]>([])`，與 `#/products` 完全隔離。
+
+**三重 disabled**（`getCheckboxProps`）：
+
+```ts
+isVariation(record.type)
+  || existingIds.has(Number(record.id))        // 已在賣場
+  || (selected.length >= 100 && !isSelected)    // 破單次上限
+```
+
+**跨頁保留機制**：`onSelect` / `onSelectAll` 以 **`record` 物件累積**（不是 antd `onChange` 給的 `selectedRows`，那只是當前頁範圍內的物件）。切換分頁 / 變更篩選後，之前頁面勾選的 `record` 仍保留在累積集合中。
+
+**上限**：單次批次上限 **100 筆**（硬性，checkbox 直接 disabled + Modal 內 `<Alert>` 提示，未達上限時不顯示）；賣場商品總數軟上限 **500 筆**（超過只警示，不阻擋「加入賣場」）。
+
+**參考範例**：`useSimpleModal` + 自訂 footer 確認鈕的既有 pattern，可對照 `components/term/TaxonomyModal/hooks/index.tsx`。
+
+**SimpleModal 遮罩坑**：見 §6.4「SimpleModal 遮罩會阻斷 Modal 內所有表單送出」——`ProductPickerModal` 內嵌的 `ProductTableBody` 篩選 `<Form>` 就是踩到這個坑的地方。Modal 情境還有哪些元素必須關閉，整理成清單見 `admin-list-ui.rule.md` §7。
+
+### items 巢狀契約 + 商品顯示資訊補齊（Phase 7，`useShopItemProducts`）
+
+`ItemsEditor` 的 `items` 型別（`pages/admin/ProfitShop/types.ts`）Phase 7 改為與後端 `OverrideItemInput` / `OverrideItemOutput` 一致的巢狀契約：
+
+```ts
+type TPriceOverride = { regular_price: string | null; sale_price: string | null; signup_fee: string | null }
+type TOverrideItem = {
+  product_id: number
+  inflated_count: number
+  override: TPriceOverride
+  variations: Record<string, { override: TPriceOverride }>
+}
+// UI 專用（不送後端，送出前 strip `_` 前綴欄位）：
+type TShopItemRow = TOverrideItem & {
+  _name?: string
+  _sku?: string
+  _enrichState?: 'pending' | 'ok' | 'missing' | 'failed'
+}
+```
+
+價格用 `string | null`、不是 `number | null`——後端 `PriceOverride` VO 是 nullable **string**，用 `bccomp` 走十進位字串比較避免浮點誤差。詳細契約與 BUG-A 修正始末見 `profit-shop.rule.md` §7「OverrideItem items 契約」。
+
+後端 `OverrideItemOutput` **刻意不含** `name` / `sku`（避免顯示 stale 資料），前端用 `useShopItemProducts`（`pages/admin/ProfitShop/hooks.ts`）以 `wc-rest` `include=` 分 chunk 批次補齊：
+
+```ts
+// 500 筆軟上限 ÷ 每 chunk 100（wc-rest per_page 上限） = 固定 5 個 chunk
+// React hooks 數量不可變動，所以是「固定 5 個 useList」，不是迴圈動態呼叫
+useList<TProductRecord>({
+  resource: 'products',
+  dataProviderName: 'wc-rest',
+  filters: [{ field: 'include', operator: 'eq', value: chunk }],  // 見 §3「wc-rest 分頁陷阱」
+  pagination: { pageSize: 100 },
+  queryOptions: { enabled: chunk.length > 0 },  // ids 為空的 chunk 不發查詢
+})
+```
+
+`ItemsEditor` 商品欄依 `_enrichState` 四分支降級顯示：`ok`（名稱 + `#id` + SKU）／`missing`（商品已失效 Tag，移除鈕仍可用）／`failed`（僅 `#id`，降級但不擋儲存）／`pending`（`#id` + Skeleton）。補齊查詢失敗**不阻擋**編輯與儲存——即使查詢收到 403（見 `specs/tech-debt.md` TD-7 全域錯誤對話框），儲存路徑仍完全不受影響。
+
+### `ItemsEditor` 表格改版：8 欄 + 複用 `antd-toolkit/wp` 商品欄位元件（三輪改造）
+
+`ItemsEditor` 的商品列表表格從 5 欄擴充為 **8 欄**：`商品名稱 / 商品類型 / 狀態 / 價格 / 庫存 / 覆寫價格 / 灌水購買人數 / 操作`。
+
+- 「商品類型」「狀態」「價格」「庫存」四欄**直接複用 `antd-toolkit/wp` 的 `ProductType` / `ProductPrice` / `ProductStock` 元件**（與 `#/products` 的 `ProductName` 同一批元件），**沒有動 `components/product/ProductTable/hooks/useColumns.tsx`**——`ItemsEditor` 的欄位定義是它自己的一份，不是共用 `useColumns()`
+- 上方 §「items 巢狀契約 + 商品顯示資訊補齊」提到的 `useShopItemProducts`，map value 從 `{ name, sku }` 升級為**整筆 `TProductRecord`**：`wc-rest` 查詢本來就回完整商品物件，先前只挑 `name` / `sku` 兩欄是白白丟掉其餘欄位，這次**沒有新增任何查詢**，純粹是把已經拿到的資料用好，才能餵給 `ProductType` / `ProductPrice` / `ProductStock` 這些元件
+- 「覆寫價格」欄合併原本「原價覆寫」「特價覆寫」兩欄，同一欄內上下疊兩個 `InputNumber`（`prefix` 標「原價」/「特價」，`placeholder` 顯示「沿用原價」/「沿用特價」）
+- `scroll.x` 從 `820` 調整為 `1330`（欄位變多）
+
+**⚠ 語意陷阱：「留空」與「填 0」意義完全不同，不可混淆**：
+
+| 使用者輸入 | 送出值 | 意義 |
+|------------|--------|------|
+| 留空 | `null` | 沿用商品原價（不覆寫） |
+| 填 `0` | `"0"` | 覆寫為 0 元（例如免費贈品） |
+
+這條規則已用「送出 payload → DB `get_post_meta` → 重新載入頁面讀回」三段式驗證，確保 UI 顯示的空白 / `0` 與資料庫實際存的 `null` / `"0"` 一致，不會在某個轉換環節被互相吃掉。
+
+### ⚠️ `TProductRecord.type` 型別陷阱：`antd-toolkit` 的 `Omit` 用在 string union 上會失效
+
+`antd-toolkit` 把 `TProductRecord.type` 宣告成 `Omit<TProductType, …>`——但 `Omit` 是設計給物件型別用的，套在 **string union**（例如 `'simple' | 'variable' | 'grouped' | ...`）上不會排除任何成員，只會讓 TypeScript 推導失準，導致這個型別與 `ProductType` / `ProductPrice` 等元件要求的 `record` 型別**不相容**（上游 `.d.ts` 本身的缺陷，不是本專案寫錯）。
+
+`useColumns.tsx` 為了不被這個型別問題卡住，用 `record as any` 繞過——但這樣會多一條 `no-explicit-any` ESLint warning。更乾淨的做法是**從元件本身反推型別**，而不是自己重新定義一個型別去湊：
+
+```ts
+import type { ComponentProps } from 'react'
+import { ProductName, ProductType } from 'antd-toolkit/wp'
+
+type TWpDisplayRecord = ComponentProps<typeof ProductName>['record'] & ComponentProps<typeof ProductType>['record']
+const toWpRecord = (p: TProductRecord) => p as unknown as TWpDisplayRecord
+```
+
+這個寫法只做**一次**型別斷言（`as unknown as`），而不是在每個呼叫點各自 `as any`，往後這些元件的 `record` 型別若調整，只有 `TWpDisplayRecord` 這一處需要跟著改。
 
 ---
 
@@ -611,6 +856,7 @@ js/src/
 │   ├── types/                # 頁面專用型別
 │   └── components/           # 頁面專用元件
 ├── pages/admin/ProfitShop/      # Phase 4-A1：賣場 CRUD + ItemsEditor + ShopActionsButtons + SlugInput
+│                                #   Phase 7：+ components/ProductPickerModal（商品選擇器 Modal，消費 §6.4 ProductTableBody）
 ├── pages/admin/ProfitPartner/   # Phase 4-A2：夥伴 CRUD + RegeneratePasswordButton（HIGH-RISK）+ PartnerSelector
 ├── pages/admin/ProfitMigration/ # Phase 4-A3：legacy 一頁商店匯入 + ImportModal（HIGH-RISK）
 ├── pages/admin/ProfitSettings/  # Phase 4-A3：全域設定 + ResetButton（HIGH-RISK）
@@ -624,6 +870,7 @@ js/src/
 │   ├── order/                # InfoTable, OrderNotes
 │   ├── post/                 # PostAction, ToggleVisibility
 │   ├── product/              # Fields, ProductEditTable, ProductTable, ProductSelector
+│   │                         #   ProductTable/: index.tsx（外殼）+ ProductTableBody.tsx + useProductTableQuery.ts（Phase 7，見 §6.4）
 │   ├── productAttribute/     # EditForm, SortableList (全域屬性)
 │   ├── term/                 # EditForm, SortableList, SortableTree, TaxonomyModal
 │   └── user/                 # ContactRemarks, OrderCustomerTable, UserTable

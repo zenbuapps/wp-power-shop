@@ -158,6 +158,23 @@ const filtered = useMemo(() => rows.filter(/* 依 applied 過濾 */), [rows, app
 
 參考實作：`pages/admin/ProfitShop/List/index.tsx` + `List/Filter.tsx`。
 
+### 3.3 共用 Presentational 元件：`ProductTableBody`（Phase 7）
+
+`#/products`（路線 A 的基準範本）本身也拆成了「外殼 + presentational body」兩層，供 Modal 情境複用（見 §7）：
+
+```
+components/product/ProductTable/
+├── index.tsx                 # 外殼：useTable + Jotai 跨頁選取 + ActionArea + SelectedItem
+├── ProductTableBody.tsx      # presentational only：本檔 §1 講的兩張 Card + Table，全部由 props 注入
+└── useProductTableQuery.ts   # useTable 設定抽出（resource / onSearch / filters / pagination）
+```
+
+`ProductTableBody` 本身就是本檔 §1 標準版型的 UI 實作，`tableHeader` prop 對應「新增按鈕放在列表卡片內、Table 之上」那條規則（規則 3）——外殼要新增按鈕就傳 `<CreateButton />`，Modal 情境不需要就不傳。
+
+**若未來其他列表頁也要支援「同一份列表塞進 Modal 複用」，可比照這個三層拆法**：`useXxxQuery.ts`（查詢設定）+ `XxxTableBody.tsx`（presentational）+ `index.tsx`（外殼，持有跨頁狀態 / 批次操作）。`useTable` 留在外殼、不下放進 body，是刻意的設計決策——詳見 `react.rule.md` §6.4。
+
+詳細元件架構、`ProductPickerModal` 如何消費 `ProductTableBody`，見 `react.rule.md` §6.4 / §6.5。
+
 ---
 
 ## 4. Filter 元件寫法
@@ -202,6 +219,8 @@ const filtered = useMemo(() => rows.filter(/* 依 applied 過濾 */), [rows, app
 | 分潤夥伴 | `#/profit-partner` | B（`useCustom`） | ❌ | Refine `<List headerButtons>` | ⚠ 待對齊 |
 | 分潤遷移 | `#/profit-migration` | B（`useCustom`） | ❌ | 無 | ⚠ 待對齊 |
 
+> Phase 7：`#/products` 的 Table 主體抽成共用元件 `ProductTableBody`（見 §3.3），供 `ProductPickerModal`（`#/profit-shop/edit/:id` 內的商品選擇器）複用。本表列的對齊狀態**不受影響**——`#/products` 這一列的 UI 行為完全不變，只是實作拆成三層。`ProductPickerModal` 不是獨立列表頁（沒有自己的路由），不需要在本表新增列；它在 Modal 情境下如何刪減標準版型的哪些部分，見 §7。
+
 新增列表頁、或改動上表任一頁時，**必須**先讓該頁符合本標準再談其他改動。
 
 ---
@@ -218,4 +237,26 @@ const filtered = useMemo(() => rows.filter(/* 依 applied 過濾 */), [rows, app
 - [ ] 空狀態 `locale.emptyText` 給 `<Empty>` + 引導新增按鈕
 - [ ] 頁面元件 `memo()` 包裝
 - [ ] 路線 B 的 client-side 過濾包在 `useMemo`
-- [ ] `pnpm lint` + `npx tsc --noEmit` 無新增錯誤
+- [ ] `pnpm lint:ts` + `npx tsc --noEmit` 無新增錯誤（⚠ `pnpm lint:ts` 實際指令含 `--fix` 會改檔案；純檢查用 `npx eslint "js/src/**/*.{ts,tsx}"`，不加 `--fix`）
+
+---
+
+## 7. Modal 情境的額外規則（把列表 / 表單塞進 `SimpleModal` 時）
+
+`ProductPickerModal`（`pages/admin/ProfitShop/components/ProductPickerModal/`，Phase 7）把 §3.1 路線 A 的 `ProductTableBody` 整個塞進 `SimpleModal`，證實列表頁版型可以直接搬進 Modal 情境複用——但複用時有幾個**必須關閉 / 隔離**的元素，清單如下：
+
+| # | 元素 | Modal 情境怎麼處理 | 為什麼 |
+|---|------|---------------------|--------|
+| 1 | `syncWithLocation` | **明確傳 `false`** | `useTable` 預設繼承全域 `true`（`App1.tsx`），會把 Modal 內的篩選 / 分頁寫進當前頁 URL，污染宿主頁網址（例如 `#/profit-shop/edit/{id}` 被硬塞一堆 filter/pagination query） |
+| 2 | 跨頁選取狀態（Jotai atom） | **不接**，Modal 自帶 `useState` 區域狀態 | module-level atom 是全域單例，Modal 與宿主頁（例如 `#/products`）共用會雙向污染彼此的選取結果 |
+| 3 | 新增按鈕（`tableHeader` slot） | **不傳** / 傳 Modal 專用內容（如達上限時的 `<Alert>`） | Modal 是「選擇既有項目」情境，不該讓使用者在裡面又開一個新增流程 |
+| 4 | `ActionArea` / `BulkAction` | **不掛** | 那是給列表頁「批次操作既有資料」用的，Modal 情境沒有這個需求 |
+| 5 | 操作欄（`useColumns` 之類的 actions 欄） | **關閉**（如 `useColumns({ showActions: false })`） | Modal 只做勾選，不需要逐列操作入口 |
+| 6 | 表單送出鈕（`type="submit"`） | children 外包一層 `<div onClick={(e) => e.stopPropagation()}>` | `SimpleModal` 遮罩對所有冒泡 click 呼叫 `preventDefault()`，會連帶取消表單送出（詳見 `react.rule.md` §6.4「SimpleModal 遮罩會阻斷 Modal 內所有表單送出」） |
+| 7 | Modal 關閉時的殘留狀態 | `destroyOnHidden` + 關閉時 reset 選取集合 | 避免下次開啟殘留上次的勾選 / 捲動位置 |
+
+**沿用路線 A 的列表頁版型（篩選卡片 + 實體列表）放進 Modal 時**，篩選卡片 + 列表卡片的兩張 `Card` 版型不變，只是拿掉「新增按鈕」與「批次操作」兩塊——即上表 #3、#4。
+
+**`Card` 的 `showCard={false}` 陷阱**：`ProductTableBody`（§3.3）新增 `showCard?: boolean` prop，供需要拿掉外層卡片的情境使用。但 `antd-toolkit` 的 `Card` 在 `showCard={false}` 時是**直接回傳 `children`，整張 `Card`（含 `title` 與 `className`）都不渲染**——不是「只隱藏邊框、內距照舊」。這代表 `mb-4` 這類靠 `Card` 的 `className` 撐開的間距也會**一併消失**。**不要**另外包一層 wrapper div 去補間距，改成把間距下放到內層元素的條件式 className（例如 `showCard ? 'mt-2' : 'mt-2 mb-4'`），確保卡片模式下 DOM 結構零變化。詳見 `react.rule.md` §6.4。
+
+參考實作：`js/src/pages/admin/ProfitShop/components/ProductPickerModal/`（`index.tsx` + `hooks.ts`）。
