@@ -1,6 +1,6 @@
 import { StyleProvider } from '@ant-design/cssinjs'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { ConfigProvider } from 'antd'
+import { App as AntdApp, ConfigProvider } from 'antd'
 import { EnvProvider } from 'antd-toolkit'
 import { BunnyProvider } from 'antd-toolkit/refine'
 import React from 'react'
@@ -60,7 +60,18 @@ document.addEventListener('DOMContentLoaded', () => {
 												},
 											}}
 										>
-											<App />
+											{/*
+											 * antd 的 App context —— 少了它，`App.useApp()` 會拿到
+											 * 空物件，任何 `notification.*` / `message.*` 呼叫都會丟
+											 * `TypeError: x.success is not a function`，並中斷該處後續流程。
+											 * 全專案有 10 個檔案用 `App.useApp()`（Profit Shop 系列全部）。
+											 *
+											 * `component={false}` 讓它不輸出任何包裹用的 DOM 節點，
+											 * 純提供 context，不影響既有版型。
+											 */}
+											<AntdApp component={false}>
+												<App />
+											</AntdApp>
 										</ConfigProvider>
 									</BunnyProvider>
 								</EnvProvider>
