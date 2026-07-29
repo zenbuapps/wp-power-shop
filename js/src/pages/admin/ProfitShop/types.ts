@@ -26,27 +26,73 @@ export type TProfitShopMode =
 	(typeof PROFIT_SHOP_MODE)[keyof typeof PROFIT_SHOP_MODE]
 
 /**
+ * 價格覆寫（三欄皆 nullable，null 代表「不覆寫該欄位」＝沿用商品原價）
+ *
+ * 對應 OpenAPI PriceOverride 與 PHP `Domain\ValueObject\PriceOverride`。
+ *
+ * ⚠️ 型別是 `string | null` 而非 `number | null`：後端 VO 以十進位字串保存，
+ * 並用 `bccomp` 做字串比較避免浮點精度誤差（PriceOverride.php:66）。
+ */
+export type TPriceOverride = {
+	regular_price: string | null
+	sale_price: string | null
+	signup_fee: string | null
+}
+
+/** 單一 variation 的覆寫設定（value 物件僅含 override） */
+export type TVariationOverride = {
+	override: TPriceOverride
+}
+
+/**
+ * variation_id => { override } 對照表
+ *
+ * key 以 `string` 表達：JSON 物件鍵一律是字串。後端 variations 為空時
+ * PHP `wp_json_encode([])` 會序列化成 `[]`（空陣列）而非 `{}`，前端僅原樣攜帶
+ * 不解讀內容，兩種形狀送回 PHP 都會被 `is_array()` 接受。
+ */
+export type TVariationOverrideMap = Record<string, TVariationOverride>
+
+/**
  * 賣場商品覆寫項目（Output）
  *
- * 對應 OpenAPI OverrideItemOutput（OverrideItemInput + 唯讀 sku/name）。
- * 注意：`price_override` 是 integer | null（單位元；null 代表沿用原價），
- * 並非 nested object（spec/api/api.yml line 861-868）。
+ * 對應 OpenAPI OverrideItemOutput 與 PHP `Domain\Entity\OverrideItem::to_array()`。
+ *
+ * ⚠️ BUG-A 修補（2026-07-29）：本型別原先是扁平的
+ * `{ product_id, variation_id, price_override: number | null, inflated_count }`，
+ * 與後端形狀不符 —— `ProfitShopHydrator::build_override_item()` 只讀巢狀的
+ * `override` / `variations`（ProfitShopHydrator.php:113-128），
+ * 導致前端送出的價格覆寫在儲存時被靜默丟棄。扁平欄位已全面移除，勿再加回。
+ *
+ * ⚠️ 不含 sku / name / image：商品名稱與 SKU 屬「商品當下狀態」而非賣場設定，
+ * 夾帶會造成商品改名後賣場顯示舊名的 stale 問題。前端改以 wc-rest
+ * `GET /wc/v3/products?include=…` 批次補齊（見 TShopItemRow）。
  */
 export type TOverrideItem = {
 	product_id: number
-	variation_id: number
-	price_override: number | null
 	inflated_count: number
-	sku?: string
-	name?: string
+	override: TPriceOverride
+	variations: TVariationOverrideMap
 }
 
-/** 賣場商品覆寫項目（Input） */
+/** 賣場商品覆寫項目（Input）；僅 product_id 必填 */
 export type TOverrideItemInput = {
 	product_id: number
-	variation_id?: number
-	price_override?: number | null
 	inflated_count?: number
+	override?: TPriceOverride
+	variations?: TVariationOverrideMap
+}
+
+/**
+ * ItemsEditor 專用的列型別（UI-only）
+ *
+ * `_` 前綴欄位是 wc-rest 補齊查詢的顯示結果，**不屬於後端契約**，
+ * Edit 頁送出前必須 strip 掉（見 Edit/index.tsx 的 handleSubmit）。
+ */
+export type TShopItemRow = TOverrideItem & {
+	_name?: string
+	_sku?: string
+	_enrichState?: 'pending' | 'ok' | 'missing' | 'failed'
 }
 
 /**

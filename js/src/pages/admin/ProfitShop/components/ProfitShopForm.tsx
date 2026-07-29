@@ -12,7 +12,10 @@ import { memo } from 'react'
 
 import { useEnv } from '@/hooks'
 import { PartnerSelector } from '@/pages/admin/ProfitPartner/components/PartnerSelector'
-import { ItemsEditor } from '@/pages/admin/ProfitShop/components/ItemsEditor'
+import {
+	ItemsEditor,
+	validateItemsPriceOverride,
+} from '@/pages/admin/ProfitShop/components/ItemsEditor'
 import { SlugInput } from '@/pages/admin/ProfitShop/components/SlugInput'
 import {
 	PROFIT_SHOP_MODE,
@@ -170,7 +173,8 @@ const ProfitShopFormComponent = ({
 				<Item
 					name="items"
 					label="賣場商品"
-					extra="可新增、移除商品；price_override 留空代表沿用原價"
+					rules={[{ validator: validateItemsPriceOverride }]}
+					extra="可新增、移除商品；原價／特價覆寫留空代表沿用商品原價，填 0 代表免費贈品"
 				>
 					<ItemsEditor disabled={submitting} />
 				</Item>
