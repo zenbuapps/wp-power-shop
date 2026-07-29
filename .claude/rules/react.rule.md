@@ -5,6 +5,7 @@ applyTo: "**/*.ts,**/*.tsx"
 # Power Shop — React / TypeScript 開發指引
 
 > 適用於所有 `.ts` / `.tsx` 檔案。架構概覽見 `architecture.rule.md`。
+> **列表頁版型（篩選卡片 + 實體列表 & 新增按鈕）一律遵循 `admin-list-ui.rule.md`。**
 
 ---
 
@@ -300,6 +301,13 @@ js/src/pages/admin/
 ### Hook Pattern（取代 useTable / useForm）
 
 由於後端回 `{code, data}` 不相容 antd-toolkit dataProvider（見 Section 3 的「Profit Shop 系列特例」），改用 `useCustom` / `useCustomMutation` 並手動讀 `result.data.data`，仍透過 Refine `useInvalidate` 維持快取失效。
+
+### 列表頁版型（與 `#/products` 一致）
+
+不能用 `useTable` **不代表**可以少一張篩選卡片。profit-* 的列表頁版型必須與 `#/products` 相同：篩選卡片 + 實體列表 & 新增按鈕，只是篩選改在前端 `useMemo` 做（`.claude/rules/admin-list-ui.rule.md` §3.2 路線 B）。
+
+參考實作：`pages/admin/ProfitShop/List/index.tsx` + `List/Filter.tsx`。
+`ProfitPartner` / `ProfitMigration` 兩頁**尚未對齊**，改動該頁時須一併補上。
 
 ### HIGH-RISK 元件的安全紀律
 
