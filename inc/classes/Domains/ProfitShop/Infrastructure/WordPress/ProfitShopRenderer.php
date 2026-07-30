@@ -14,6 +14,8 @@ use J7\PowerShop\Domains\ProfitShop\Application\Service\PageRateLimitService;
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\ProfitShop;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\TooManyAttempts;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterface;
+use J7\PowerShop\Plugin;
+use Kucrut\Vite;
 
 /**
  * 賣場前台 HTML renderer
@@ -38,6 +40,25 @@ final class ProfitShopRenderer {
 	 * Page key（rate-limit namespace 區隔）
 	 */
 	private const PAGE_KEY = 'profit_shop';
+
+	/**
+	 * 前台 React bundle 的 Vite entry（Phase 9）
+	 *
+	 * 第三個獨立 bundle：admin SPA（js/src/main.tsx）與 partner portal
+	 * （js/src/partner-portal/main.tsx）之外，賣場前台自成一支，
+	 * 不打包 Refine / dataProvider。
+	 */
+	private const VITE_ENTRY = 'js/src/profit-shop-front/main.tsx';
+
+	/**
+	 * 前台 bundle 的 script handle
+	 */
+	private const SCRIPT_HANDLE = 'power-shop-profit-shop-front';
+
+	/**
+	 * 注入前端的全域變數名稱（wp_localize_script 的 object name）
+	 */
+	private const DATA_OBJECT = 'power_shop_front_data';
 
 	/**
 	 * Repository（建構子 DI）
@@ -215,6 +236,14 @@ final class ProfitShopRenderer {
 			\nocache_headers();
 		}
 
+		// Phase 9：前台顯示設定（主色 / 販售狀態）。template 即使在 bundle
+		// 不可用時也需要它，故與 enqueue 分開取得（settings() 不組 products payload）。
+		$front_settings = ProfitShopFrontData::settings( $shop );
+
+		// Phase 9：前台 React bundle（商品 Modal + 購物車表格）。
+		// 必須在 get_header() 之前 enqueue，wp_head / wp_footer 才印得到 style 與 script。
+		$front_bundle_ready = $this->enqueue_front_bundle( $shop );
+
 		\get_header();
 
 		// 把 $shop 傳給 template；變數名故意取 $shop_for_template 以避免污染外層 scope。
@@ -222,6 +251,53 @@ final class ProfitShopRenderer {
 		require __DIR__ . '/templates/profit-shop-front.php';
 
 		\get_footer();
+	}
+
+	/**
+	 * Enqueue 賣場前台 React bundle 並注入資料
+	 *
+	 * 回傳 false 時 template 會退回「不依賴 JS 的表單加購」版本（Phase 4-C1 行為），
+	 * 避免 build artifact 未同步時整頁只剩無法點擊的灰色卡片。
+	 * 與 PartnerPortalRenderer 的 manifest 防呆（reviewer L-3）同一思路，
+	 * 但因賣場頁對外且有 SEO 價值，這裡選擇降級而非回 503。
+	 *
+	 * @param ProfitShop $shop 已驗證的賣場聚合根。
+	 *
+	 * @return bool bundle 是否就緒。
+	 */
+	private function enqueue_front_bundle( ProfitShop $shop ): bool {
+		// Vite 是 namespace（Kucrut\Vite）而非 class，因此檢查函式而非 class_exists。
+		if ( ! \function_exists( 'Kucrut\Vite\enqueue_asset' ) ) {
+			return false;
+		}
+
+		try {
+			Vite\enqueue_asset(
+				Plugin::$dir . '/js/dist',
+				self::VITE_ENTRY,
+				[
+					'handle'    => self::SCRIPT_HANDLE,
+					'in-footer' => true,
+				]
+			);
+		} catch ( \Throwable $e ) {
+			// manifest 不存在 / 格式損毀時 enqueue_asset 會拋例外。
+			return false;
+		}
+
+		// manifest 缺對應 entry 時 handle 不會被註冊。
+		$scripts = \wp_scripts();
+		if ( ! isset( $scripts->registered[ self::SCRIPT_HANDLE ] ) ) {
+			return false;
+		}
+
+		\wp_localize_script(
+			self::SCRIPT_HANDLE,
+			self::DATA_OBJECT,
+			ProfitShopFrontData::build( $shop )
+		);
+
+		return true;
 	}
 
 	/**

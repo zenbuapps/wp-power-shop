@@ -1,0 +1,269 @@
+/**
+ * 分潤賣場前台樣式
+ *
+ * 從舊版一頁商店的編譯產物抽出後照搬，僅把 scope 從 `#power_shop_products_app`
+ * 換成新版 mount 點 `#profit_shop_front_app`。
+ *
+ * - `.ps-btn` 系列：PHP 印出的商品卡片按鈕（`--ps-primary` 由 PHP inline <style> 注入）
+ * - `.ps-not-ready`：React 尚未接手前的 loading 態，App.tsx mount 後移除
+ * - `.ps-addon`：數量選擇器的 `-` / `+` 熱區（antd InputNumber addon）
+ * - `.ps-cart-table`：購物車表格，<=810px 改用 grid-template-areas 轉為卡片式排版
+ *
+ * ⚠ Tailwind directive 刻意寫在本檔，而**不是** import 共用的
+ * `@/assets/styles/tailwind.css`：那個檔案同時被 `App1.tsx`（admin）與
+ * `partner-portal/main.tsx` import，Vite 因此把它提取成「共用 CSS chunk」並掛到
+ * admin 的 chunk 上（實測 `App1-*.css`）。本 bundle 不 import admin 的 chunk，
+ * 於是 manifest 中 entry 的 `css` 陣列**完全沒有 Tailwind**，所有 utility 靜默失效
+ * ——grid 變成單欄、aspect-square / text-red-500 全部不生效，而 build 不會有任何警告。
+ * 把 directive 放在 bundle 自己的 CSS 檔，產出的 utility 就會併入本 entry 專屬的
+ * `main-*.css`，`Vite\enqueue_asset()` 也就抓得到。
+ *
+ * `@tailwind components` 不需要（本專案無 `@apply` 用法）；`@tailwind base` 在
+ * `corePlugins.preflight: false` 之下不輸出 CSS reset，只留 `--tw-*` 變數宣告，
+ * 那是 shadow / ring / transform 這類 composite utility 的運作前提。
+ */
+
+@tailwind base;
+@tailwind utilities;
+
+.power-shop-products .ps-btn {
+	outline: none;
+	position: relative;
+	display: inline-block;
+	font-weight: 400;
+	white-space: nowrap;
+	text-align: center;
+	background-image: none;
+	background-color: transparent;
+	border: 1px solid transparent;
+	cursor: pointer;
+	transition: all 0.2s cubic-bezier(0.645, 0.045, 0.355, 1);
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	user-select: none;
+	touch-action: manipulation;
+	line-height: 1.5714285714;
+	color: #000000e0;
+	font-size: 14px;
+	height: 32px;
+	padding: 4px 15px;
+	border-radius: 6px;
+}
+
+.power-shop-products .ps-btn:hover {
+	opacity: 0.85;
+}
+
+.power-shop-products .ps-btn.ps-btn-primary {
+	color: #fff;
+	background-color: var(--ps-primary);
+	box-shadow: 0 2px #0591ff1a;
+}
+
+/*
+ * 商品卡片本身可點（整張卡片都是開 Modal 的熱區，不只按鈕）。
+ * transition 讓 `ps-not-ready` 的 grayscale 在 React 接手時平滑淡出。
+ */
+div[data-ps-product-id] {
+	cursor: pointer;
+	transition: all 1s ease;
+}
+
+.ps-not-ready {
+	cursor: wait !important;
+	filter: grayscale(1);
+}
+
+.power-shop-products * {
+	-webkit-transform: translate3d(0, 0, 0);
+}
+
+/* 數量選擇器 addon（原 App3-*.css） */
+.ant-input-number-group-addon {
+	padding: 0rem 1rem !important;
+}
+
+.ant-input-number-group-addon .ps-addon {
+	position: absolute;
+	height: 100%;
+	width: 100%;
+	top: 0;
+	left: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+}
+
+/* 變體選項 active 態 */
+.ant-modal-content .ps-product-attribute-option.active {
+	border: 1px solid var(--ps-primary);
+	color: #333;
+}
+
+/*
+ * 通知疊層（照搬 legacy `custom.scss`）
+ *
+ * antd 的 message / notification 是 portal 到 `document.body`，脫離本 bundle 的
+ * mount 點，因此會與**佈景主題**的 sticky header / 浮動購物車按鈕搶疊層。
+ * antd v5 的預設 zIndex 只有 1010，主題常見的 9999 會直接蓋掉「加入購物車成功」
+ * 的提示，使用者按了會以為沒反應。
+ *
+ * 與商品 Modal 的 `zIndex: 1000000` 不衝突：加購時 `AddToCartButton` 的 `onMutate`
+ * 會先 `setIsProductModalOpen(false)`，通知出現時 Modal 已經關閉。
+ */
+.ant-message,
+.ant-notification {
+	z-index: 999999 !important;
+}
+
+/* 購物車表格（desktop） */
+#profit_shop_front_app table.ps-cart-table {
+	border: none;
+	width: 100%;
+	table-layout: fixed;
+}
+
+#profit_shop_front_app table.ps-cart-table tr {
+	border: none;
+}
+
+#profit_shop_front_app table.ps-cart-table tr th {
+	background-color: #fff;
+}
+
+#profit_shop_front_app table.ps-cart-table tr th[data-key='product'] {
+	width: 47%;
+}
+
+#profit_shop_front_app table.ps-cart-table tr th[data-key='qty'],
+#profit_shop_front_app table.ps-cart-table tr th[data-key='unit_price'],
+#profit_shop_front_app table.ps-cart-table tr th[data-key='total'] {
+	width: 15%;
+}
+
+#profit_shop_front_app table.ps-cart-table tr th[data-key='action'] {
+	width: 8%;
+}
+
+#profit_shop_front_app table.ps-cart-table th {
+	padding-top: 0.5rem;
+	padding-bottom: 0.5rem;
+	border: none;
+	width: 100%;
+	font-size: 1rem;
+	font-weight: 600;
+	text-align: center;
+	color: #333;
+}
+
+#profit_shop_front_app table.ps-cart-table th:nth-child(4) {
+	text-align: right;
+}
+
+#profit_shop_front_app table.ps-cart-table td {
+	padding-top: 0.5rem;
+	padding-bottom: 0.5rem;
+	border: none;
+	background-color: #fff;
+	font-size: 1rem;
+	font-weight: 400;
+	text-align: center;
+	color: #333;
+}
+
+#profit_shop_front_app table.ps-cart-table td:nth-child(4) {
+	text-align: right;
+}
+
+#profit_shop_front_app table.ps-cart-table thead tr th {
+	background-color: #eee;
+}
+
+/* 購物車表格（mobile，<=810px 轉 grid-template-areas） */
+@media (max-width: 810px) {
+	#profit_shop_front_app table.ps-cart-table thead {
+		display: none;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody {
+		display: block;
+		background: #fff;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody tr {
+		width: 100%;
+		display: grid;
+		grid-template-columns: 2rem 1fr 1fr;
+		grid-template-rows: auto auto auto;
+		grid-gap: 0rem 0.5rem;
+		grid-template-areas:
+			'delete product product'
+			'delete qty unit_price'
+			'delete total_price total_price';
+		border-bottom: 1px solid #ddd;
+		padding: 1rem 0.5rem;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody th,
+	#profit_shop_front_app table.ps-cart-table tbody td {
+		display: block;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(1) {
+		grid-area: product;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(2) {
+		grid-area: qty;
+		align-self: center;
+		padding-left: 0rem;
+		padding-right: 0rem;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(3) {
+		grid-area: unit_price;
+		align-self: center;
+		justify-self: end;
+		text-align: right;
+		position: relative;
+		width: 100%;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(3):before {
+		content: '×';
+		position: absolute;
+		left: 0;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(4) {
+		grid-area: total_price;
+		justify-self: end;
+		font-weight: 700;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(5) {
+		grid-area: delete;
+		justify-self: center;
+		align-self: center;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tfoot tr {
+		display: flex;
+		justify-content: space-between;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tfoot th:last-child {
+		display: none;
+	}
+
+	#profit_shop_front_app table.ps-cart-table tfoot {
+		display: block;
+		background-color: #fff;
+		padding: 1rem 0.5rem;
+	}
+
+	#profit_shop_front_app table.ps-cart-table {
+		display: block;
+	}
+}

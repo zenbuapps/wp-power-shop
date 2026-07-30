@@ -841,6 +841,171 @@ grep -E 'App1|Refine|@refinedev|dataProviderName|wc-rest|wp-rest|X-WP-Nonce' par
 
 ---
 
+## 6.7 賣場前台 profit-shop-front 前端架構（Phase 9 + Phase 10，第三個 bundle）
+
+customer-facing 的分潤賣場前台（`/profit-shop/{slug}/`）。**UI 與行為 1:1 照搬 legacy 一頁商店**
+（舊版 `/power-shop/{slug}/`）——原始 TSX 已從 `legacy/js/dist/assets/*.js.map` 的
+`sourcesContent` 完整還原（76 個檔案），照搬時是逐檔比對，不是憑印象重寫。
+
+### 混合式架構：PHP 印內容，React 只掛互動層
+
+這是**與另外兩個 bundle 最大的不同**，也是 legacy 原本的設計：
+
+```
+PHP（template）                          React（本 bundle）
+├─ 商品 grid（名稱/價格/圖 → SEO）      ├─ ProductModal（點卡片開啟）
+├─ div[data-ps-product-id]  ←─ 契約 ───┤   Gallery / 變體 / 庫存 / 購買人數 / 數量 / 加購
+├─ .ps-btn / .ps-not-ready  ←─ 契約 ───┤
+├─ #profit_shop_front_app   ←─ mount ──┤
+├─ window.power_shop_front_data ────────┤ 前端唯一資料來源（env / settings / products）
+└─ <noscript> 降級：query string 加購   └─ Cart（#ps-cart-table + 前往結帳）
+```
+
+**不要把商品資訊搬離 HTML**——那是這個頁面的 SEO 全部價值。React 呈現的是同一份資料的互動版本。
+
+### 目錄結構
+
+```
+js/src/profit-shop-front/
+├── main.tsx                    # entry：QueryClientProvider → ConfigProvider → AntdApp → StyleProvider
+├── App.tsx                     # 掃 div[data-ps-product-id]、移除 ps-not-ready、綁 click 開 Modal
+├── types.ts / atoms.ts / env.ts / api.ts / utils.tsx / styles.css / defaultImage.ts
+├── components/                 # Gallery / Price / PlusMinusInput / StockInfo / BuyerCount
+│                               #   ProductVariationsSelect / ToggleContent / LoadingText
+├── hooks/                      # usePlusMinusInput / useProductModalProps / useCart
+├── ProductModal/               # index.tsx + AddToCartButton.tsx
+└── Cart/                       # index.tsx + UpdateCartInputNumber.tsx + ShippingField.tsx
+```
+
+### 與 admin SPA / partner portal 的三處關鍵差異
+
+| 維度 | 本 bundle | 原因 |
+|------|-----------|------|
+| env 加密 | **不加密**（`window.power_shop_front_data` 是純物件） | payload 含 products 陣列，加密後前端要解一大包；且內容全是本來就公開的商品資訊 |
+| env 讀不到時 | **降級不 throw** | customer-facing，任何 env 缺失都不可白屏（對比 partner portal 的 `readPartnerEnv` 會 throw 給 ErrorBoundary） |
+| `StrictMode` | **不用** | 本 bundle 對 PHP 印出的**外部 DOM** 綁 listener，dev 下雙跑 effect 會多一輪解綁/重綁噪音 |
+
+### 購物車 API：單一自訂 REST（Phase 10，取代 Phase 9 的 admin-ajax + Store API 雙通道）
+
+Phase 9 曾是「寫入走 admin-ajax、讀取與選運費走 WC Store API」的雙通道，代價是兩套回應形狀、
+兩套錯誤碼、兩套 nonce 機制，前端得各寫一份處理。Phase 10 把兩邊合而為一，`api.ts` 改成**單一**
+axios instance，全部打 `env.cartApiUrl`（`/wp-json/power-shop/profit-shop-cart*`）：
+
+```ts
+export const cartClient = axios.create({
+  baseURL: cartApiUrl,
+  withCredentials: true,        // guest 購物車靠 WooCommerce session cookie 識別
+  headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+})
+```
+
+| 動作 | Method | 路徑 |
+|------|--------|------|
+| 取新 nonce | GET | `/nonce` |
+| 讀購物車 | GET | ``（根路徑）|
+| 加購 | POST | `/add-item` |
+| 改量 | POST | `/update-item` |
+| 移除 | POST | `/remove-item` |
+| 選運費 | POST | `/select-shipping-rate` |
+
+**兩條紀律**：
+
+1. **一律送 `X-WP-Nonce`**：WordPress 的 `rest_cookie_check_errors()` 在「沒送 nonce」時會把請求
+   降級成 guest（`wp_set_current_user(0)`），已登入使用者會操作到另一份購物車。
+2. **後端統一回 `{ code, message, data }`**，`api.ts` 一律**剝掉外殼只回 `data`**，呼叫端拿到的
+   永遠是 payload 本身。
+
+⚠ **後端能讀到 shop_id，靠的是 PHP 端主動橋接，不是前端做了什麼特殊處理**。`AddToCartHook`
+（priority 5）從 **`$_GET` / `$_POST`** 讀 `profit_shop_id`，而本 bundle 送的是 JSON body，PHP
+**不會**自動填 `$_POST`。加購因此能運作，是因為後端 `FrontCartApi::add_to_cart_with_shop_context()`
+在呼叫 `WC()->cart->add_to_cart()` **之前**把 `profit_shop_id` 橋接進 `$_POST`、呼叫後以 `finally`
+還原——前端 `addToCart()` 只需要照常把 `profit_shop_id` 放進 JSON body 送出即可，**不需要**（也
+不應該）改用 `URLSearchParams` 或任何 form-urlencoded 技巧。詳細機制見 `profit-shop.rule.md` §12.8
+「Phase 10：前台購物車改自訂 REST」與 `Infrastructure/Rest/FrontCartApi.php` 的檔頭 docblock。
+
+### nonce 過期自動修復（讓頁面仍可被 CDN 快取）
+
+`ProfitShopRenderer` 對 `status=publish` 的頁面**刻意不送 nocache**（Phase 5-B 的 CDN 優化），
+所以 HTML 內的 nonce 可能是幾小時前快取的。`api.ts` 的 `request()` 因此在收到
+**403 且 body `code === 'rest_cookie_invalid_nonce'`** 時自動打 `GET /nonce` 取新 nonce 並**重試一次**：
+
+```ts
+try {
+  const response = await send(currentNonce)
+  return response.data.data
+} catch (error) {
+  if (!isInvalidNonceError(error)) throw error
+  currentNonce = await refreshNonce()
+  const retried = await send(currentNonce)
+  return retried.data.data
+}
+```
+
+判斷條件是 WordPress REST cookie 認證的錯誤碼 `rest_cookie_invalid_nonce`（**不是**舊
+admin-ajax 時代自訂的 `invalid_nonce`——沿用舊條件會讓這個重試機制永遠不觸發）。`refreshNonce()`
+刻意**不帶** `X-WP-Nonce`：帶了過期 nonce 反而會被 403 擋下，變成「要換 nonce 得先有有效
+nonce」的死結。後端的 `GET /nonce` 會先從登入 cookie 還原使用者身分再簽發，所以不帶 nonce 也
+拿得到正確的值（見 `profit-shop.rule.md` §12.8）。
+
+**不要**為了 nonce 新鮮度改成「頁面一律送 nocache」——那會退回 Phase 5-B 之前的效能。
+
+### 照搬時修掉的 legacy 缺陷（不要「還原」回去）
+
+| # | legacy 的問題 | 本 bundle 的處理 |
+|---|---------------|------------------|
+| 1 | `useEffect` 內把 `return () => removeEventListener(...)` 寫在 `els.forEach()` callback 裡——那是 forEach 的回傳值，**等於完全沒有 cleanup** | 蒐集 `{el, handler}[]`，在 `useEffect` 的 return 統一解綁 |
+| 2 | `Gallery` 把 `if (images.length === 0) return` 寫在 `useState` / `useEffect` **之前**，違反 hooks 規則 | hooks 全部提到最上方 |
+| 3 | `AddToCartButton` 失敗 rollback 用 `variables.id`（product_id）過濾，但樂觀項目對變體商品的 id 是 `variation_id` → **變體加購失敗後樂觀項目殘留** | 把樂觀項目的 id 放進 mutation context，用同一個值刪除 |
+| 4 | 樂觀項目解構 `short_description`，但商品型別的欄位名是 `shortDescription` → 永遠 undefined | 顯式對映 `short_description: shortDescription` |
+| 5 | variable 卡片價格用 `(int)` 轉型 → `99.5` 顯示成 `99`（PHP 端） | 改 float 比較 + `wc_format_decimal($v, '')` 輸出（整數價輸出完全相同） |
+| 6 | `shopStatus` 在前端用 `dayjs()` 重算 | 由 PHP 依**伺服器**時間算好帶入，免除瀏覽器時鐘偏移 |
+| 7 | antd `notification` / `message` 的預設 `zIndex` 只有 1010，會被佈景主題的 sticky header 蓋掉（例如「加入購物車成功」提示看不到） | `styles.css` 補 `.ant-message, .ant-notification { z-index: 999999 !important }`（照搬 legacy `custom.scss`；與商品 Modal 的 `zIndex: 1000000` 不衝突——加購時 `onMutate` 已先關閉 Modal） |
+
+### ⚠️ Portal 到 `document.body` 的可互動元素要用 `<div role="button">`，不要用原生 `<button>`（bundle 通則）
+
+本專案 Tailwind `preflight: false`（沒有 `button { font: inherit; padding: 0; ... }` reset），
+佈景主題對 `<button>` 設的 `font-weight` / `text-transform` / `letter-spacing` / `padding` /
+`min-height` / `min-width` / `display` / `box-shadow` / `:hover` 會**直接蓋進來**，長相會跟舊版
+不一樣，嚴重時甚至撐壞版面。凡是本 bundle 裡「本來該用 `<button>` 卻會吃到主題樣式」的可互動
+元素，一律改用 `<div role="button" tabIndex={0} onKeyDown={...}>`——算繪結果與 legacy 原本用的
+非按鈕元素（`<p>` / `<img>` 包一層）完全相同，且不會被主題污染。已知踩過的三處：
+
+| 元件 | 原本的寫法 | 為什麼會踩雷 |
+|------|-----------|--------------|
+| `ProductModal/AddToCartButton.tsx` | 成功通知裡「前往購物車」的可點文字，legacy 用 `<p onClick>` | antd 通知是 **portal 到 `document.body`**，會吃到佈景主題的 CSS；`jsx-a11y` 也不允許 non-interactive element 帶 interactive role，故不能直接用 `<p onClick>` |
+| `components/ToggleContent.tsx` | 展開／收合的漸層遮罩 | 遮罩是 grid/flex 版面裡的一個互動熱區，換成 `<button>` 會被主題的 `padding` / `display` 污染，遮罩形狀跑掉 |
+| `components/Gallery.tsx` | 縮圖（`<img>` 外層的點擊熱區） | 縮圖是 `grid-cols-4` 的**直接子元素**，若外層是帶主題樣式的 `<button>`，`aspect-square` 正方形排列會被主題的 `min-height` / `min-width` 撐歪，focus 時還會多一圈瀏覽器預設 outline |
+
+判斷準則：只要該元素會被 portal 到 `document.body`（如 antd 通知／Modal），或是版面對其外層尺寸
+有嚴格假設（如 grid item 需要精確的 `aspect-square`），就優先用 `<div role="button" tabIndex={0}
+onKeyDown={...}>`，不要為了「語意正確」硬套原生 `<button>`。
+
+### 賣場前台 Bundle Size
+
+| Bundle | size | 備註 |
+|--------|------|------|
+| profit-shop-front entry | 39.7 kB | 自家程式碼（Phase 10：`api.ts` 收斂為單一 REST 通道後略減） |
+| profit-shop-front CSS | 19.1 kB | `styles.css`（`ps-btn` / `ps-cart-table` / `ps-addon` + Tailwind + Phase 10 新補的 `.ant-notification` z-index 修正） |
+| 共用 chunk | clsx 610 kB + react 91.2 kB + AntdIcon 15.7 kB | 與 admin / partner portal 共用（Vite 自動 dedup） |
+
+### 隔離驗收（新增或改動本 bundle 時必跑）
+
+```bash
+pnpm build
+# 對 manifest 中 js/src/profit-shop-front/main.tsx 的 entry chunk grep
+grep -E 'App1|@refinedev|Refine|dataProviderName|wc-rest|wc/store|admin-ajax' js/dist/assets/main-*.js
+# → 應全部 0 命中
+
+grep -c 'X-WP-Nonce' js/dist/assets/main-*.js
+# → Phase 10 起應為 1（FrontCartApi 認證用），這是預期使用，不是隔離破口
+```
+
+⚠ Phase 9 的驗收指令曾把 `X-WP-Nonce` 也列進「應 0 命中」清單——那是雙通道時代的產物（本 bundle
+當時完全不打任何帶 nonce 的自家 endpoint）。Phase 10 起本 bundle 改走自訂 REST，`X-WP-Nonce` 是
+`FrontCartApi` 認證的必要 header，**預期會命中 1 次**，不要照舊清單誤判為隔離失敗。
+
+---
+
 ## 7. Dashboard 開發
 
 ### useDashboard Hook Pattern
@@ -958,7 +1123,54 @@ Tailwind 只在 CSS 檔看到 `@tailwind` directive 時才注入 utility。本�
 - `@tailwind base` 在 `corePlugins.preflight: false` 下**不輸出 CSS reset**，只留 `--tw-*` 變數宣告（shadow / ring / transform 這類 composite utility 的運作前提）
 - 產出約 12.7 kB（gzip 3.1 kB）獨立 chunk
 
-**新增第三個 SPA bundle 時**，記得也要 import 這個 entry，否則該 bundle 的 Tailwind class 全部無效。
+### ⚠️ 新增 bundle 時**不可只 import 共用的 tailwind entry**（Phase 9 實測推翻的舊說法）
+
+本節舊版曾寫「新增 SPA bundle 時記得也 import 這個 entry」——**實測證明那樣做不夠**。
+
+`@/assets/styles/tailwind.css` 同時被 `App1.tsx`（admin）與 `partner-portal/main.tsx` import，
+Vite 因此把它提取成「共用 CSS chunk」並掛到 **admin 的 chunk**（實測是 `App1-*.css`）。
+新 bundle 若只是照樣 import 它，manifest 中該 entry 的 `css` 陣列裡**根本沒有 Tailwind**：
+
+```bash
+# Phase 9 實測（修正前）
+node -e "const m=require('./js/dist/manifest.json');
+  console.log(m['js/src/profit-shop-front/main.tsx'].css)"
+# → ['assets/main-Dhj9En9w.css']   ← 只有自家 styles.css，Tailwind 不見了
+```
+
+`Vite\enqueue_asset()` 確實會**遞迴**走 `imports` 收集 CSS（`vite-for-wp.php:300`），
+但新 bundle 不 import admin 的 chunk，所以遞迴也抓不到。結果是**所有 utility 靜默失效**：
+grid 變單欄、`aspect-square` / `text-red-500` / `group-hover:*` 全部不生效，
+而 `pnpm build` 不會有任何警告，`tailwindcss` CLI 單獨跑也完全正常（21 kB，class 全在）。
+
+**正確做法**：把 `@tailwind` directive 寫在該 bundle **自己的** CSS 檔裡：
+
+```css
+/* js/src/profit-shop-front/styles.css */
+@tailwind base;
+@tailwind utilities;
+
+.power-shop-products .ps-btn { /* bundle 專屬樣式 */ }
+```
+
+```tsx
+// main.tsx —— 不要 import 共用的 tailwind.css
+import './styles.css'
+```
+
+產出的 utility 就會併入該 entry 專屬的 `main-*.css`，掛在 manifest 的 `css` 欄位上。
+代價是每個 bundle 各帶一份 utility（約 15–20 kB，gzip 後 ~4 kB）——那正是 bundle 隔離
+該有的行為，且共用 chunk 的做法本來就沒讓它們共用成功。
+
+**驗收方式**（新增 bundle 後必跑）：
+
+```bash
+pnpm build
+node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('js/dist/manifest.json','utf8'));
+  const e=m['js/src/<你的 bundle>/main.tsx'];
+  (e.css||[]).forEach(f=>{const c=fs.readFileSync('js/dist/'+f,'utf8');
+    console.log(f, (c.length/1024).toFixed(1)+'kB', c.includes('.grid-cols-2')?'✓ tailwind':'✗ 缺 tailwind')})"
+```
 
 **驗證某個 class 到底有沒有生效**：
 

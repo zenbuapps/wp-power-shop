@@ -100,6 +100,48 @@ Phase 6-A1（Partner 自助修密碼後端，1 個；Phase 6-A2 已完工 partne
 |--------|------|------------|------|
 | POST | `partner-auth/change-password` | **partner_token** | Partner 自助修密碼。Body：`{current_password, new_password}`（**不過 sanitize_text_field**，保留密碼字面值）；partner_term_id **永不**從 body / query 取，鎖死於 `_partner_term_id`（permission_callback 從 token 解出 + V2Api L-4 fail-fast `<= 0` 拒）。流程：assert_not_blocked → find_by_id → verify current → new PartnerPassword VO → save → reset → audit log（不含明文）。pseudo-slug `pwchange:{id}` 與 login slug 維度**隔離**；弱密碼不污染 rate-limit。Success path：`Set-Cookie profit_partner_token=; Max-Age=0` 強制重新登入 + `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`。失敗對映：401 unauthorized（current 錯）/ 422 weak_password（含 `data.reasons[]`）/ 429 rate_limited（含 Retry-After）。**Phase 6-A2 前端 UI 已實裝**：partner portal 路由 `/change-password`（authenticated only，Dashboard 入口），UI 紀律見 `react.rule.md` §6.6 ChangePassword.tsx HIGH-RISK 8 條。 |
 
+Phase 10（賣場前台購物車，6 個；⚠ 由 `Infrastructure/Rest/FrontCartApi.php` 註冊，**不是** `V2Api`——與上面所有 endpoint 同 namespace `power-shop`，但獨立成另一個 `ApiBase` class）：
+
+| Method | 端點 | Permission | 說明 |
+|--------|------|------------|------|
+| GET | `profit-shop-cart/nonce` | `__return_true` | 取新鮮 `wp_rest` nonce；沒送 nonce 也能呼叫（見下方死鎖解法） |
+| GET | `profit-shop-cart` | `__return_true` | 讀取完整購物車（含 totals / shipping_rates） |
+| POST | `profit-shop-cart/add-item` | `__return_true` | 加購。Body：`{ profit_shop_id, id, quantity, variation_id?, variation? }` |
+| POST | `profit-shop-cart/update-item` | `__return_true` | 改數量。Body：`{ cart_item_key, quantity }`（quantity 為 0 等同移除） |
+| POST | `profit-shop-cart/remove-item` | `__return_true` | 移除項目。Body：`{ cart_item_key }` |
+| POST | `profit-shop-cart/select-shipping-rate` | `__return_true` | 選運費。Body：`{ package_id, rate_id }`（`rate_id` 須確實存在於該 package） |
+
+**為何全部 `permission_callback => '__return_true'`**：賣場前台是 customer-facing，未登入訪客必須
+能加購。防護不靠登入門檻，而是靠 `X-WP-Nonce`（CSRF 防護）與既有 `AddToCartHook` 的三道閘門
+（賣場存在／`status=publish`／`product_id ∈ shop items`）。
+
+**回應形狀**：與 admin endpoint 一致，統一 `{ code, message, data }`（**不是** partner endpoint 的
+裸 payload）；`data` 一律是完整購物車物件，mutation 後前端不需再補一次 GET。金額一律是「最小單位
+整數字串」+ `currency_minor_unit`（沿用 WC Store API 慣例）。
+
+**REST context 下 `WC()->cart` 不會自動就緒**：每個 callback 開頭都呼叫 `ensure_cart_ready()`，
+先 `wc_load_cart()` 再主動呼叫 `WC_Cart::get_cart()`（補跑 `get_cart_from_session()`）——
+WooCommerce 只在 frontend 與 `DOING_AJAX` context 自動呼叫 `load_cart()`，REST route 沒有這個
+天然優勢，且 `WC_Cart_Session::init()` 把 session 還原掛在 `wp_loaded`，REST callback 執行時該
+hook 早已跑完，不補這一步購物車會是空的。
+
+**加購能通過 `AddToCartHook` 三道閘門，靠的是 `$_POST` 橋接**：`AddToCartHook`
+（priority 5）只讀 `$_GET` / `$_POST`，REST 的 JSON body 不會填 `$_POST`。
+`FrontCartApi::add_to_cart_with_shop_context()` 因此在呼叫 `$cart->add_to_cart()`
+**之前**把 `profit_shop_id` 寫入 `$_POST`，呼叫完（含例外路徑）以 `finally` 還原。**禁止**改用
+`add_to_cart()` 第 5 個參數 `$cart_item_data` 傳 `profit_shop_id`（會跳過 `AddToCartHook` 的
+short-circuit 判斷，等於繞過全部三道閘門），也**禁止**在 `FrontCartApi` 內複製一份三閘門驗證。
+
+**nonce 死鎖與解法**：賣場頁 `status=publish` 刻意不送 nocache（Phase 5-B CDN 優化），HTML 內
+nonce 可能已過期。`rest_cookie_check_errors()` 對「沒送 nonce」的請求當 guest 放行，對「送了無效
+nonce 且有登入 cookie」的請求回 403 `rest_cookie_invalid_nonce`——若換 nonce 的 endpoint 本身也
+要求帶有效 nonce 會構成死結。`GET profit-shop-cart/nonce` 因此先從 `logged_in` cookie 還原身分
+（`wp_validate_auth_cookie` + `wp_set_current_user`）再產生 nonce，與 WordPress 自己的
+`wp_refresh_nonces()` 同一手法。
+
+（Phase 9 曾用 admin-ajax `FrontAjax` 走同樣的加購流程，已於 Phase 10 整條移除；WC Store API
+的 `cart` / `cart/select-shipping-rate` 也不再有任何消費者。）
+
 **Profit Shop API 慣例差異**：
 - Partner endpoint **不裹** `{code, data}`，body 直接是 payload（spec §4.4）
 - partner_token 從 `X-Partner-Token` / `Authorization: Bearer` / `Cookie` 取，驗證後寫入 `$request->_partner_term_id`（內部欄位前綴 `_` 避免被 sanitize）
@@ -114,16 +156,17 @@ Phase 6-A1（Partner 自助修密碼後端，1 個；Phase 6-A2 已完工 partne
 
 兩條 URL 路線**完全不同**，不要混用渲染策略。query var：`profit_partner_report` vs `profit_shop_slug`，由 `RewriteRules` 同檔註冊但互斥。
 
-**AddToCart 整合（Phase 4-C2，非 REST endpoint，是 WC filter hook）：**
+**AddToCart 整合（Phase 4-C2 起是 WC filter hook；Phase 10 起多一個自訂 REST 通道，見上方）：**
 
-加購商品需帶 `?profit_shop_id={id}` 才會啟用分潤定價：
+加購商品需要讓 `AddToCartHook` 讀到 `profit_shop_id` 才會啟用分潤定價，目前有三條可達路徑：
 
-| 商品類型 | 帶法 |
-|----------|------|
-| simple product | template 內 `<form action="<?php echo esc_url( home_url( '/' ) ); ?>" method="post">` 放 `<input type="hidden" name="profit_shop_id" value="...">` 與 WC `add-to-cart` |
-| variable / grouped | template 用 `permalink + add_query_arg('profit_shop_id', $shop_id)` 連到單品頁，由 WC 既有變體選購流程帶入 |
+| 通道 | 帶法 |
+|------|------|
+| simple product（`<noscript>` 降級） | template 內 `<form action="<?php echo esc_url( home_url( '/' ) ); ?>" method="post">` 放 `<input type="hidden" name="profit_shop_id" value="...">` 與 WC `add-to-cart` |
+| variable / grouped（`<noscript>` 降級） | template 用 `permalink + add_query_arg('profit_shop_id', $shop_id)` 連到單品頁，由 WC 既有變體選購流程帶入 |
+| **商品 Modal（JS 啟用時，Phase 9 + 10）** | `FrontCartApi::post_profit_shop_cart_add_item_callback()` 收到 JSON body 的 `profit_shop_id` 後，在呼叫 `add_to_cart()` **前**橋接進 `$_POST`、呼叫後 `finally` 還原（見上方 Phase 10 endpoint 說明） |
 
-後端 `AddToCartHook`（priority 5）只讀 `$_GET + $_POST`（**不讀 `$_COOKIE`**），三道閘門驗證後注入 cart_item_data，再由 Phase 3-D `CartPriceOverrideHook`（priority 10 / 999）簽章與套價。詳細 hook 串聯流程見 `architecture.rule.md`「Add-to-Cart 端到端流程」。
+後端 `AddToCartHook`（priority 5）只讀 `$_GET + $_POST`（**不讀 `$_COOKIE`**），三道閘門驗證後注入 cart_item_data，再由 Phase 3-D `CartPriceOverrideHook`（priority 10 / 999）簽章與套價。詳細 hook 串聯流程見 `architecture.rule.md`「Add-to-Cart 端到端流程」與「加購通道相容性」表。
 
 ---
 

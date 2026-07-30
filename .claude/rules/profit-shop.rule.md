@@ -433,6 +433,8 @@ Phase 7 新增測試（賣場編輯頁商品選擇器，PHP 端僅測試、無�
 | Phase 6-A2（Partner 自助修密碼前端 UI：ChangePassword.tsx HIGH-RISK + useChangePassword + forceLogoutAndRedirect + Login `?reason=password_changed` + partnerExceptionMapper context-aware）| `c80b4cc` |
 | Phase 7（賣場編輯頁商品選擇器重構：`ProductTableBody` 抽取 + `ProductPickerModal` + items 巢狀契約修正 BUG-A + `ProfitShopHydratorTest` / `ProfitShopItemsRoundTripTest`）| （尚未 commit，見 `git status` 與 `specs/plan/2026-07-29-profit-shop-product-selector-plan.md`） |
 | Phase 8（Partner 夥伴圖片：termmeta `_partner_image_id` + `image_url` 唯讀衍生 + 複用商品 `Gallery` 元件（單張圓形）+ Selector 頭像 + `#/profit-partner` 列表頁對齊標準版型）| （尚未 commit，見 `git status`） |
+| Phase 9（賣場前台 UI 照搬 legacy：混合式 PHP grid + `profit-shop-front` React bundle（第三個 Vite entry）+ `ProfitShopFrontData` payload + `FrontAjax` 購物車 admin-ajax + `settings` 通道啟用 + `ProfitShopFrontDataSettingsTest`）| （尚未 commit，見 `git status`） |
+| Phase 10（賣場前台購物車改自訂 REST：`FrontCartApi`（6 endpoint）取代 `FrontAjax` + WC Store API 雙通道、`$_POST` 橋接維持 `AddToCartHook` 三閘門、REST context `wc_load_cart()` 就緒、nonce 死鎖解法）| （尚未 commit，見 `git status`） |
 
 設計與決策來源：
 - `specs/2026-05-06-profit-shop-design.md`（含 Q1-Q6 plan 階段決策、§4 endpoint、§6.11 slug 衝突、§7 例外對映）
@@ -790,6 +792,113 @@ $raw = $_GET['profit_shop_id'] ?? $_POST['profit_shop_id'] ?? null;
 - shop 已刪 → 靜默不顯示（cart 仍可結帳，3-D 寫入的 4 筆 `_profit_*` meta + signature 已固化）
 - `target='_blank' rel='noopener'` 防 reverse tabnabbing
 - `esc_url(home_url('/' . RewriteRules::SHOP_REWRITE_PREFIX . '/' . $slug . '/'))` 確保 URL prefix DRY，**不**自己定義新常數（4-C2 wordpress M-1 修正）
+
+#### Phase 9：前台 UI 照搬 legacy（混合式 PHP + React）
+
+Phase 4-C 的「純 PHP、無 React」在 Phase 9 演進為**混合式**：PHP 仍負責印出商品 grid
+（SEO 內容留在 HTML），React/antd 只掛「商品 Modal」與「購物車表格」互動層。這**不是推翻**
+Pitfall #12——legacy 一頁商店本身就是這個架構，照搬它同時滿足「SEO / 不破壞 WC cart /
+customer-facing」三個理由與「UI 與舊版完全一致」的要求。前端細節見 `react.rule.md` §6.7。
+
+PHP 端新增三個檔案：
+
+| 檔案 | 職責 |
+|------|------|
+| `Infrastructure/WordPress/ProfitShopFrontData.php` | 把 ProfitShop + WC 商品組成前端 payload。**欄位名刻意用 legacy 的 camelCase**（`regularPrice` / `salesPrice` / `shortDescription` / `extraBuyerCount`），React 元件才能 1:1 照搬 |
+| ~~`Infrastructure/WooCommerce/FrontAjax.php`~~ | 前台購物車 admin-ajax（`nonce` / `add_cart` / `remove_cart` / `update_cart`）。**Phase 10 已刪除**，改為 `Infrastructure/Rest/FrontCartApi.php` 自訂 REST，見下方 Phase 10 小節 |
+| `Infrastructure/WordPress/templates/profit-shop-front.php` | 改寫為 legacy 卡片版型（既有檔案） |
+
+**四條紀律（違反會靜默壞掉，且沒有錯誤訊息；第 1、2 條已隨 Phase 10 改寫，見下）：**
+
+1. **購物車 API 層絕不自行寫入價格或分潤 meta**。無論是 Phase 9 的 `FrontAjax` 還是 Phase 10 的
+   `FrontCartApi`，加購都只呼叫 `WC()->cart->add_to_cart()` 並確保 `$_POST['profit_shop_id']`
+   存在，讓既有 hook 鏈自己做：`AddToCartHook`(5) 三閘門 → `CartPriceOverrideHook`(10) 寫 meta +
+   HMAC 簽章 → (999) 驗章 + `set_price`。自建 handler 直接塞
+   `cart_item_data['profit_shop_id']` 會**跳過全部三道閘門**（`AddToCartHook.php` 開頭的
+   short-circuit）——這是兩個 Phase 共同的鐵律，Phase 10 的 `FrontCartApi::add_to_cart_with_shop_context()`
+   同樣遵守，只是改用「呼叫前橋接 `$_POST`、`finally` 還原」的手法（見下方 Phase 10）。
+
+2. **走 REST 一樣可行，只是需要多做兩件事**（Phase 9 曾判斷「走 admin-ajax 而非 REST」，Phase 10 已
+   反轉為走 REST；以下是為何兩者都行得通的推理）：
+   - WooCommerce 只在 frontend 與 `DOING_AJAX` context 呼叫 `load_cart()`，admin-ajax 因此
+     `WC()->cart` 一定就緒；REST route 沒有這個天然優勢，必須自己補 `wc_load_cart()`，且要再主動
+     呼叫 `WC_Cart::get_cart()`（`WC_Cart_Session::init()` 把 session 還原掛在 `wp_loaded`，REST
+     callback 執行時該 hook 早已跑完，不補這一步購物車會是空的）。
+   - 三個 cart hook 的 admin guard 都是 `is_admin() && ! wp_doing_ajax()`。REST request 走
+     `/wp-json/`，`is_admin()` 一樣回 `false`，guard 不觸發，hook 照常掛載——這與 admin-ajax
+     context 的結論相同，代表**改走 REST 不需要動任何 hook 檔案**。
+   - REST 送的是 JSON body，PHP 不會自動填 `$_POST`（`AddToCartHook` 只讀 `$_GET` / `$_POST`），
+     這是 REST 相對 admin-ajax 唯一多出來的坑，Phase 10 用「呼叫前橋接 `$_POST`、`finally` 還原」
+     解決，見下方 Phase 10 小節。
+
+3. **template 與 payload 的商品過濾條件必須同步**。兩邊都跳過 `'publish' !== $product->get_status()`
+   的商品。不同步會產生「有卡片但 payload 找不到商品」→ 點了開不出 Modal，或反之。
+
+4. **DOM 契約不可改**：`data-ps-product-id` / `.ps-btn` / `.ps-not-ready` /
+   `#profit_shop_front_app` 是跨 PHP↔React 的介面。改 class 或 attribute 會讓 Modal 開不起來、
+   卡片永久灰階，且**不會有任何錯誤訊息**。
+
+**`ProfitShop::$settings` 是前台顯示設定的來源**（端到端已通 Repository `_profit_shop_settings`
+post meta / Hydrator / DTO / V2Api）。`ProfitShopFrontData::settings()` 讀 legacy 相同的 key
+（`btnColor` / `showConfetti` / `showStock` / `showBuyerCount` / `startTime` / `endTime`），
+缺值 fallback 到 legacy 預設，並在 PHP 端算好 `shopStatus`（`published` / `coming` / `closed`）
+避免瀏覽器時鐘偏移。三個型別陷阱（有 Unit test 鎖住，見下）：
+
+- **bool 經 REST 往返會變 `'1'` / `''`** → 一律走 `to_bool()`，不可直接 `if ($settings['showStock'])`
+- **毫秒時間戳會變字串** → 一律走 `to_timestamp_ms()`；壞資料正規化為 `0`（未設定），
+  **不可**當成「已過期的結束時間」，否則整個賣場會誤判為「商店已關閉」
+- **`btnColor` 會直接進 inline `<style>`** → 必須走 `to_color()` 的 hex 白名單
+  （legacy 是 `echo $btn_color` 毫無驗證，是 CSS injection 洞）
+
+測試：`tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php`（12 method /
+47 assertion，純 PHP 不啟 WP）。`build_products()` 與（Phase 10 起）`FrontCartApi` 仍待補 IT，見
+`specs/tech-debt.md` TD-22。
+
+#### Phase 10：前台購物車改自訂 REST
+
+Phase 9 的前台購物車是「寫入走 admin-ajax（`FrontAjax`）、讀取與選運費走 WC Store API」的雙通道，
+本 Phase 收斂為單一自訂 REST：`Infrastructure/Rest/FrontCartApi.php`（`namespace = 'power-shop'`，
+6 個 endpoint：`GET nonce` / `GET`（讀取）/ `POST add-item` / `update-item` / `remove-item` /
+`select-shipping-rate`，`permission_callback` 全部 `__return_true`）。回應統一 `{ code, message, data }`，
+`data` 一律是完整購物車物件（沿用 WC Store API 的欄位命名慣例：金額為「最小單位整數字串」+
+`currency_minor_unit`）。
+
+**最關鍵的實作細節：`$_POST` 橋接**。`AddToCartHook::extract_shop_id_from_request()` 只讀
+`$_GET` / `$_POST`，而 REST 的 JSON body 不會填 `$_POST`。`FrontCartApi::add_to_cart_with_shop_context()`
+因此在呼叫 `$cart->add_to_cart()` **之前**把 `profit_shop_id` 寫入 `$_POST`，呼叫完（含例外路徑）
+以 `finally` 還原：
+
+```php
+$_POST['profit_shop_id'] = (string) $shop_id;
+try {
+    return $cart->add_to_cart( $product_id, $quantity, $variation_id, $variation );
+} finally {
+    // 還原成呼叫前的原值（有原值就還原，沒有就 unset）
+}
+```
+
+**兩條禁止的替代做法**（與 Phase 9 的紀律 1 一致，重申於此）：改用 `add_to_cart()` 第 5 個參數
+`$cart_item_data` 傳 `profit_shop_id`——`AddToCartHook` 開頭的 short-circuit
+（`isset($cart_item_data['profit_shop_id'])` 就 return）會讓三道閘門全部被跳過；或在
+`FrontCartApi` 內複製一份三閘門驗證邏輯——違反 DRY，兩份規則遲早走鐘。
+
+**REST context 下 `WC()->cart` 不會自動就緒**：每個 callback 開頭都呼叫 `ensure_cart_ready()`：
+`wc_load_cart()` 之後再主動呼叫 `WC_Cart::get_cart()`（內部補跑 `get_cart_from_session()`），
+與 WooCommerce 自己的 `StoreApi\Utilities\CartController::load_cart()` 同法。
+
+**nonce 死鎖與解法**：賣場頁 `status=publish` 刻意不送 nocache（Phase 5-B CDN 優化），HTML 內
+nonce 可能已過期。`rest_cookie_check_errors()` 對「沒送 nonce」的請求會 `wp_set_current_user(0)`
+當 guest 放行，對「送了無效 nonce 且有登入 cookie」的請求回 403 `rest_cookie_invalid_nonce`——
+若換 nonce 的 endpoint 本身也要求帶有效 nonce，會構成死結。`get_profit_shop_cart_nonce_callback()`
+因此先從 `logged_in` cookie 還原身分（`wp_validate_auth_cookie` + `wp_set_current_user`）再產生
+nonce，與 WordPress 自己的 `wp_refresh_nonces()` 同一手法。前端判斷「該不該重試」的條件是
+**403 且 body `code === 'rest_cookie_invalid_nonce'`**（不是舊 admin-ajax 時代自訂的 `invalid_nonce`）。
+
+測試：**端到端執行期驗證 32 項全通過**（用 `rest_do_request()` 在真實 WP + WC 環境內部呼叫，
+涵蓋 6 個 route 註冊、`wc_load_cart()` 在 REST context 生效、三閘門確實跑到、4 筆 `_profit_*`
+meta 全部寫入、結帳前套用價格正確、3 則攻擊情境全擋、nonce 可通過 `wp_verify_nonce`）。單元 /
+整合測試仍待補，見 `specs/tech-debt.md` TD-22。前端細節（`api.ts` 單一 axios instance、nonce
+retry、通知按鈕的 `<div role="button">` 通則）見 `react.rule.md` §6.7。
 
 #### DRY：URL prefix 統一用 `RewriteRules::SHOP_REWRITE_PREFIX`
 
