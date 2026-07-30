@@ -188,7 +188,148 @@ final class PartnerTermRepositoryTest extends TestCase {
 		);
 	}
 
+	// ========== 夥伴圖片（_partner_image_id）==========
+
+	/**
+	 * save() 應只持久化 image_id，image_url 於讀取時由 attachment 即時解析
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_save_persists_image_id_and_resolves_url_on_read(): void {
+		$attachment_id = $this->create_image_attachment();
+
+		$term_id = $this->repo->save(
+			new PartnerSnapshot(
+				term_id: 0,
+				name: 'Ivy',
+				slug: new PartnerSlug( 'ivy-with-image' ),
+				contact_email: null,
+				image_id: $attachment_id,
+				// 刻意傳入假的 image_url——save() 必須忽略它，只寫 image_id。
+				image_url: 'https://evil.example/should-be-ignored.jpg'
+			),
+			'plain-Pa55word!'
+		);
+
+		$this->assertSame(
+			$attachment_id,
+			(int) \get_term_meta( $term_id, '_partner_image_id', true ),
+			'_partner_image_id termmeta 應寫入 attachment ID'
+		);
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertSame( $attachment_id, $persisted->image_id );
+		$this->assertNotNull( $persisted->image_url, 'image_url 應由 attachment 解析出來' );
+		$this->assertStringNotContainsString(
+			'evil.example',
+			(string) $persisted->image_url,
+			'save() 傳入的 image_url 不可被持久化'
+		);
+	}
+
+	/**
+	 * image_id 傳 null 應清空既有 termmeta（等同「移除夥伴圖片」）
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_save_with_null_image_id_clears_existing_meta(): void {
+		$attachment_id = $this->create_image_attachment();
+
+		$term_id = $this->repo->save(
+			new PartnerSnapshot(
+				term_id: 0,
+				name: 'Ivy',
+				slug: new PartnerSlug( 'ivy-clear-image' ),
+				contact_email: null,
+				image_id: $attachment_id
+			)
+		);
+
+		// 第二次儲存不帶圖片 → 應清除。
+		$this->repo->save(
+			new PartnerSnapshot(
+				term_id: $term_id,
+				name: 'Ivy',
+				slug: new PartnerSlug( 'ivy-clear-image' ),
+				contact_email: null,
+				image_id: null
+			)
+		);
+
+		$this->assertSame(
+			'',
+			(string) \get_term_meta( $term_id, '_partner_image_id', true ),
+			'image_id 傳 null 時 termmeta 應被刪除'
+		);
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertNull( $persisted->image_id );
+		$this->assertNull( $persisted->image_url );
+	}
+
+	/**
+	 * attachment 已被刪除時：image_url 回 null，但 image_id termmeta 保留
+	 *
+	 * 讀取路徑不可有寫入副作用——保留 ID 才能在檔案被救回後自動復原顯示。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_deleted_attachment_yields_null_url_but_keeps_id(): void {
+		$attachment_id = $this->create_image_attachment();
+
+		$term_id = $this->repo->save(
+			new PartnerSnapshot(
+				term_id: 0,
+				name: 'Ivy',
+				slug: new PartnerSlug( 'ivy-broken-image' ),
+				contact_email: null,
+				image_id: $attachment_id
+			)
+		);
+
+		\wp_delete_attachment( $attachment_id, true );
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertSame( $attachment_id, $persisted->image_id, '孤兒 attachment ID 應保留' );
+		$this->assertNull( $persisted->image_url, '無法解析的 attachment 應回 null URL' );
+		$this->assertSame(
+			$attachment_id,
+			(int) \get_term_meta( $term_id, '_partner_image_id', true ),
+			'讀取不可產生清除 termmeta 的副作用'
+		);
+	}
+
 	// ========== Helpers ==========
+
+	/**
+	 * 建立一張測試用圖片 attachment（不需真實檔案，只要 URL 可解析）
+	 *
+	 * @param string $filename 檔名
+	 *
+	 * @return int attachment ID
+	 */
+	private function create_image_attachment( string $filename = 'partner-avatar.jpg' ): int {
+		$attachment_id = \wp_insert_attachment(
+			[
+				'post_title'     => $filename,
+				'post_mime_type' => 'image/jpeg',
+				'post_status'    => 'inherit',
+			]
+		);
+
+		$this->assertIsInt( $attachment_id );
+		$this->assertGreaterThan( 0, $attachment_id );
+
+		\update_post_meta( $attachment_id, '_wp_attached_file', '2026/07/' . $filename );
+
+		return (int) $attachment_id;
+	}
 
 	/**
 	 * 建立一個 partner（透過 Repository save，確保 termmeta 寫入路徑與 production 一致）

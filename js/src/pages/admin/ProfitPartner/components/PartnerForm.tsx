@@ -1,7 +1,8 @@
 import { Form, Input, type FormInstance, type FormRule } from 'antd'
 import { memo } from 'react'
 
-import type { TProfitPartnerInput } from '@/pages/admin/ProfitPartner/types'
+import { Gallery } from '@/components/product/fields'
+import type { TPartnerFormValues } from '@/pages/admin/ProfitPartner/types'
 
 const { Item } = Form
 
@@ -9,7 +10,7 @@ const { Item } = Form
 const SLUG_FORMAT = /^[a-z0-9_-]+$/
 
 type TPartnerFormProps = {
-	form: FormInstance<TProfitPartnerInput>
+	form: FormInstance<TPartnerFormValues>
 	mode: 'create' | 'edit'
 	submitting?: boolean
 }
@@ -44,11 +45,29 @@ const PartnerFormComponent = ({
 	]
 
 	return (
-		<Form<TProfitPartnerInput>
+		<Form<TPartnerFormValues>
 			form={form}
 			layout="vertical"
 			disabled={submitting}
 		>
+			{/*
+			 * 直接複用商品編輯頁「商品圖片」的 Gallery 元件（同一套媒體庫 + 操作邏輯），
+			 * 只調整為單張、圓形、換標題。Gallery 自帶 hidden Form.Item 管理 `images` 值，
+			 * 因此**不可**再包一層 <Item>，否則會變成兩層巢狀欄位而讀不到值。
+			 */}
+			{/*
+			 * Gallery 內部是原生 div / Image，吃不到 antd Form 的 disabled context，
+			 * 送出期間得自己擋掉互動，避免使用者在 request 飛行中又開媒體庫改圖。
+			 */}
+			<div
+				className={`mb-6 ${submitting ? 'pointer-events-none opacity-50' : ''}`}
+			>
+				<Gallery name={['images']} limit={1} shape="circle" title="夥伴圖片" />
+				<div className="text-xs text-gray-400 mt-2">
+					顯示於夥伴列表與賣場的分潤設定選單；建議使用正方形圖片，會裁切為圓形呈現
+				</div>
+			</div>
+
 			<Item
 				name="name"
 				label="夥伴名稱"

@@ -104,11 +104,15 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 	public function save( PartnerSnapshot $partner, ?string $plain_password = null ): int {
 		$term_id = $partner->term_id > 0 ? $partner->term_id : ++$this->next_id;
 
+		// 模擬 production：只持久化 image_id，image_url 於讀取時由 id 衍生
+		// （傳入的 image_url 一律忽略，與 PartnerTermRepository::save 行為一致）。
 		$this->partners[ $term_id ] = new PartnerSnapshot(
 			term_id: $term_id,
 			name: $partner->name,
 			slug: $partner->slug,
 			contact_email: $partner->contact_email,
+			image_id: $partner->image_id,
+			image_url: null === $partner->image_id ? null : self::fake_image_url( $partner->image_id ),
 		);
 
 		if ( null !== $plain_password ) {
@@ -117,6 +121,17 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 		}
 
 		return $term_id;
+	}
+
+	/**
+	 * 模擬 wp_get_attachment_image_url 的 URL 衍生（純字串規則，不碰 WP）
+	 *
+	 * @param int $image_id Attachment ID
+	 *
+	 * @return string
+	 */
+	public static function fake_image_url( int $image_id ): string {
+		return "https://example.test/wp-content/uploads/attachment-{$image_id}.jpg";
 	}
 
 	/**

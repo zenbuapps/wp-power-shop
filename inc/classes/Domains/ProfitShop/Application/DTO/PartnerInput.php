@@ -27,13 +27,15 @@ final class PartnerInput {
 	 * @param string      $slug          slug（唯一）
 	 * @param string|null $contact_email 聯絡 email（可為 null）
 	 * @param string|null $password      明文密碼（null 代表不變更）
+	 * @param int|null    $image_id      夥伴圖片 attachment ID（null 代表清除圖片）
 	 */
 	public function __construct(
 		public readonly ?int $id,
 		public readonly string $name,
 		public readonly string $slug,
 		public readonly ?string $contact_email,
-		public readonly ?string $password
+		public readonly ?string $password,
+		public readonly ?int $image_id = null
 	) {}
 
 	/**
@@ -50,6 +52,9 @@ final class PartnerInput {
 			slug: (string) ( $data['slug'] ?? '' ),
 			contact_email: isset( $data['contact_email'] ) ? (string) $data['contact_email'] : null,
 			password: isset( $data['password'] ) ? (string) $data['password'] : null,
+			// 0 / 負數 / 未帶皆視為「無圖片」——與前端「清除圖片時送 null」對齊，
+			// 也避免 attachment ID 0 這種不存在的值被寫進 termmeta。
+			image_id: isset( $data['image_id'] ) && (int) $data['image_id'] > 0 ? (int) $data['image_id'] : null,
 		);
 	}
 
@@ -61,7 +66,8 @@ final class PartnerInput {
 	 *   name: string,
 	 *   slug: string,
 	 *   contact_email: string|null,
-	 *   password: string|null
+	 *   password: string|null,
+	 *   image_id: int|null
 	 * }
 	 */
 	public function to_array(): array {
@@ -71,6 +77,7 @@ final class PartnerInput {
 			'slug'          => $this->slug,
 			'contact_email' => $this->contact_email,
 			'password'      => $this->password,
+			'image_id'      => $this->image_id,
 		];
 	}
 }

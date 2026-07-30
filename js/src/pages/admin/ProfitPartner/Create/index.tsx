@@ -5,13 +5,20 @@ import { memo } from 'react'
 
 import { PartnerForm } from '@/pages/admin/ProfitPartner/components/PartnerForm'
 import { useProfitPartnerCreate } from '@/pages/admin/ProfitPartner/hooks'
-import type { TProfitPartnerInput } from '@/pages/admin/ProfitPartner/types'
+import type {
+	TPartnerFormValues,
+	TProfitPartnerInput,
+} from '@/pages/admin/ProfitPartner/types'
+import {
+	toImageId,
+	toPartnerFormFieldName,
+} from '@/pages/admin/ProfitPartner/utils'
 import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
 
 const CreateComponent = () => {
 	const go = useGo()
 	const { notification } = App.useApp()
-	const [form] = Form.useForm<TProfitPartnerInput>()
+	const [form] = Form.useForm<TPartnerFormValues>()
 	const creator = useProfitPartnerCreate()
 
 	const handleSubmit = async () => {
@@ -23,6 +30,7 @@ const CreateComponent = () => {
 				slug: values.slug,
 				contact_email: values.contact_email ?? null,
 				password: values.password,
+				image_id: toImageId(values.images),
 			}
 
 			const result = await creator.mutateAsync(payload)
@@ -45,7 +53,7 @@ const CreateComponent = () => {
 			if (mapped.fieldErrors) {
 				const fields = Object.entries(mapped.fieldErrors).map(
 					([name, msg]) => ({
-						name: name as keyof TProfitPartnerInput,
+						name: toPartnerFormFieldName(name),
 						errors: [msg],
 					})
 				)

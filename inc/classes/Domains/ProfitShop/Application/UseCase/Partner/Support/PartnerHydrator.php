@@ -32,7 +32,9 @@ final class PartnerHydrator {
 			name: $partner->name,
 			slug: $partner->slug->value(),
 			contact_email: $partner->contact_email,
-			created_at: $created_at
+			created_at: $created_at,
+			image_id: $partner->image_id,
+			image_url: $partner->image_url
 		);
 	}
 }

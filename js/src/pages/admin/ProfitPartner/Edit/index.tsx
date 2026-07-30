@@ -10,15 +10,20 @@ import {
 	useProfitPartnerUpdate,
 } from '@/pages/admin/ProfitPartner/hooks'
 import type {
+	TPartnerFormValues,
 	TProfitPartner,
 	TProfitPartnerInput,
 } from '@/pages/admin/ProfitPartner/types'
+import {
+	toImageId,
+	toPartnerFormFieldName,
+} from '@/pages/admin/ProfitPartner/utils'
 import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
 
 const EditComponent = () => {
 	const { id } = useParsed()
 	const { notification } = App.useApp()
-	const [form] = Form.useForm<TProfitPartnerInput>()
+	const [form] = Form.useForm<TPartnerFormValues>()
 
 	const { data, isLoading, isFetching } = useProfitPartnerOne(id)
 	const updater = useProfitPartnerUpdate()
@@ -37,6 +42,14 @@ const EditComponent = () => {
 			name: record.name,
 			slug: record.slug,
 			contact_email: record.contact_email,
+
+			// image_url 為 null 代表 attachment 已被刪除（image_id 仍在）——
+			// 這種情況視同未設定，讓站長重新挑一張，而不是顯示破圖。
+			// Gallery 吃 TImage[]（id 為字串），故需轉型並包成陣列。
+			images:
+				record.image_id && record.image_url
+					? [{ id: String(record.image_id), url: record.image_url }]
+					: [],
 		})
 	}, [record, form])
 
@@ -50,6 +63,9 @@ const EditComponent = () => {
 				name: values.name,
 				slug: values.slug,
 				contact_email: values.contact_email ?? null,
+
+				// 表單持有 TImage[]，只把第一張的 id 送後端；null 明確代表「移除圖片」
+				image_id: toImageId(values.images),
 			}
 
 			await updater.mutateAsync(record.id, payload)
@@ -63,7 +79,7 @@ const EditComponent = () => {
 			if (mapped.fieldErrors) {
 				const fields = Object.entries(mapped.fieldErrors).map(
 					([name, msg]) => ({
-						name: name as keyof TProfitPartnerInput,
+						name: toPartnerFormFieldName(name),
 						errors: [msg],
 					})
 				)

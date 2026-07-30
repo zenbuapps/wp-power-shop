@@ -67,7 +67,8 @@ final class CreatePartner {
 			term_id: 0,
 			name: $input->name,
 			slug: $slug,
-			contact_email: $input->contact_email
+			contact_email: $input->contact_email,
+			image_id: $input->image_id
 		);
 
 		$term_id = $this->partnerRepo->save( $snapshot, $input->password );

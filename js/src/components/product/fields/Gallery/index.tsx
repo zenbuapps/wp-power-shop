@@ -19,6 +19,10 @@ export const Gallery = ({
 	limit = 10,
 	wrapClassName = 'flex flex-wrap gap-2',
 	onValuesChange,
+	name,
+	shape = 'square',
+	title = '商品圖片',
+	allowSetThumbnail = true,
 }: {
 	id?: string
 	size?: SizeType
@@ -30,18 +34,36 @@ export const Gallery = ({
 		},
 		allValues: TFormValues[]
 	) => void
+
+	/** 自訂 form 欄位路徑；不傳時沿用商品表單慣例 `['images']` / `[id, 'images']` */
+	name?: (string | number)[]
+
+	/** 圖片外框形狀，`circle` 用於人物頭像類情境（例：分潤夥伴圖片） */
+	shape?: 'square' | 'circle'
+
+	/** 區塊標題文字（`size="small"` 時不顯示） */
+	title?: string
+
+	/** 是否顯示「設為封面」操作；單張情境（limit=1）應關閉 */
+	allowSetThumbnail?: boolean
 }) => {
-	const imageName = id ? [id, 'images'] : ['images']
+	const imageName = name ?? (id ? [id, 'images'] : ['images'])
 	const form = Form.useFormInstance()
 
 	// 初始的圖片
 	const watchImages: TImage[] = Form.useWatch(imageName, form)
 
+	// 欄位尚未被賦值時 useWatch 會回 undefined；統一收斂成陣列，
+	// 否則 `watchImages?.length < limit` 會是 `undefined < n` = false，導致「+」按鈕不出現
+	const images: TImage[] = watchImages ?? []
+
 	const { show, close, modalProps, ...mediaLibraryProps } =
 		useMediaLibraryModal({
-			initItems: watchImages,
+			initItems: images,
 			onConfirm: (selectedItems) => {
-				form.setFieldValue(imageName, selectedItems)
+				// 媒體庫的 limit 只約束 UI，這裡再截斷一次確保寫進 form 的數量不超過上限
+				const nextImages = (selectedItems ?? []).slice(0, limit)
+				form.setFieldValue(imageName, nextImages)
 
 				if (onValuesChange && id) {
 					const allValues = form.getFieldsValue()
@@ -49,7 +71,7 @@ export const Gallery = ({
 						{
 							[id]: {
 								//@ts-ignore
-								images: selectedItems,
+								images: nextImages,
 							},
 						} as {
 							[key: string]: Partial<TFormValues>
@@ -64,7 +86,7 @@ export const Gallery = ({
 	const handleRemove = (_imageId: string) => () => {
 		form.setFieldValue(
 			imageName,
-			watchImages.filter(({ id: imageId }) => imageId !== _imageId)
+			images.filter(({ id: imageId }) => imageId !== _imageId)
 		)
 
 		if (onValuesChange && id) {
@@ -73,9 +95,7 @@ export const Gallery = ({
 				{
 					[id]: {
 						//@ts-ignore
-						images: watchImages.filter(
-							({ id: imageId }) => imageId !== _imageId
-						),
+						images: images.filter(({ id: imageId }) => imageId !== _imageId),
 					},
 				} as {
 					[key: string]: Partial<TFormValues>
@@ -88,7 +108,7 @@ export const Gallery = ({
 	/** 設定封面 */
 	const handleSetThumbnail = (targetId: string) => () => {
 		// 移動到第一個
-		const resortImages: TImage[] = watchImages.reduce((acc, image) => {
+		const resortImages: TImage[] = images.reduce((acc, image) => {
 			if (image.id === targetId) {
 				acc.unshift(image)
 			} else {
@@ -101,21 +121,26 @@ export const Gallery = ({
 	}
 
 	const imgSizeClass = 'small' === size ? 'w-10 h-10' : 'w-24 h-24'
+	const shapeClass = 'circle' === shape ? 'rounded-full' : 'rounded-lg'
+
+	// 單張情境沒有「封面」概念（唯一一張本來就是封面），關閉可避免誤導文案
+	const showThumbnailAction = allowSetThumbnail && limit > 1
 
 	return (
 		<>
 			{'small' !== size && (
-				<span className="text-sm font-normal inline-block pb-2">商品圖片</span>
+				<span className="text-sm font-normal inline-block pb-2">{title}</span>
 			)}
 			<Item name={imageName} hidden />
 			<div className={wrapClassName}>
-				{watchImages?.map(
+				{images.map(
 					({ id: _imageId, url }, index) =>
 						index < limit && (
 							<Image
 								key={`${_imageId}-${nanoid(4)}`}
 								className={cn(
-									'product-image aspect-square rounded-lg object-cover',
+									'product-image aspect-square object-cover',
+									shapeClass,
 									imgSizeClass
 								)}
 								preview={{
@@ -128,7 +153,7 @@ export const Gallery = ({
 													onClick={handleRemove(_imageId)}
 												/>
 											</div>
-											{'small' !== size && (
+											{'small' !== size && showThumbnailAction && (
 												<span
 													className="m-0 text-xs"
 													role="button"
@@ -145,17 +170,18 @@ export const Gallery = ({
 											)}
 										</div>
 									),
-									maskClassName: 'rounded-lg',
+									maskClassName: shapeClass,
 								}}
 								src={url || defaultImage}
 								fallback={defaultImage}
 							/>
 						)
 				)}
-				{watchImages?.length < limit && (
+				{images.length < limit && (
 					<div
 						className={cn(
-							'group aspect-square rounded-lg cursor-pointer bg-gray-100 hover:bg-blue-100 border-dashed border-2 border-gray-200 hover:border-blue-200 transition-all duration-300 flex justify-center items-center',
+							'group aspect-square cursor-pointer bg-gray-100 hover:bg-blue-100 border-dashed border-2 border-gray-200 hover:border-blue-200 transition-all duration-300 flex justify-center items-center',
+							shapeClass,
 							imgSizeClass
 						)}
 						role="button"

@@ -53,7 +53,8 @@ final class UpdatePartner {
 			term_id: $id,
 			name: $input->name,
 			slug: $slug,
-			contact_email: $input->contact_email
+			contact_email: $input->contact_email,
+			image_id: $input->image_id
 		);
 
 		$this->partnerRepo->save( $snapshot, $input->password );

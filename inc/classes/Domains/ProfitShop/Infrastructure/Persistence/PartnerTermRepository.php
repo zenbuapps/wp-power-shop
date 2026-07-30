@@ -22,6 +22,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
  * - _partner_password（wp_hash_password 雜湊）
  * - _partner_contact_email
  * - _partner_password_changed_at（unix timestamp）
+ * - _partner_image_id（夥伴圖片 attachment ID；只存 ID，URL 於讀取時即時解析）
  */
 final class PartnerTermRepository implements PartnerRepositoryInterface {
 
@@ -33,6 +34,17 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 	private const META_PASSWORD            = '_partner_password';
 	private const META_CONTACT_EMAIL       = '_partner_contact_email';
 	private const META_PASSWORD_CHANGED_AT = '_partner_password_changed_at';
+	private const META_IMAGE_ID            = '_partner_image_id';
+
+	/**
+	 * 夥伴圖片解析用的 image size
+	 *
+	 * 使用 thumbnail（預設 150x150 硬裁切）足以應付列表 / selector / 編輯頁預覽；
+	 * 若站台未產生該尺寸，`wp_get_attachment_image_url()` 會自動退回 full size。
+	 *
+	 * @var string
+	 */
+	private const IMAGE_SIZE = 'thumbnail';
 
 	/**
 	 * 依 slug 取得 Partner
@@ -110,6 +122,15 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 			\delete_term_meta( $term_id, self::META_CONTACT_EMAIL );
 		} else {
 			\update_term_meta( $term_id, self::META_CONTACT_EMAIL, $partner->contact_email );
+		}
+
+		// 寫入 image_id（null / <= 0 視為清空）。
+		// 注意：**只寫 image_id，不寫 image_url**——URL 為衍生顯示欄位，
+		// 站台換網域 / 換 CDN 時會失效，attachment ID 才是穩定的真相來源。
+		if ( null === $partner->image_id || $partner->image_id <= 0 ) {
+			\delete_term_meta( $term_id, self::META_IMAGE_ID );
+		} else {
+			\update_term_meta( $term_id, self::META_IMAGE_ID, $partner->image_id );
 		}
 
 		// 僅在 plain_password 非 null 時更新密碼雜湊與變更時間。
@@ -274,11 +295,34 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 		$contact_email_raw = (string) \get_term_meta( $term->term_id, self::META_CONTACT_EMAIL, true );
 		$contact_email     = '' === $contact_email_raw ? null : $contact_email_raw;
 
+		$image_id  = (int) \get_term_meta( $term->term_id, self::META_IMAGE_ID, true );
+		$image_id  = $image_id > 0 ? $image_id : null;
+		$image_url = null === $image_id ? null : $this->resolve_image_url( $image_id );
+
 		return new PartnerSnapshot(
 			term_id: (int) $term->term_id,
 			name: (string) $term->name,
 			slug: $slug,
-			contact_email: $contact_email
+			contact_email: $contact_email,
+			image_id: $image_id,
+			image_url: $image_url
 		);
+	}
+
+	/**
+	 * 將 attachment ID 解析為圖片 URL
+	 *
+	 * 當 attachment 已被刪除（或不是圖片）時回 null——**不清空 termmeta**：
+	 * 保留 image_id 可讓站長從媒體庫救回檔案後圖片自動復原，
+	 * 也避免讀取路徑產生非預期的寫入副作用。
+	 *
+	 * @param int $image_id Attachment ID
+	 *
+	 * @return string|null 解析失敗回 null
+	 */
+	private function resolve_image_url( int $image_id ): ?string {
+		$url = \wp_get_attachment_image_url( $image_id, self::IMAGE_SIZE );
+
+		return is_string( $url ) && '' !== $url ? $url : null;
 	}
 }

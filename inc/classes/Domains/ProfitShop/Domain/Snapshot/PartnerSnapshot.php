@@ -16,6 +16,11 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PartnerSlug;
  * 讓 Domain Service 維持純粹（不依賴 WP 函式）。
  *
  * 不含密碼欄位——密碼為 Infrastructure 層責任，Domain 不該碰。
+ *
+ * `image_url` 是由 `image_id` 推導出的**唯讀衍生欄位**（Infrastructure 層在 hydrate 時
+ * 以 `wp_get_attachment_image_url()` 解析），僅供顯示。持久化只寫 `image_id`，
+ * `save()` 一律忽略傳入的 `image_url`——避免 URL 被當成真相來源而寫死進 DB
+ * （站台換網域 / 換 CDN 時 URL 會失效，attachment ID 不會）。
  */
 final class PartnerSnapshot {
 
@@ -26,12 +31,16 @@ final class PartnerSnapshot {
 	 * @param string      $name          Partner 顯示名稱
 	 * @param PartnerSlug $slug          Partner slug（已驗證之 ValueObject）
 	 * @param string|null $contact_email 聯絡 email（nullable）
+	 * @param int|null    $image_id      夥伴圖片 attachment ID（nullable，null 代表未設定）
+	 * @param string|null $image_url     夥伴圖片 URL（**唯讀衍生欄位**，由 image_id 推導）
 	 */
 	public function __construct(
 		public readonly int $term_id,
 		public readonly string $name,
 		public readonly PartnerSlug $slug,
-		public readonly ?string $contact_email = null
+		public readonly ?string $contact_email = null,
+		public readonly ?int $image_id = null,
+		public readonly ?string $image_url = null
 	) {
 	}
 }

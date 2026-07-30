@@ -127,11 +127,34 @@ final class DtoRoundTripTest extends TestCase {
 			'slug'          => 'alice',
 			'contact_email' => 'alice@example.com',
 			'password'      => 'plain-password',
+			'image_id'      => 321,
 		];
 
 		$dto = PartnerInput::from_array( $arr );
 
 		$this->assertSame( $arr, $dto->to_array() );
+	}
+
+	/**
+	 * PartnerInput：image_id 缺席 / 0 / 負數一律正規化為 null
+	 *
+	 * 對應「清除夥伴圖片時前端送 null」的契約，同時擋掉 attachment ID 0 這種不存在的值。
+	 *
+	 * @group edge
+	 */
+	public function test_partner_input_normalizes_invalid_image_id_to_null(): void {
+		$base = [
+			'id'            => 7,
+			'name'          => 'Alice',
+			'slug'          => 'alice',
+			'contact_email' => null,
+			'password'      => null,
+		];
+
+		$this->assertNull( PartnerInput::from_array( $base )->image_id, '缺席時應為 null' );
+		$this->assertNull( PartnerInput::from_array( $base + [ 'image_id' => 0 ] )->image_id, '0 應正規化為 null' );
+		$this->assertNull( PartnerInput::from_array( $base + [ 'image_id' => -5 ] )->image_id, '負數應正規化為 null' );
+		$this->assertSame( 88, PartnerInput::from_array( $base + [ 'image_id' => '88' ] )->image_id, '字串數字應轉 int' );
 	}
 
 	// ────────────────────────────────────────────────
@@ -150,11 +173,37 @@ final class DtoRoundTripTest extends TestCase {
 			'slug'          => 'alice',
 			'contact_email' => 'alice@example.com',
 			'created_at'    => '2026-04-01 09:00:00',
+			'image_id'      => 321,
+			'image_url'     => 'https://example.test/wp-content/uploads/alice-150x150.jpg',
 		];
 
 		$dto = PartnerOutput::from_array( $arr );
 
 		$this->assertSame( $arr, $dto->to_array() );
+	}
+
+	/**
+	 * PartnerOutput：未設定夥伴圖片時 image_id / image_url 皆為 null
+	 *
+	 * 鎖死「沒有圖片」的線材形狀是 null（而非 0 / 空字串），前端才能用
+	 * `image_url ?? fallback` 直接判斷要不要顯示預設頭像。
+	 *
+	 * @group edge
+	 */
+	public function test_partner_output_without_image_is_null(): void {
+		$dto = PartnerOutput::from_array(
+			[
+				'id'         => 7,
+				'name'       => 'Alice',
+				'slug'       => 'alice',
+				'created_at' => '2026-04-01 09:00:00',
+			]
+		);
+
+		$this->assertNull( $dto->image_id );
+		$this->assertNull( $dto->image_url );
+		$this->assertArrayHasKey( 'image_id', $dto->to_array() );
+		$this->assertArrayHasKey( 'image_url', $dto->to_array() );
 	}
 
 	// ────────────────────────────────────────────────

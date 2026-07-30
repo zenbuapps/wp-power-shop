@@ -1,4 +1,6 @@
+import { PictureOutlined } from '@ant-design/icons'
 import { Select, Spin } from 'antd'
+import { defaultImage } from 'antd-toolkit'
 import { memo, useMemo } from 'react'
 
 import { useProfitPartnerList } from '@/pages/admin/ProfitPartner/hooks'
@@ -18,12 +20,36 @@ type TPartnerSelectorProps = {
 	placeholder?: string
 }
 
+/** 選項內的夥伴圖片（圓形，與列表 / 編輯頁一致）；無圖或圖片失效時退回灰色佔位 icon */
+const PartnerAvatar = ({ url, name }: { url: string | null; name: string }) =>
+	url ? (
+		<img
+			src={url}
+			alt={name}
+			className="w-6 h-6 rounded-full object-cover shrink-0"
+			onError={(e) => {
+				e.currentTarget.src = defaultImage
+			}}
+		/>
+	) : (
+		<span
+			className="w-6 h-6 rounded-full bg-gray-100 text-gray-300 flex items-center justify-center shrink-0"
+			aria-hidden="true"
+		>
+			<PictureOutlined />
+		</span>
+	)
+
 /**
  * 分潤夥伴下拉選單（給 ProfitShop Edit/Create 選 partner_term_id 用）
  *
  * - 直接 useProfitPartnerList 取全部 partners（後端目前無 pagination，總量小）
  * - showSearch + 客製 filterOption：依 name + slug 做模糊搜尋
- * - 顯示 `name (slug)` 雙重識別，避免相似名稱誤選
+ * - 選項與已選值都顯示夥伴圖片 + `name（slug）`，避免相似名稱誤選
+ *
+ * ⚠️ `label` 是 ReactNode（帶圖片），antd 內建的 `optionFilterProp="label"`
+ * 對 ReactNode 無法比對字串，因此**必須**保留自訂 `filterOption`
+ * 走 option 上額外掛的純字串 `name` / `slug` 欄位——移除它會讓搜尋整個失效。
  */
 const PartnerSelectorComponent = ({
 	value,
@@ -41,7 +67,15 @@ const PartnerSelectorComponent = ({
 	const options = useMemo(
 		() =>
 			partners.map((p) => ({
-				label: `${p.name}（${p.slug}）`,
+				label: (
+					<span className="flex items-center gap-2">
+						<PartnerAvatar url={p.image_url ?? null} name={p.name} />
+						<span className="truncate">
+							{p.name}
+							<span className="text-gray-400">（{p.slug}）</span>
+						</span>
+					</span>
+				),
 				value: p.id,
 				name: p.name,
 				slug: p.slug,
@@ -59,7 +93,7 @@ const PartnerSelectorComponent = ({
 			loading={isLoading || isFetching}
 			notFoundContent={
 				isLoading ? (
-					<div className="tw-text-center tw-py-2">
+					<div className="text-center py-2">
 						<Spin size="small" />
 					</div>
 				) : (
@@ -70,7 +104,6 @@ const PartnerSelectorComponent = ({
 			value={value}
 			onChange={(v) => onChange?.(typeof v === 'number' ? v : null)}
 			disabled={disabled}
-			optionFilterProp="label"
 			filterOption={(input, option) => {
 				if (!option) return false
 				const keyword = input.toLowerCase()
@@ -84,7 +117,7 @@ const PartnerSelectorComponent = ({
 					{menu}
 					{isOverThreshold && (
 						<div
-							className="tw-text-xs tw-text-orange-500 tw-px-3 tw-py-2 tw-border-t tw-border-gray-200"
+							className="text-xs text-orange-500 px-3 py-2 border-t border-gray-200"
 							role="note"
 						>
 							結果可能超過 {PARTNER_LIST_WARN_THRESHOLD}{' '}
@@ -93,7 +126,7 @@ const PartnerSelectorComponent = ({
 					)}
 				</>
 			)}
-			className="tw-w-full"
+			className="w-full"
 		/>
 	)
 }

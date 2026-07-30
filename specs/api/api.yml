@@ -1076,6 +1076,13 @@ components:
           format: password
           nullable: true
           description: 明文密碼（null 代表不變更）；server 端會以 wp_hash_password 雜湊後存 termmeta
+        image_id:
+          type: integer
+          nullable: true
+          description: |
+            夥伴圖片 attachment ID，存於 termmeta `_partner_image_id`。
+            `null` / `0` / 負數一律正規化為 null，並**刪除**既有 termmeta（= 移除夥伴圖片）。
+            **只接受 image_id**，不接受 image_url——URL 是唯讀衍生欄位（見 PartnerOutput.image_url）。
       required:
         - name
         - slug
@@ -1097,6 +1104,18 @@ components:
         created_at:
           type: string
           description: Y-m-d H:i:s
+        image_id:
+          type: integer
+          nullable: true
+          description: 夥伴圖片 attachment ID；未設定時為 null
+        image_url:
+          type: string
+          format: uri
+          nullable: true
+          description: |
+            夥伴圖片 URL（`thumbnail` size），由 image_id 於讀取時即時解析的**唯讀衍生欄位**。
+            attachment 已被刪除時為 null 但 image_id 仍保留（孤兒 ID 不自動清除），
+            因此「image_id 非 null 但 image_url 為 null」是合法狀態，UI 需退回預設頭像。
       required:
         - id
         - name

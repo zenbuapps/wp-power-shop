@@ -1,3 +1,5 @@
+import type { TImage } from 'antd-toolkit/wp'
+
 /**
  * Profit Partner 前端型別定義
  *
@@ -24,6 +26,17 @@ export type TProfitPartner = {
 	slug: string
 	contact_email: string | null
 	created_at: string
+
+	/** 夥伴圖片 attachment ID（未設定為 null） */
+	image_id: number | null
+
+	/**
+	 * 夥伴圖片 URL（後端由 image_id 即時解析的**唯讀衍生欄位**）
+	 *
+	 * attachment 被刪除時後端會回 null 但保留 image_id，因此
+	 * 「有 image_id 但 image_url 為 null」是合法狀態，UI 需退回預設頭像。
+	 */
+	image_url: string | null
 }
 
 /**
@@ -41,6 +54,21 @@ export type TProfitPartnerInput = {
 	slug: string
 	contact_email?: string | null
 	password?: string
+
+	/** 夥伴圖片 attachment ID；`null` 明確代表「移除圖片」（後端會刪除 termmeta） */
+	image_id?: number | null
+}
+
+/**
+ * PartnerForm 的表單值型別
+ *
+ * 與送後端的 `TProfitPartnerInput` 差在圖片：表單沿用商品圖片 `Gallery` 元件的
+ * `TImage[]` 契約（`{ id: string, url: string }[]`，`id` 為字串型別、可承載多張），
+ * submit 時才降維成單一 `image_id`（見 `toImageId()`）。
+ * 兩者不可混用——url 與陣列結構都不該進 payload。
+ */
+export type TPartnerFormValues = Omit<TProfitPartnerInput, 'image_id'> & {
+	images?: TImage[]
 }
 
 /**
