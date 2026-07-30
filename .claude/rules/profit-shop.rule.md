@@ -286,6 +286,59 @@ grep -rn "price_override" inc/
 
 ---
 
+### items 的陣列順序 = 賣場前台的商品顯示順序（全鏈路保序）
+
+`ProfitShop.items` 是 **list（順序陣列）而非 map**，排列順序本身就是business data，
+不是實作細節：
+
+```
+前端拖曳排序 → PUT items[] → ProfitShopHydrator::from_input（foreach + $items[] =，保序）
+  → CptProfitShopRepository::persist_meta（array_map，保序）→ wp_json_encode（JSON array，保序）
+  → 讀回 hydrate（foreach，保序）→ templates/profit-shop-front.php（foreach $items，依序渲染）
+```
+
+**任何一層改用 `product_id` 當 key、或中途 `usort` / `ksort`，拖曳排序就會靜默失效**
+（存檔回 200、GET 也拿得到資料，只是順序跑掉，非常難察覺）。
+`ProfitShopItemsRoundTripTest` 有兩條測試鎖住這個契約：
+`test_items_order_is_preserved_through_round_trip`（送什麼順序讀回就是什麼順序）與
+`test_reordered_items_persist_the_new_order`（重新排序後新順序取代舊順序）。
+
+前端拖曳實作與分頁限制見 `react.rule.md` §6.5「`ItemsEditor` 商品拖曳排序」。
+
+### Shortcode 模式目前沒有實作（只是一個 DB 標記）
+
+`ShopMode::SHORTCODE` 這個 enum 值可以存、可以讀，但**整個 `inc/` 沒有任何
+`add_shortcode()` 註冊**，`ProfitShopRenderer::maybe_render` 也**完全不檢查 `mode`**
+（只看 slug 與 status）。所以現階段：
+
+- Shortcode 模式的賣場**拿不到任何可用的 shortcode**
+- `/profit-shop/{slug}/` 公開網址照樣開得起來、照樣被索引
+- 行為與「獨立頁面」100% 相同
+
+`BasicTab.tsx` 因此以警語**據實告知**站長「Shortcode 模式仍會保留公開網址」——
+**不要**為了 UI 好看把永久連結欄位藏起來，那會讓站長誤以為賣場沒有對外入口。
+補完這個功能需要兩件事（Renderer 對 shortcode 回 404 + 實作 `add_shortcode` 並在後台
+提供可複製字串），已登記為 `specs/tech-debt.md` TD-13。
+
+### Partner 夥伴圖片：只持久化 image_id，image_url 是唯讀衍生欄位
+
+Partner 夥伴圖片存於 termmeta `_partner_image_id`（attachment ID），**絕不持久化 URL**：
+
+| 欄位 | 層 | 方向 | 說明 |
+|------|----|------|------|
+| `image_id` | `PartnerInput` / `PartnerSnapshot` / `PartnerOutput` | 讀 + 寫 | attachment ID；`null` / `0` / 負數一律正規化為 null，並**刪除** termmeta（= 移除圖片） |
+| `image_url` | `PartnerSnapshot` / `PartnerOutput` | **只讀** | `PartnerTermRepository::hydrate_from_term` 以 `wp_get_attachment_image_url($id, 'thumbnail')` 即時解析 |
+
+**三條紀律：**
+
+1. **`save()` 一律忽略傳入的 `image_url`**——URL 在站台換網域 / 換 CDN / 換圖片尺寸設定後會失效，attachment ID 才是穩定真相來源。`PartnerTermRepositoryTest::test_save_persists_image_id_and_resolves_url_on_read` 刻意傳入假 URL 鎖死這個行為
+2. **孤兒 attachment 不自動清除**：attachment 被刪除時 `image_url` 回 null 但 `image_id` termmeta **保留**——讀取路徑不可有寫入副作用，且站長從媒體庫救回檔案後圖片能自動復原。因此「`image_id` 非 null 但 `image_url` 為 null」是**合法狀態**，前端須退回預設頭像（`ProfitPartner/Edit` 的 `setFieldsValue` 對這種情況填 `null`，讓站長重新挑一張而非顯示破圖）
+3. **`PartnerInput` 不收 `image_url`**：wire 契約只有 `image_id`（`specs/api/api.yml` 的 `PartnerInput`），避免前端誤以為可以覆寫顯示 URL
+
+前端對應元件（複用商品 `Gallery` / `PartnerSelector` 頭像 / 列表夥伴圖片欄）見 `react.rule.md` §6.5。
+
+---
+
 ## 8. Slug 衝突（spec §6.11）
 
 `SlugConflictDetector` 檢查 5 類衝突：
@@ -379,6 +432,7 @@ Phase 7 新增測試（賣場編輯頁商品選擇器，PHP 端僅測試、無�
 | Phase 6-A1（Partner 自助修密碼：PartnerPassword VO + WeakPassword Exception + ChangePasswordUseCase + V2Api `/partner-auth/change-password` + PartnerTokenStore M-1 同秒撤銷）| `e974ae4` |
 | Phase 6-A2（Partner 自助修密碼前端 UI：ChangePassword.tsx HIGH-RISK + useChangePassword + forceLogoutAndRedirect + Login `?reason=password_changed` + partnerExceptionMapper context-aware）| `c80b4cc` |
 | Phase 7（賣場編輯頁商品選擇器重構：`ProductTableBody` 抽取 + `ProductPickerModal` + items 巢狀契約修正 BUG-A + `ProfitShopHydratorTest` / `ProfitShopItemsRoundTripTest`）| （尚未 commit，見 `git status` 與 `specs/plan/2026-07-29-profit-shop-product-selector-plan.md`） |
+| Phase 8（Partner 夥伴圖片：termmeta `_partner_image_id` + `image_url` 唯讀衍生 + 複用商品 `Gallery` 元件（單張圓形）+ Selector 頭像 + `#/profit-partner` 列表頁對齊標準版型）| （尚未 commit，見 `git status`） |
 
 設計與決策來源：
 - `specs/2026-05-06-profit-shop-design.md`（含 Q1-Q6 plan 階段決策、§4 endpoint、§6.11 slug 衝突、§7 例外對映）

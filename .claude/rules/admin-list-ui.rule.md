@@ -216,7 +216,7 @@ components/product/ProductTable/
 | 用戶 | `#/users` | A（`useTable`） | ✅ | 無（不支援新增） | ✅ 已對齊 |
 | 訂單 | `#/orders` | A（`useTable`） | ⚠ 註解掉 | 註解掉 | ⚠ 待補篩選卡片 |
 | 分潤賣場 | `#/profit-shop` | B（`useCustom`） | ✅ | 列表卡片內 | ✅ 已對齊 |
-| 分潤夥伴 | `#/profit-partner` | B（`useCustom`） | ❌ | Refine `<List headerButtons>` | ⚠ 待對齊 |
+| 分潤夥伴 | `#/profit-partner` | B（`useCustom`） | ✅ | 列表卡片內 | ✅ 已對齊 |
 | 分潤遷移 | `#/profit-migration` | B（`useCustom`） | ❌ | 無 | ⚠ 待對齊 |
 
 > Phase 7：`#/products` 的 Table 主體抽成共用元件 `ProductTableBody`（見 §3.3），供 `ProductPickerModal`（`#/profit-shop/edit/:id` 內的商品選擇器）複用。本表列的對齊狀態**不受影響**——`#/products` 這一列的 UI 行為完全不變，只是實作拆成三層。`ProductPickerModal` 不是獨立列表頁（沒有自己的路由），不需要在本表新增列；它在 Modal 情境下如何刪減標準版型的哪些部分，見 §7。

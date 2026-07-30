@@ -19,7 +19,7 @@ applyTo: "**/*.ts,**/*.tsx"
 | 狀態管理 | Jotai + React Context | atom 跨分頁選取；Context 區域共享 |
 | 資料層 | React Query (via Refine) | 搭配 6 個 Data Provider |
 | 路由 | HashRouter (react-router v7) | `#/` 路徑，定義在 App1.tsx |
-| 樣式 | Tailwind CSS (`tw-` prefix) | 搭配 Ant Design theme token |
+| 樣式 | Tailwind CSS（**無 prefix**，見 §10） | 搭配 Ant Design theme token |
 | 打包 | Vite | HMR port 5178 |
 | 共用套件 | `antd-toolkit` | 子路徑：`antd-toolkit`、`antd-toolkit/refine`、`antd-toolkit/wp` |
 
@@ -447,8 +447,9 @@ js/src/pages/admin/
 
 不能用 `useTable` **不代表**可以少一張篩選卡片。profit-* 的列表頁版型必須與 `#/products` 相同：篩選卡片 + 實體列表 & 新增按鈕，只是篩選改在前端 `useMemo` 做（`.claude/rules/admin-list-ui.rule.md` §3.2 路線 B）。
 
-參考實作：`pages/admin/ProfitShop/List/index.tsx` + `List/Filter.tsx`。
-`ProfitPartner` / `ProfitMigration` 兩頁**尚未對齊**，改動該頁時須一併補上。
+參考實作：`pages/admin/ProfitShop/List/index.tsx` + `List/Filter.tsx`、
+`pages/admin/ProfitPartner/List/index.tsx` + `List/Filter.tsx`。
+`ProfitMigration` **尚未對齊**，改動該頁時須一併補上。
 
 ### HIGH-RISK 元件的安全紀律
 
@@ -480,6 +481,47 @@ const { data } = useCustom({
 ```
 
 ProfitSettings 額外加 `lastFilledSettingsRef`（content-diff 比對）：reset 後 server 內容變動時自動重填；單純 refetch 同內容時不覆寫使用者編輯。
+
+### Partner 夥伴圖片（直接複用商品 `Gallery` 元件）
+
+夥伴圖片**直接複用商品編輯頁「商品圖片」的 `Gallery` 元件**
+（`components/product/fields/Gallery`），不另建挑選器——同一套 WordPress 媒體庫、
+同一套 hover 遮罩（預覽 / 移除）、同一套「+」虛線方塊開窗操作邏輯。後端契約
+（只存 `image_id`、`image_url` 為唯讀衍生、孤兒 attachment 行為）見
+`profit-shop.rule.md` §7「Partner 夥伴圖片」。
+
+`Gallery` 為此新增 4 個 **optional** props，**全部有預設值，商品頁行為零變化**：
+
+| prop | 預設 | 用途 |
+|------|------|------|
+| `name?: (string \| number)[]` | `['images']` / `[id, 'images']` | 自訂 form 欄位路徑，讓非商品表單也能用 |
+| `shape?: 'square' \| 'circle'` | `'square'` | `circle` 用於人物頭像情境（夥伴圖片） |
+| `title?: string` | `'商品圖片'` | 區塊標題（`size="small"` 時不顯示） |
+| `allowSetThumbnail?: boolean` | `true` | 是否顯示「設為封面」；`limit === 1` 時自動關閉（單張沒有封面概念） |
+
+順帶修掉一個既有隱患：`Form.useWatch` 在欄位尚未賦值時回 `undefined`，原本的
+`watchImages?.length < limit` 會是 `undefined < n` = **false**，導致「+」按鈕不出現。
+商品頁因 `images` 永遠是陣列而沒踩到，新表單（如夥伴建立頁）會直接卡死無法選圖。
+現已統一收斂成 `const images = watchImages ?? []`。
+
+| 檔案 | 角色 |
+|------|------|
+| `ProfitPartner/components/PartnerForm.tsx` | `<Gallery name={['images']} limit={1} shape="circle" title="夥伴圖片" />` |
+| `ProfitPartner/components/PartnerSelector.tsx` | 下拉選項顯示圓形頭像 + `name（slug）` |
+| `ProfitPartner/List/index.tsx` | 列表「夥伴圖片」欄（40px 圓形縮圖，無圖顯示灰色 icon） |
+| `ProfitPartner/utils.ts` | `toPartnerFormFieldName`（後端 `image_id` → 表單 `images`）+ `toImageId`（`TImage[]` → `number \| null`） |
+
+**三個容易踩的點：**
+
+1. **`Gallery` 自帶 hidden `Form.Item`，外面不可再包一層 `<Item>`**——包了會變成兩層
+   巢狀欄位路徑（`image.images`），表單讀不到值且不會有任何錯誤訊息
+2. **表單值是 `TImage[]`（`id` 是字串），payload 送單一數字 `image_id`**：一律走
+   `toImageId(values.images)` 降維（`Number()` 轉不出正整數就回 null）。
+   **不要**把 url 或整個陣列塞進 payload——`PartnerInput` 契約只有 `image_id`
+3. **`PartnerSelector` 的 `label` 變成 ReactNode 後，antd 的 `optionFilterProp="label"`
+   會失效**（無法對 ReactNode 做字串比對）。搜尋靠 option 上額外掛的純字串
+   `name` / `slug` 欄位 + 自訂 `filterOption`——移掉自訂 `filterOption` 會讓
+   夥伴搜尋整個靜默失效，且沒有任何錯誤訊息
 
 ### SlugInput 即時驗證 Pattern
 
@@ -595,6 +637,54 @@ const toWpRecord = (p: TProductRecord) => p as unknown as TWpDisplayRecord
 這個寫法只做**一次**型別斷言（`as unknown as`），而不是在每個呼叫點各自 `as any`，往後這些元件的 `record` 型別若調整，只有 `TWpDisplayRecord` 這一處需要跟著改。
 
 ---
+
+### `ItemsEditor` 商品拖曳排序（dnd-kit + antd Table）
+
+賣場商品表格支援拖曳調整順序，**`items` 陣列的排列順序就是賣場前台的商品顯示順序**
+（後端全程保序，契約見 `profit-shop.rule.md` §7）。實作對齊 antd 5.x 官方
+「拖曳把手排序」demo，四個必須照做的點：
+
+| # | 做法 | 為什麼 |
+|---|------|--------|
+| 1 | **只有把手可拖**，`listeners` 綁在 `<DragHandle>` 而非整個 `<tr>` | 列內有 `InputNumber` / 清除 / 移除按鈕；整列綁 listeners 會讓 `PointerSensor` 攔截指標事件，輸入框無法操作 |
+| 2 | `listeners` 靠 `RowContext` 從 row 傳給把手欄 | antd 的 `components.body.row` 只能換掉 `<tr>`，**無法把 props 塞進特定 `<td>`** |
+| 3 | body row **先判斷有沒有 `data-row-key` 再進 `useSortable`** | 空資料時 antd 會用同一個元件渲染 `ant-table-placeholder` 那列，它**沒有** `data-row-key` → `useSortable({ id: undefined })` 會炸。hooks 不能寫在條件式裡，所以拆成 `BodyRow`（判斷）+ `SortableRow`（真的 sortable）兩層 |
+| 4 | `onDragEnd` 的 index **回全域 `items` 陣列查**（`findIndex` by `product_id`） | 表格有分頁，用頁內相對位置得自己換算 offset，第 2 頁以後必錯。product_id 唯一，直接查全域最省事也最不會錯 |
+
+`SortableContext` 的 `items` 只能餵**當前頁**的 key（它只認畫面上實際渲染的列），
+所以**拖曳僅限同一頁內**——這點要在 UI 上寫給使用者看，否則會被當成 bug。
+
+**連帶的效能陷阱**：任何「依 `items` 順序」建出來的 react-query queryKey，都會因為
+拖曳而變動 → 觸發整批 refetch。`useShopItemProducts` 的 `toChunks` 因此**切塊前先排序
+ids**（`hooks.ts`）——`map` 是「id → 商品」查表，結果與排列順序無關，排序後同一組 id
+的任意排列都對應同一個 queryKey，拖曳完全不會觸發重新查詢。少了這行，每拖一次就閃一次
+Skeleton。
+
+### 多 Tab 表單：驗證失敗**絕不能靜默 return**
+
+`ProfitShopForm` 這類「一張 `<Form>` 切成多個 Tab」的表單有個隱性陷阱：
+
+- 所有 Tab 都 `forceRender: true`（必要，否則沒 mount 的 `Form.Item` 不會參與驗證）
+- 但**非 active 的 Tab pane 是 `display: none`** —— 欄位驗證有跑、紅字有渲染，**使用者看不到**
+- 父層 `catch` 若只是 `if ('errorFields' in err) return`，畫面就**完全沒有任何回饋**
+
+結果就是使用者回報「按了建立完全沒反應」。實際發生過：站長停在「分潤設定」Tab 按建立，
+真正沒填的是「基本設定」Tab 的 slug。
+
+**正解**（`ProfitShopForm.tsx` 的 `isFormValidationError` / `resolveValidationFeedback`）：
+
+```tsx
+if (isFormValidationError(err)) {
+  const { tabKey, messages } = resolveValidationFeedback(err)
+  if (tabKey) setActiveTab(tabKey)        // 主動切到出錯那一頁
+  notification.warning({ message: '尚有欄位未填寫', description: messages.join('、') })
+  return
+}
+```
+
+欄位 → Tab 的對映表（`FIELD_TO_TAB`）與 Tabs 定義放同一個檔案，是刻意的單一真相：
+新增欄位時兩者必須同步，分開放一定會忘。Tab 受控（`activeTab` / `onTabChange`）由父層
+持有 state，Create / Edit 兩頁共用同一套 helper。
 
 ## 6.6 Partner Portal 前端架構（Phase 4-B）
 
@@ -840,9 +930,42 @@ const { SITE_URL, API_URL, NONCE, KEBAB, ELEMENTOR_ENABLED } = useEnv()
 
 ## 10. CSS 慣例
 
-- **Tailwind CSS** 使用 `tw-` prefix（避免與 Ant Design class 衝突）。
+- **Tailwind CSS**：class **一律無 prefix**（`mb-2` / `flex` / `text-gray-500`）。只有下面表列的 6 個例外帶 `tw-`。
 - **Ant Design** 遵循 ConfigProvider theme token：`colorPrimary: '#1677ff'`、`borderRadius: 6`。
 - 使用 Ant Design v5 元件。
+
+### ⚠️ `tw-` prefix：只有 6 個 class 有，其餘全是死 class
+
+**本檔舊版曾寫「Tailwind 使用 `tw-` prefix」，那是錯的**，照著寫的樣式不會生效、也不會有任何 build 錯誤，只是安靜地不見。實際規則：
+
+`tailwind.config.js` **沒有設 `prefix`** → 產出的 utility 一律是標準無前綴名稱。帶 `tw-` 的只有 config `plugins` 區塊手寫的這 6 個：
+
+| 帶 `tw-` 的 class | 為什麼不能用無前綴版 |
+|-------------------|---------------------|
+| `tw-hidden` / `tw-block` / `tw-inline` / `tw-fixed` / `tw-columns-1` / `tw-columns-2` | 無前綴版（`hidden` / `block` / …）與 WordPress 既有樣式衝突，已寫進 config 的 `blocklist` 擋掉 |
+
+除這 6 個之外，**任何 `tw-` 開頭的 class 都不會生效**。寫 `tw-flex`、`tw-mb-4`、`tw-text-red-500` 等於什麼都沒寫。
+
+### Tailwind entry：`js/src/assets/styles/tailwind.css`
+
+Tailwind 只在 CSS 檔看到 `@tailwind` directive 時才注入 utility。本專案原本雖然 `tailwindcss` 依賴、`postcss.config.cjs`、`tailwind.config.js` 三者齊全，卻**沒有任何 CSS 檔宣告過 directive** —— 整份 config 沒有消費者，本專案產出 0 個 utility。畫面上還能生效的 class 全部是 powerhouse plugin `admin.min.css`（全域 enqueue）順便帶進來的副產品。
+
+這造成一個不可控的外部相依：powerhouse 的 Tailwind build 只掃 powerhouse 自己的原始碼，本專案寫了一個 powerhouse 剛好沒用到的 class 就是死的。實測 `max-w-3xl` / `list-disc` / `pl-5` / `border-b` 都中招。
+
+**已修**：新增 `js/src/assets/styles/tailwind.css`（`@tailwind base` + `@tailwind utilities`），由 `App1.tsx`（admin）與 `partner-portal/main.tsx`（前台，拿不到 admin CSS）各自 import。本專案現在自行產出所有實際用到的 utility。
+
+- 沒有 `@tailwind components` —— 那是給 `@apply` 用的，本專案無此用法
+- `@tailwind base` 在 `corePlugins.preflight: false` 下**不輸出 CSS reset**，只留 `--tw-*` 變數宣告（shadow / ring / transform 這類 composite utility 的運作前提）
+- 產出約 12.7 kB（gzip 3.1 kB）獨立 chunk
+
+**新增第三個 SPA bundle 時**，記得也要 import 這個 entry，否則該 bundle 的 Tailwind class 全部無效。
+
+**驗證某個 class 到底有沒有生效**：
+
+```bash
+pnpm build
+grep -c '\.mb-2{' js/dist/assets/index-*.css   # 1 = 有產出；0 = 沒有（class 名稱寫錯或沒被掃到）
+```
 
 ---
 

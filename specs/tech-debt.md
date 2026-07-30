@@ -55,6 +55,13 @@
 | TD-9 | 商品列表「商品類型」FilterTag 顯示原始值 `simple`，而非中文「簡單商品」 | `#/products` 篩選後觀察 FilterTags | `valueLabelMapper` 沒有對應 product type 的中翻對照表，屬 UI 文案細節 | 重構前就存在，Phase 7（2026-07-29）覆查時再次確認仍未修 |
 | TD-11 | Refine dataProvider 失敗時會**自己再跳一則**內建錯誤通知（例如「Error (status code: 500)商品 ID 999777 不存在」，約數秒後自動消失），與應用層自訂的 `onError` 通知同時出現，畫面上同時看到兩則重複的錯誤訊息 | 任一 Refine mutation 失敗即可重現；不限 Profit Shop | 使用者困惑「同一個錯誤為什麼跳兩次」，其中一則（Refine 內建）文字生硬、非繁中在地化。要收斂需調整 Refine 全域 `notificationProvider` 設定，影響全專案所有 Refine mutation，**本次刻意不修** | 三輪改造（2026-07-29），處理 `react.rule.md` §3「Refine HttpError 吃掉 response.data」踩坑時發現 |
 
+## 功能缺口 / 前後端驗證落差
+
+| # | 問題 | 證據 / 重現方式 | 影響 | 發現於 |
+|---|------|------------------|------|--------|
+| TD-13 | **Shortcode 模式完全沒有實作**，只是一個存在 DB 的標記 | `grep -rn "shortcode" inc/ -i` 只有 4 個命中，全是 `ShopMode` enum 定義與註解，**沒有任何 `add_shortcode()` 註冊**；`ProfitShopRenderer::maybe_render` 只檢查 slug（`:111`）與 status（`:120`），**完全不讀 `mode`** | 選 Shortcode 模式的賣場：(1) 拿不到任何可貼進頁面的 shortcode (2) `/profit-shop/{slug}/` 公開網址照樣開得起來、照樣被搜尋引擎索引 —— 行為與「獨立頁面」100% 相同。`BasicTab.tsx` 目前以警語**據實告知**站長此事（刻意不把永久連結藏起來，避免 UI 誤導）。要補完需兩件事：Renderer 對 `mode === shortcode` 回 404 + 實作 `add_shortcode` 並在後台提供可複製的 shortcode 字串 | 2026-07-29，站長回報「為什麼 Shortcode 模式仍保留公開網址」時查證 |
+| TD-14 | 賣場 `slug` **前端 required、後端不驗**：後端接受空字串並回 201 | 直接打 `POST /power-shop/profit-shops`，body 帶 `slug: ""` → **201 Created**（已用 IT 探針實測）；`CreateShop::execute()` 只跑 `SlugConflictDetector::detect()`，空字串不算衝突，沒有任何必填 / 格式驗證 | 繞過前端表單（API 直呼 / 第三方整合）可建出 slug 為空的賣場，其公開網址會是打不開的 `/profit-shop//`。**目前不影響後台操作**（前端 `BasicTab` 的 `required` + 格式 regex 擋得住一般路徑），但違反「後端 Domain 驗證才是唯一真相」的分層紀律（`profit-shop.rule.md` §12.9 三層錯誤處理分工）。要修需在 `ProfitShopHydrator` 或新的 VO 補 slug 必填 + 格式 invariant | 2026-07-29，診斷「shortcode 賣場無法建立」時用 IT 探針意外驗到 |
+
 ## 交叉索引（已在其他文件維護狀態，本檔不重複）
 
 | # | 問題 | 詳見 |

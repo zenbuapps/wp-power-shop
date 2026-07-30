@@ -57,6 +57,7 @@ pnpm release:major
 16. **Don't** 對 `wc-rest` resource 只設 `pagination.pageSize` 就假設分頁生效——WC REST API 只認 `per_page`，要把它當 **filter** 送才會生效，否則靜默退回每頁 10 筆。詳見 `react.rule.md` §3。
 17. **Don't** 用 `agent-browser` 之類的瀏覽器自動化 CLI 截圖時假設呼叫端 shell 的 `cd` 會影響它的相對路徑——`agent-browser` 是**獨立行程**，相對路徑是相對於它自己的工作目錄（通常是專案根），**不是**呼叫端 shell 當下所在目錄。截圖 / 輸出檔案一律傳**絕對路徑**，否則檔案會落在專案根目錄，混進 `git status` 的 untracked 清單，有被 `git add -A` 誤收進版本庫的風險。
 18. **Don't** 以為 Refine dataProvider 的錯誤物件（`HttpError`）帶有 `error.response.data`——Refine 只保留 `{ message, statusCode }`，原始 response body（含後端 `code` / `data`）已經不見，`statusCode` 甚至可能與真實 HTTP 狀態碼不符。錯誤訊息解析要 fallback 到 `error.message`，不要假設一定讀得到 `response.data.code`。詳見 `react.rule.md` §3。
+19. **Don't** 寫帶 `tw-` prefix 的 Tailwind class——`tailwind.config.js` **沒有設 `prefix`**，class 一律無前綴（`mb-2` / `flex`）。唯一的例外是 config `plugins` 手寫的 6 個（`tw-hidden` / `tw-block` / `tw-inline` / `tw-fixed` / `tw-columns-1` / `tw-columns-2`，因為無前綴版與 WP 衝突被 `blocklist` 擋掉）。寫錯不會有 build 錯誤，樣式只是安靜地不生效。另：Tailwind entry 是 `js/src/assets/styles/tailwind.css`，**新增 SPA bundle 時必須 import**，否則該 bundle 的 utility 全部無效。詳見 `react.rule.md` §10。
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -64,7 +65,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端 + 商品選擇器 Modal 化）。Phase 7 尚未 commit（實作變更見 `git status`），已知問題與技術債見 `specs/tech-debt.md`。
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片）。Phase 7 / 8 尚未 commit（實作變更見 `git status`），已知問題與技術債見 `specs/tech-debt.md`。
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -281,6 +282,28 @@ pnpm release:major
 | `git diff --name-only -- inc/` | 0 | PHP 產品程式碼零修改，BUG-A 純前端成因的直接證據 |
 
 BUG-A 修正有**三層鎖**：Unit 11 + Integration 10 + e2e 4，扁平契約想復活會在三個層級同時被擋下，任何一層被繞過或誤刪，另外兩層仍會抓到回歸。詳見 `.claude/rules/profit-shop.rule.md` §7。
+
+### Phase 8（Partner 夥伴圖片）已完工（尚未 commit）
+
+Partner 可設定夥伴圖片，顯示於分潤夥伴列表、編輯頁與賣場編輯頁的分潤設定 selector。
+
+| 層 | 內容 | 路徑 |
+|----|------|------|
+| Domain Snapshot | `PartnerSnapshot` 加 `?int $image_id` + `?string $image_url`（後者是**唯讀衍生欄位**，`save()` 一律忽略） | `Domain/Snapshot/PartnerSnapshot.php` |
+| Application DTO | `PartnerInput` 加 `image_id`（`null` / `0` / 負數正規化為 null = 移除圖片）；`PartnerOutput` 加 `image_id` + `image_url` | `Application/DTO/Partner{Input,Output}.php` |
+| Infrastructure | `PartnerTermRepository` 新增 termmeta `_partner_image_id` 讀寫 + `resolve_image_url()`（`wp_get_attachment_image_url($id, 'thumbnail')`）；孤兒 attachment 回 null URL 但**保留 ID**（讀取路徑零寫入副作用） | `Infrastructure/Persistence/PartnerTermRepository.php` |
+| UseCase / Hydrator | `CreatePartner` / `UpdatePartner` 傳遞 `image_id`；`PartnerHydrator::to_output` 帶出 `image_id` + `image_url`。**V2Api 零修改**（`from_array` / `to_array` 自動涵蓋） | `Application/UseCase/Partner/` |
+| Frontend | **直接複用商品頁 `Gallery` 元件**（加 4 個 optional props：`name` / `shape` / `title` / `allowSetThumbnail`，商品頁行為零變化）+ `PartnerForm` 圖片欄（單張圓形）+ List 夥伴圖片欄 + `PartnerSelector` 選項頭像 + `utils.ts`（欄位名對映 + `toImageId`） | `js/src/components/product/fields/Gallery/` + `js/src/pages/admin/ProfitPartner/` |
+| 列表頁對齊 | 順手把 `#/profit-partner` 對齊 `admin-list-ui.rule.md` 標準版型（篩選卡片 + FilterTags + 新增按鈕移進列表卡片 + `NameId` Link 欄 + `defaultTableProps`），新增 `List/Filter.tsx`（關鍵字 / 夥伴圖片有無，client-side `useMemo` 過濾） | `js/src/pages/admin/ProfitPartner/List/` |
+| OpenAPI | `PartnerInput.image_id` / `PartnerOutput.image_id` + `image_url` schema | `specs/api/api.yml` |
+| 測試 | Unit +2（`DtoRoundTripTest`：image_id 正規化 / output null 契約）、IT +3（`PartnerTermRepositoryTest`：持久化只寫 ID / null 清除 termmeta / 孤兒 attachment 保留 ID） | `tests/Unit/Application/DTO/` + `tests/Integration/Infrastructure/Persistence/` |
+
+**Phase 8 完工要點**：
+- **只持久化 `image_id`，`image_url` 是唯讀衍生欄位**——換網域 / CDN 時 URL 會失效，attachment ID 不會。IT 刻意傳入假 URL 鎖死 `save()` 忽略它的行為（詳見 `profit-shop.rule.md` §7「Partner 夥伴圖片」）
+- 「`image_id` 非 null 但 `image_url` 為 null」是**合法狀態**（attachment 被刪除），前端退回預設頭像 / 讓站長重挑，而非顯示破圖
+- `PartnerSelector` 的 `label` 變 ReactNode 後 `optionFilterProp="label"` 失效，名稱搜尋靠 option 上的純字串 `name` / `slug` + 自訂 `filterOption`（見 `react.rule.md` §6.5）
+- V2Api / ExceptionMapper / Domain Service / Auth 全部零修改；不引入新 npm / composer 套件
+- **驗證數據**：Unit 340 / 677 assertions / 1 failure（338 baseline + 2 新增，failure 為 pre-existing TD-2）；Integration 171 / 742 assertions / 21 failures（168 baseline + 3 新增，21 failures 全 pre-existing TD-1）；`npx tsc --noEmit` 127（baseline 127）；`npx eslint` 0 errors / 135 warnings（baseline 同）；`composer lint` 154/154 全綠；`pnpm build` 成功
 
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 
