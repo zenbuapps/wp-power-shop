@@ -320,6 +320,15 @@ grep -rn "price_override" inc/
 補完這個功能需要兩件事（Renderer 對 shortcode 回 404 + 實作 `add_shortcode` 並在後台
 提供可複製字串），已登記為 `specs/tech-debt.md` TD-13。
 
+`#/profit-shop` 列表頁的「開啟商店」按鈕（`List/index.tsx` 的
+`resolveOpenShopBlockedReason`）遵循同一條紀律：shortcode 賣場會停用這顆按鈕，但停用
+原因刻意寫成「Shortcode 模式的賣場以短碼嵌入頁面呈現，如需直接開啟公開網址請改為獨立頁面
+模式」，**不寫**「沒有前台網址」。停用只是拿掉「直接開啟」這個 UI 捷徑，`/profit-shop/{slug}/`
+網址本身**仍然開得起來、也仍會被索引**（見上）——UI 入口有無，與網址本身是否存在，是兩件
+不能混為一談的事。`BasicTab.tsx` 的警語（頁面內據實告知）與列表頁按鈕的停用文案（列表頁不
+提供捷徑）是同一條紀律的兩種呈現，未來若補完 TD-13（Renderer 對 shortcode 回 404），這顆
+按鈕的停用邏輯與文案都要一併重新檢視。
+
 ### Partner 夥伴圖片：只持久化 image_id，image_url 是唯讀衍生欄位
 
 Partner 夥伴圖片存於 termmeta `_partner_image_id`（attachment ID），**絕不持久化 URL**：
