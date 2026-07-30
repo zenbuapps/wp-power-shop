@@ -23,6 +23,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\InflatedCount;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PriceOverride;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ProfitRate;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ShopMode;
+use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\VariationOverride;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 use Tests\Integration\TestCase;
@@ -183,8 +184,8 @@ final class CptProfitShopRepositoryTest extends TestCase {
 			override: new PriceOverride( '1000', null, null ),
 			inflated_count: new InflatedCount( 0 ),
 			variations: [
-				301 => new PriceOverride( '900', '850', null ),
-				302 => new PriceOverride( '950', null, null ),
+				301 => new VariationOverride( new PriceOverride( '900', '850', null ), new InflatedCount( 12 ) ),
+				302 => new VariationOverride( new PriceOverride( '950', null, null ), new InflatedCount( 0 ) ),
 			]
 		);
 
@@ -220,6 +221,133 @@ final class CptProfitShopRepositoryTest extends TestCase {
 		$this->assertNotNull( $v302 );
 		$this->assertSame( '950', $v302->regular_price );
 		$this->assertNull( $v302->sale_price );
+
+		// Phase 9：變體層 inflated_count 也必須完整 round-trip
+		$c301 = $loaded_item->get_variation_inflated_count( 301 );
+		$this->assertNotNull( $c301 );
+		$this->assertSame( 12, $c301->value() );
+
+		$c302 = $loaded_item->get_variation_inflated_count( 302 );
+		$this->assertNotNull( $c302 );
+		$this->assertSame( 0, $c302->value() );
+	}
+
+	/**
+	 * 【R-7 向後相容核心鎖】Phase 9 之前寫入的 JSON（variations[vid] 只有 override，
+	 * 無 inflated_count 鍵）反序列化後，variation 的 inflated_count 必須為 0
+	 *
+	 * 直接以 update_post_meta 灌入舊格式 JSON，繞過 save()，模擬「DB 內已存在的舊資料」。
+	 * 這條測試存在的唯一目的是鎖住 CptProfitShopRepository::build_override_item() 內
+	 * 那個 `?? 0`：若未來重構把它拿掉，舊資料會在 InflatedCount 建構前就變成
+	 * null → TypeError，整個賣場讀不出來。
+	 *
+	 * @test
+	 * @group edge
+	 * @group smoke
+	 */
+	public function test_legacy_variations_json_without_inflated_count_defaults_to_zero(): void {
+		$shop = $this->build_shop_aggregate( [ 'slug' => 'legacy-variations' ] );
+		$id   = $this->repo->save( $shop );
+
+		// Phase 9 之前的 items JSON 形狀：variations[vid] 只有 override
+		$legacy_json = \wp_json_encode(
+			[
+				[
+					'product_id'     => 200,
+					'inflated_count' => 7,
+					'override'       => [
+						'regular_price' => '1000',
+						'sale_price'    => null,
+						'signup_fee'    => null,
+					],
+					'variations'     => [
+						301 => [
+							'override' => [
+								'regular_price' => '900',
+								'sale_price'    => '850',
+								'signup_fee'    => null,
+							],
+						],
+					],
+				],
+			]
+		);
+		\update_post_meta( $id, '_profit_shop_items', $legacy_json );
+
+		$loaded = $this->repo->find( $id );
+		$this->assertNotNull( $loaded );
+
+		$items = $loaded->items();
+		$this->assertCount( 1, $items, '防空斷言：舊格式 JSON 應仍可反序列化出 1 筆 item' );
+
+		$item = $items[0];
+		$this->assertSame( 200, $item->product_id );
+		// 商品層 inflated_count 不受影響
+		$this->assertSame( 7, $item->inflated_count->value() );
+
+		// 價格覆寫必須照舊讀得出來（證明不是整筆被丟棄才「碰巧」得到 0）
+		$v301 = $item->get_variation_override( 301 );
+		$this->assertNotNull( $v301, '舊格式的 variation override 必須仍可讀取' );
+		$this->assertSame( '900', $v301->regular_price );
+		$this->assertSame( '850', $v301->sale_price );
+
+		// 核心斷言：缺鍵 → 0，不是 null、不拋例外
+		$c301 = $item->get_variation_inflated_count( 301 );
+		$this->assertNotNull( $c301, '舊資料缺 inflated_count 鍵時應建出 InflatedCount(0)，而非 null' );
+		$this->assertSame( 0, $c301->value(), 'R-7：舊 JSON 無 inflated_count 鍵必須讀為 0' );
+	}
+
+	/**
+	 * 舊格式資料再次 save() 後，DB 內的 variations 會自然補上 inflated_count 鍵
+	 *
+	 * 這是「不需要 migration」的直接證據：讀進來補 0、寫回去帶鍵，無需資料轉換腳本。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_legacy_variations_json_is_upgraded_on_next_save(): void {
+		$shop = $this->build_shop_aggregate( [ 'slug' => 'legacy-upgrade' ] );
+		$id   = $this->repo->save( $shop );
+
+		$legacy_json = \wp_json_encode(
+			[
+				[
+					'product_id'     => 200,
+					'inflated_count' => 0,
+					'override'       => [
+						'regular_price' => '1000',
+						'sale_price'    => null,
+						'signup_fee'    => null,
+					],
+					'variations'     => [
+						301 => [
+							'override' => [
+								'regular_price' => '900',
+								'sale_price'    => null,
+								'signup_fee'    => null,
+							],
+						],
+					],
+				],
+			]
+		);
+		\update_post_meta( $id, '_profit_shop_items', $legacy_json );
+
+		// 讀進來 → 直接寫回去（模擬使用者在後台按了一次儲存）
+		$loaded = $this->repo->find( $id );
+		$this->assertNotNull( $loaded );
+		$this->repo->save( $loaded );
+
+		$stored = json_decode( (string) \get_post_meta( $id, '_profit_shop_items', true ), true );
+		$this->assertIsArray( $stored );
+		$this->assertCount( 1, $stored, '防空斷言：寫回後應仍有 1 筆 item' );
+
+		$this->assertArrayHasKey(
+			'inflated_count',
+			$stored[0]['variations'][301],
+			'再次 save 後舊資料應自然補上 inflated_count 鍵（故不需 migration）'
+		);
+		$this->assertSame( 0, $stored[0]['variations'][301]['inflated_count'] );
 	}
 
 	// ========== Edge ==========

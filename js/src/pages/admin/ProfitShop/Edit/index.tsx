@@ -76,9 +76,14 @@ const EditComponent = () => {
 			partner_term_id: record.partner_term_id,
 			rate: record.rate,
 
-			// 巢狀契約（BUG-A 修補）：override / variations 原樣帶入表單。
+			// 巢狀契約（BUG-A 修補）：override / variations 帶入表單。
 			// 對 override 逐欄取值而非整包帶，是為了讓「後端曾回傳缺欄位的舊資料」
 			// 也能收斂成三欄齊全的形狀，避免 ItemsEditor 讀到 undefined。
+			//
+			// variations 逐筆做同一件事，理由完全相同 —— DB 內既有的
+			// `variations[vid]` 只有 `override`、沒有 `inflated_count`（後來才加的欄位），
+			// 不補成 0 的話 VariationOverrideEditor 的 InputNumber 會從受控變非受控。
+			// 空 variations 在 PHP 端是 `[]` 而非 `{}`，Object.entries 對兩者都得到 []。
 			items: record.items.map((it) => ({
 				product_id: it.product_id,
 				inflated_count: it.inflated_count,
@@ -87,7 +92,19 @@ const EditComponent = () => {
 					sale_price: it.override?.sale_price ?? null,
 					signup_fee: it.override?.signup_fee ?? null,
 				},
-				variations: it.variations ?? {},
+				variations: Object.fromEntries(
+					Object.entries(it.variations ?? {}).map(([vid, v]) => [
+						vid,
+						{
+							override: {
+								regular_price: v?.override?.regular_price ?? null,
+								sale_price: v?.override?.sale_price ?? null,
+								signup_fee: v?.override?.signup_fee ?? null,
+							},
+							inflated_count: v?.inflated_count ?? 0,
+						},
+					])
+				),
 			})),
 		})
 	}, [record, form])

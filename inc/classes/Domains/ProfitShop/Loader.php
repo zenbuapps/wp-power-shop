@@ -14,6 +14,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\AddToCartHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\CartItemMetaDisplay;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\CartPriceOverrideHook;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\SingleProductPriceHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\PartnerPortalRenderer;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopRenderer;
@@ -36,6 +37,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
  * Phase 4-C1：加上 ProfitShopRenderer（前台 /profit-shop/{slug}/ 賣場頁面，走 theme 整合）。
  * Phase 4-C2：加上 AddToCartHook（注入 profit_shop_id）+ CartItemMetaDisplay（cart UI 分潤標記）。
  * Phase 5-A.1：加上 PageRateLimitService + WpClientIpProvider（前台頁面 IP-based DoS 緩解）。
+ * Phase 9：加上 SingleProductPriceHook（WC 單品頁套用賣場覆寫價，含變體）。
  */
 final class Loader {
 
@@ -83,6 +85,12 @@ final class Loader {
 
 		// Phase 4-C2：cart UI「來自賣場 XXX」分潤標記（mini-cart / cart page / checkout 一致顯示）
 		CartItemMetaDisplay::instance(
+			CptProfitShopRepository::instance()
+		);
+
+		// Phase 9：WC 單品頁套用賣場覆寫價（含變體），消除「單品頁一個價、購物車另一個價」的落差。
+		// 只在 is_product() 且網址帶 profit_shop_id 時才註冊 filter，不影響 cart / checkout。
+		SingleProductPriceHook::instance(
 			CptProfitShopRepository::instance()
 		);
 	}

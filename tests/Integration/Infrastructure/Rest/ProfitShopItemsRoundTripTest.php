@@ -442,6 +442,243 @@ final class ProfitShopItemsRoundTripTest extends TestCase {
 		$this->assertSame( 'not_found', $response->get_data()['code'] ?? null );
 	}
 
+	// ========== Phase 9：變體層覆寫（價格 + 灌水購買人數）契約 ==========
+
+	/**
+	 * happy：PUT 巢狀 variations（override 三欄 + inflated_count）→ GET 原樣還原
+	 *
+	 * 這是 Phase 9 契約擴充的主鎖：variations[vid] 的形狀是
+	 * `{ override: {...}, inflated_count: int }`，而非只有 override。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_put_variation_overrides_round_trip_through_get(): void {
+		[ $variable_id, $variation_ids ] = $this->create_variable_product();
+		$shop_id                         = $this->create_shop_via_api( [], 'items-rt-variation' );
+
+		$response = $this->put_items(
+			$shop_id,
+			'items-rt-variation',
+			[
+				[
+					'product_id'     => $variable_id,
+					'inflated_count' => 3,
+					'override'       => [
+						'regular_price' => '1000',
+						'sale_price'    => null,
+						'signup_fee'    => null,
+					],
+					'variations'     => [
+						(string) $variation_ids[0] => [
+							'override'       => [
+								'regular_price' => '900',
+								'sale_price'    => '850',
+								'signup_fee'    => null,
+							],
+							'inflated_count' => 27,
+						],
+						(string) $variation_ids[1] => [
+							'override'       => [
+								'regular_price' => null,
+								'sale_price'    => null,
+								'signup_fee'    => null,
+							],
+							'inflated_count' => 5,
+						],
+					],
+				],
+			]
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+
+		$after     = $this->get_shop( $shop_id );
+		$get_items = $after['data']['items'] ?? [];
+		$this->assertCount( 1, $get_items, '防空斷言：GET 應還原 1 筆 item' );
+
+		$variations = $get_items[0]['variations'] ?? [];
+		$this->assertCount( 2, $variations, '防空斷言：應還原 2 筆 variation' );
+
+		$v0 = $variations[ $variation_ids[0] ] ?? null;
+		$this->assertIsArray( $v0, "variation {$variation_ids[0]} 應存在於回應中" );
+		$this->assertSame( '900', $v0['override']['regular_price'] );
+		$this->assertSame( '850', $v0['override']['sale_price'] );
+		$this->assertSame( 27, $v0['inflated_count'], '變體層 inflated_count 必須完整 round-trip' );
+
+		// 只設灌水人數、不設價格：override 三欄維持 null（沿用原價），inflated_count 仍寫入
+		$v1 = $variations[ $variation_ids[1] ] ?? null;
+		$this->assertIsArray( $v1, "variation {$variation_ids[1]} 應存在於回應中" );
+		$this->assertNull( $v1['override']['regular_price'] );
+		$this->assertNull( $v1['override']['sale_price'] );
+		$this->assertSame( 5, $v1['inflated_count'] );
+	}
+
+	/**
+	 * edge：variations 只給 override、不給 inflated_count → 讀回為 0（不是 null，也不報錯）
+	 *
+	 * 對應 R-7 的「舊契約前端」情境：舊分支 / 舊快取仍可能送出無 inflated_count 的
+	 * variations，後端必須接住。
+	 *
+	 * @test
+	 * @group edge
+	 * @group smoke
+	 */
+	public function test_variation_without_inflated_count_defaults_to_zero(): void {
+		[ $variable_id, $variation_ids ] = $this->create_variable_product();
+		$shop_id                         = $this->create_shop_via_api( [], 'items-rt-var-legacy' );
+
+		$response = $this->put_items(
+			$shop_id,
+			'items-rt-var-legacy',
+			[
+				[
+					'product_id' => $variable_id,
+					'variations' => [
+						(string) $variation_ids[0] => [
+							'override' => [
+								'regular_price' => '900',
+								'sale_price'    => null,
+								'signup_fee'    => null,
+							],
+						],
+					],
+				],
+			]
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+
+		$after     = $this->get_shop( $shop_id );
+		$get_items = $after['data']['items'] ?? [];
+		$this->assertCount( 1, $get_items, '防空斷言：GET 應還原 1 筆 item' );
+
+		$v0 = $get_items[0]['variations'][ $variation_ids[0] ] ?? null;
+		$this->assertIsArray( $v0, '防空斷言：variation 應存在' );
+		$this->assertSame( '900', $v0['override']['regular_price'], '價格必須照常寫入' );
+		$this->assertSame( 0, $v0['inflated_count'], '未提供 inflated_count 應讀回 0' );
+	}
+
+	/**
+	 * error：變體層 sale_price 高於 regular_price → 400 validation_failed
+	 *
+	 * 後端 PriceOverride VO 對每個變體的 override 都會走同一條驗證，
+	 * 不因前端 Form rule 已擋就放寬（繞過前端直打 API 一樣被擋）。
+	 *
+	 * @test
+	 * @group error
+	 * @group security
+	 */
+	public function test_variation_sale_price_greater_than_regular_returns_400(): void {
+		[ $variable_id, $variation_ids ] = $this->create_variable_product();
+		$shop_id                         = $this->create_shop_via_api( [], 'items-rt-var-sale-gt' );
+
+		$response = $this->put_items(
+			$shop_id,
+			'items-rt-var-sale-gt',
+			[
+				[
+					'product_id' => $variable_id,
+					'variations' => [
+						(string) $variation_ids[0] => [
+							'override'       => [
+								'regular_price' => '500',
+								'sale_price'    => '900',
+								'signup_fee'    => null,
+							],
+							'inflated_count' => 0,
+						],
+					],
+				],
+			]
+		);
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'validation_failed', $response->get_data()['code'] ?? null );
+	}
+
+	/**
+	 * error：variation 不屬於該 product → 400 validation_failed（InvalidVariation）
+	 *
+	 * ItemValidator::validate() 的 has_variation 檢查；鎖住「拿 A 商品的變體 ID
+	 * 掛到 B 商品上」會被擋下。
+	 *
+	 * @test
+	 * @group error
+	 * @group security
+	 */
+	public function test_variation_not_belonging_to_product_returns_400(): void {
+		[ , $variation_ids ] = $this->create_variable_product();
+		$shop_id             = $this->create_shop_via_api( [], 'items-rt-var-mismatch' );
+
+		$response = $this->put_items(
+			$shop_id,
+			'items-rt-var-mismatch',
+			[
+				[
+					// simple 商品掛上另一個 variable 商品的 variation ID
+					'product_id' => $this->product_id_a,
+					'variations' => [
+						(string) $variation_ids[0] => [
+							'override'       => [
+								'regular_price' => '900',
+								'sale_price'    => null,
+								'signup_fee'    => null,
+							],
+							'inflated_count' => 0,
+						],
+					],
+				],
+			]
+		);
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'validation_failed', $response->get_data()['code'] ?? null );
+	}
+
+	/**
+	 * edge：變體層 inflated_count 為負數 → sanitize 為 0（不是 400）
+	 *
+	 * 與商品層一致：InflatedCount VO 採容錯設計，負數修正為 0 而非拋例外。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_negative_variation_inflated_count_is_sanitized_to_zero(): void {
+		[ $variable_id, $variation_ids ] = $this->create_variable_product();
+		$shop_id                         = $this->create_shop_via_api( [], 'items-rt-var-negative' );
+
+		$response = $this->put_items(
+			$shop_id,
+			'items-rt-var-negative',
+			[
+				[
+					'product_id' => $variable_id,
+					'variations' => [
+						(string) $variation_ids[0] => [
+							'override'       => [
+								'regular_price' => '900',
+								'sale_price'    => null,
+								'signup_fee'    => null,
+							],
+							'inflated_count' => -12,
+						],
+					],
+				],
+			]
+		);
+
+		$this->assertSame( 200, $response->get_status(), '負數應被容錯 sanitize，而非 400' );
+
+		$after     = $this->get_shop( $shop_id );
+		$get_items = $after['data']['items'] ?? [];
+		$this->assertCount( 1, $get_items, '防空斷言：GET 應還原 1 筆 item' );
+
+		$v0 = $get_items[0]['variations'][ $variation_ids[0] ] ?? null;
+		$this->assertIsArray( $v0, '防空斷言：variation 應存在' );
+		$this->assertSame( 0, $v0['inflated_count'], '負數應被 sanitize 為 0' );
+	}
+
 	// ========== Rule: 後置（持久化）- items 的排列順序即賣場前台的商品顯示順序 ==========
 
 	/**
@@ -537,6 +774,30 @@ final class ProfitShopItemsRoundTripTest extends TestCase {
 	}
 
 	// ========== Helpers ==========
+
+	/**
+	 * 建立含 2 個變體的 variable 商品
+	 *
+	 * @return array{0: int, 1: array<int, int>} [parent product id, variation ids]
+	 */
+	private function create_variable_product(): array {
+		$variable = $this->createVariableProduct(
+			[
+				'name'       => '可變測試商品',
+				'variations' => [
+					[ 'regular_price' => '1000' ],
+					[ 'regular_price' => '1200' ],
+				],
+			]
+		);
+
+		$variation_ids = array_values( array_map( 'intval', $variable->get_children() ) );
+
+		// 防空斷言：後續所有變體測試都建立在「真的有 2 個變體」這個前提上
+		$this->assertCount( 2, $variation_ids, '測試前置：可變商品應有 2 個變體' );
+
+		return [ (int) $variable->get_id(), $variation_ids ];
+	}
 
 	/**
 	 * 透過 POST /profit-shops 建立賣場，回傳新 ID

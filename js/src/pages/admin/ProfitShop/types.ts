@@ -51,17 +51,30 @@ export type TPriceOverride = {
 	signup_fee: string | null
 }
 
-/** 單一 variation 的覆寫設定（value 物件僅含 override） */
+/**
+ * 單一 variation 的覆寫設定
+ *
+ * 兩個欄位的型別刻意與商品層一致，語意也完全相同：
+ *   - `override` 三欄皆 `string | null`（後端 `PriceOverride` VO 存十進位字串，
+ *     用 `bccomp` 比較避免浮點誤差）；`null` ＝沿用商品原價，`'0'` ＝覆寫為 0 元
+ *   - `inflated_count` 是 `number`（後端 `InflatedCount` VO，負數會被 `max(0, …)` 夾住）
+ *
+ * ⚠️ DB 內既有資料的 `variations[vid]` 只有 `override`、沒有 `inflated_count`
+ * （此欄位是後來才加的）。後端反序列化用 `?? 0` 接住，前端在 Edit 填表時
+ * 一併正規化（見 `Edit/index.tsx`），避免 `InputNumber` 讀到 `undefined`
+ * 從受控變非受控。
+ */
 export type TVariationOverride = {
 	override: TPriceOverride
+	inflated_count: number
 }
 
 /**
- * variation_id => { override } 對照表
+ * variation_id => { override, inflated_count } 對照表
  *
  * key 以 `string` 表達：JSON 物件鍵一律是字串。後端 variations 為空時
- * PHP `wp_json_encode([])` 會序列化成 `[]`（空陣列）而非 `{}`，前端僅原樣攜帶
- * 不解讀內容，兩種形狀送回 PHP 都會被 `is_array()` 接受。
+ * PHP `wp_json_encode([])` 會序列化成 `[]`（空陣列）而非 `{}`，
+ * `Object.entries([])` 同樣得到 `[]`，兩種形狀送回 PHP 都會被 `is_array()` 接受。
  */
 export type TVariationOverrideMap = Record<string, TVariationOverride>
 

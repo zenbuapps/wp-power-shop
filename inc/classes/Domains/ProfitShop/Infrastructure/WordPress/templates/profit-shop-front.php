@@ -95,6 +95,13 @@ $is_draft_preview = ( 'publish' !== $shop->status() );
 				&& is_numeric( $sale_price )
 				&& (float) $regular_price > (float) $sale_price
 			);
+
+			// 已售件數 = WC 真實銷量 + 賣場設定的灌水銷量。
+			// 這是 inflated_count 唯一的前台消費點：在此之前該欄位「存得進去、讀得出來、
+			// 但沒有任何地方使用」，屬於 profit-shop.rule.md §7 警告的反模式。
+			// 註：變體層的 inflated_count 目前仍無顯示位置（賣場前台只渲染父商品卡片，
+			// 變體選擇發生在 WC 單品頁），已登記 specs/tech-debt.md TD-15。
+			$sold_count = (int) $product->get_total_sales() + $override_item->inflated_count->value();
 			?>
 				<article class="ps-shop-item" style="border:1px solid #eee;border-radius:8px;overflow:hidden;background:#fff;">
 					<a href="<?php echo \esc_url( $product_permalink ); ?>">
@@ -130,6 +137,19 @@ $is_draft_preview = ( 'publish' !== $shop->status() );
 								</span>
 							<?php endif; ?>
 						</p>
+			<?php if ( $sold_count > 0 ) : ?>
+						<p style="margin:0 0 12px;color:#999;font-size:0.85em;">
+				<?php
+				echo \esc_html(
+					\sprintf(
+						/* translators: %s: 已售出的件數 */
+						\__( '已售 %s 件', 'power_shop' ),
+						\number_format_i18n( $sold_count )
+					)
+				);
+				?>
+						</p>
+			<?php endif; ?>
 			<?php if ( $is_simple ) : ?>
 							<form method="get" action="<?php echo \esc_url( \home_url( '/' ) ); ?>" style="margin:0;">
 								<input type="hidden" name="add-to-cart" value="<?php echo \esc_attr( (string) $override_item->product_id ); ?>">

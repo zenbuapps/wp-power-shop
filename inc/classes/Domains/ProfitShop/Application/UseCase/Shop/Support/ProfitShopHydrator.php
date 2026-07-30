@@ -16,6 +16,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\InflatedCount;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PriceOverride;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ProfitRate;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ShopMode;
+use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\VariationOverride;
 
 /**
  * 將 ProfitShopInput 轉成 ProfitShop 聚合根、ProfitShop 轉成 ProfitShopOutput 的共用工具
@@ -123,8 +124,15 @@ final class ProfitShopHydrator {
 			if ( $vid_int <= 0 || ! is_array( $v_row ) ) {
 				continue;
 			}
-			$v_override            = is_array( $v_row['override'] ?? null ) ? $v_row['override'] : [];
-			$variations[ $vid_int ] = self::build_price_override( $v_override );
+			$v_override = is_array( $v_row['override'] ?? null ) ? $v_row['override'] : [];
+
+			// 前端未送 inflated_count（或送了舊契約）時視為 0；InflatedCount 本身會把負數 sanitize 為 0。
+			$v_inflated = isset( $v_row['inflated_count'] ) ? (int) $v_row['inflated_count'] : 0;
+
+			$variations[ $vid_int ] = new VariationOverride(
+				self::build_price_override( $v_override ),
+				new InflatedCount( $v_inflated )
+			);
 		}
 
 		return new OverrideItem(

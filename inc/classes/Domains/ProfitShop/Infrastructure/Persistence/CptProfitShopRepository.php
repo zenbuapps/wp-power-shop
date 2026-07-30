@@ -15,6 +15,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\InflatedCount;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PriceOverride;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ProfitRate;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ShopMode;
+use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\VariationOverride;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 
 /**
@@ -366,7 +367,19 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 			? $variation_row['override']
 			: [];
 
-			$variations[ $vid ] = $this->build_price_override( $v_override_payload );
+			// 向後相容（Phase 9）：Phase 9 之前寫入的 _profit_shop_items JSON，其
+			// variations[vid] 只有 override 而無 inflated_count 鍵 → 一律讀為 0
+			// （語意正確：沒設定過灌水銷量 = 0），下次儲存時自然補上，無需 migration。
+			// ⚠️ 這個 `?? 0` 是舊資料唯一的接住點，重構時不可移除；
+			// CptProfitShopRepositoryTest 有專屬測試鎖住此行為。
+			$v_inflated_raw = isset( $variation_row['inflated_count'] )
+			? (int) $variation_row['inflated_count']
+			: 0;
+
+			$variations[ $vid ] = new VariationOverride(
+				$this->build_price_override( $v_override_payload ),
+				new InflatedCount( $v_inflated_raw )
+			);
 		}
 
 		return new OverrideItem(

@@ -2,7 +2,9 @@ import {
 	DeleteOutlined,
 	HolderOutlined,
 	InfoCircleOutlined,
+	MinusSquareOutlined,
 	PlusOutlined,
+	PlusSquareOutlined,
 } from '@ant-design/icons'
 import {
 	DndContext,
@@ -37,6 +39,7 @@ import {
 	ProductPrice,
 	ProductStock,
 	POST_STATUS,
+	isVariable,
 } from 'antd-toolkit/wp'
 import {
 	createContext,
@@ -53,11 +56,19 @@ import {
 import { TProductRecord } from '@/components/product/types'
 import { ProductPickerModal } from '@/pages/admin/ProfitShop/components/ProductPickerModal'
 import { useProductPickerModal } from '@/pages/admin/ProfitShop/components/ProductPickerModal/hooks'
+import { VariationOverrideEditor } from '@/pages/admin/ProfitShop/components/VariationOverrideEditor'
 import { useShopItemProducts } from '@/pages/admin/ProfitShop/hooks'
 import type {
 	TPriceOverride,
 	TShopItemRow,
 } from '@/pages/admin/ProfitShop/types'
+import {
+	emptyPriceOverride,
+	emptyVariationOverride,
+	isSaleOverRegular,
+	toInputValue,
+	toPriceString,
+} from '@/pages/admin/ProfitShop/utils'
 
 /**
  * 賣場商品數量軟上限
@@ -95,54 +106,49 @@ type TWpDisplayRecord = ComponentProps<typeof ProductName>['record'] &
 const toWpRecord = (product: TProductRecord) =>
 	product as unknown as TWpDisplayRecord
 
-/** 空的價格覆寫：三欄皆 null ＝ 完全沿用商品原價 */
-const emptyPriceOverride = (): TPriceOverride => ({
-	regular_price: null,
-	sale_price: null,
-	signup_fee: null,
-})
-
-/** 後端十進位字串 → InputNumber 值；null / 非數字 → undefined（顯示 placeholder） */
-const toInputValue = (price: string | null): number | undefined => {
-	if (price === null) return undefined
-	const parsed = Number(price)
-	return Number.isFinite(parsed) ? parsed : undefined
-}
-
-/** InputNumber 值 → 後端十進位字串；清空 / 非數字 → null（＝沿用商品原價） */
-const toPriceString = (value: number | null): string | null =>
-	typeof value === 'number' && Number.isFinite(value) ? String(value) : null
-
-/**
- * 該列是否違反「特價不得高於原價覆寫」
- *
- * 與後端 `PriceOverride` VO 同語意，但後端才是唯一真相 —— 此處只是前端第一道閘門。
- * 後端用 `bccomp` 走字串十進位比較，前端以 Number 比較足以擋住一般誤輸入。
- */
-const isSaleOverRegular = (override: TPriceOverride): boolean => {
-	const regular = Number(override.regular_price)
-	const sale = Number(override.sale_price)
-	if (override.regular_price === null || override.sale_price === null) {
-		return false
-	}
-	if (!Number.isFinite(regular) || !Number.isFinite(sale)) return false
-	return sale > regular
-}
+/** 驗證訊息最多列出幾處違規，其餘以「等 N 處」帶過 */
+const MAX_LISTED_VIOLATIONS = 5
 
 /**
  * 賣場商品價格覆寫的 antd Form 驗證器
  *
  * 掛在 ProfitShopForm 的 `items` Form.Item 上，讓「特價 > 原價覆寫」在送出前就被擋下，
  * 避免整張表單送到後端才被 `InvalidPriceOverride` 拒絕（E-10）。
+ *
+ * **商品層與變體層都要驗** —— 變體覆寫藏在展開列裡，若只驗商品層，
+ * 使用者會在送出後才吃到後端 400，而錯誤訊息又因為 Refine HttpError
+ * 吃掉 response body 而難以定位到底是哪一個變體。
+ *
+ * ⚠️ 訊息必須同時指出商品與變體（`商品 #101 變體 #301`），只寫商品 id
+ * 等於叫使用者自己一個一個展開去找。
  */
 export const validateItemsPriceOverride = async (
 	_rule: unknown,
 	value: TShopItemRow[] | undefined
 ): Promise<void> => {
-	const invalid = (value ?? []).filter((it) => isSaleOverRegular(it.override))
-	if (invalid.length === 0) return
-	const ids = invalid.map((it) => `#${it.product_id}`).join('、')
-	throw new Error(`商品 ${ids} 的特價覆寫不得高於原價覆寫`)
+	const violations: string[] = []
+
+	;(value ?? []).forEach((it) => {
+		if (isSaleOverRegular(it.override)) {
+			violations.push(`商品 #${it.product_id}`)
+		}
+
+		Object.entries(it.variations ?? {}).forEach(([variationId, variation]) => {
+			if (variation?.override && isSaleOverRegular(variation.override)) {
+				violations.push(`商品 #${it.product_id} 變體 #${variationId}`)
+			}
+		})
+	})
+
+	if (0 === violations.length) return
+
+	const listed = violations.slice(0, MAX_LISTED_VIOLATIONS).join('、')
+	const rest =
+		violations.length > MAX_LISTED_VIOLATIONS
+			? ` 等 ${violations.length} 處`
+			: ''
+
+	throw new Error(`${listed}${rest} 的特價覆寫不得高於原價覆寫`)
 }
 
 /** `useSortable` 回傳的把手事件綁定 */
@@ -231,6 +237,14 @@ const SortableRow = ({
  * 空資料時 antd 仍會用這個元件渲染 `ant-table-placeholder` 那一列，
  * 它**沒有** `data-row-key` —— 直接丟給 `useSortable` 會拿到 `id: undefined`，
  * 所以在這層先擋掉（hooks 不能寫在條件式裡，因此拆成兩個元件）。
+ *
+ * ⚠️ **變體展開列也走這條 fallback，所以 expandable 與 dnd-kit 拖曳排序完全相容，
+ * BodyRow / SortableRow / DndContext / SortableContext 一行都不用改**：
+ * rc-table 渲染展開列時只傳 `className` 與 `style` 給自訂 row component，
+ * **不傳 `data-row-key`**（`rc-table/lib/Body/ExpandedRow.js`），
+ * 因此自動落進上面那個守門，不會進 `useSortable`。
+ * `SortableContext` 的 items 也只取 pagedItems 的 product_id，展開列不在其中，
+ * 不會被誤算進拖曳序列。
  */
 const BodyRow = (props: TBodyRowProps) => {
 	if (undefined === props['data-row-key']) return <tr {...props} />
@@ -243,13 +257,15 @@ const BodyRow = (props: TBodyRowProps) => {
  * OverrideItem 列表編輯器
  *
  * 範圍限制：
- *   - 不支援變體層編輯：`variations` 契約結構保留並原樣攜帶，但 UI 不開放
- *   - `signup_fee`（訂閱型註冊費）同樣保留契約但不開放 UI
+ *   - `signup_fee`（訂閱型註冊費）保留契約但不開放 UI（商品層與變體層皆然）
  *   - 不允許重複 product_id（由前端 dedupe，防呆即可，後端會做最終驗證）
+ *   - 變體只能在「已加入賣場的父商品」展開列設定，ProductPickerModal 內仍不可勾選變體
  *
  * 設計：
  *   - 上方：「選擇商品」按鈕 → ProductPickerModal（完整篩選 + 分頁 + 跨頁勾選）
  *   - 下方：Table 列出已加入的 items，可編輯原價 / 特價覆寫、浮報數、移除
+ *   - 可變商品 / 可變訂閱：商品圖片左側有展開鈕，展開後可逐一設定每個變體的
+ *     原價 / 特價覆寫與灌水購買人數（VariationOverrideEditor）
  *   - 價格覆寫：null = 沿用商品原價；0 = 免費贈品；正數 = 覆寫該欄位
  */
 const ItemsEditorComponent = ({
@@ -269,6 +285,22 @@ const ItemsEditorComponent = ({
 
 	const [page, setPage] = useState(1)
 	const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+
+	/**
+	 * 目前展開的商品（product_id）
+	 *
+	 * 受控 —— 因為展開鈕是自己刻在「商品名稱」欄裡的（antd 預設的展開欄被
+	 * `showExpandColumn: false` 關掉了），非受控的話點自刻的按鈕不會有反應。
+	 */
+	const [expandedKeys, setExpandedKeys] = useState<number[]>([])
+
+	const toggleExpanded = (productId: number) => {
+		setExpandedKeys((prev) =>
+			prev.includes(productId)
+				? prev.filter((key) => key !== productId)
+				: [...prev, productId]
+		)
+	}
 
 	/**
 	 * 夾住頁碼，不用 `useEffect` 同步
@@ -384,6 +416,8 @@ const ItemsEditorComponent = ({
 	})
 
 	const handleRemove = (productId: number) => {
+		// 一併清掉展開狀態，否則 expandedKeys 會留著一個已不存在的 product_id
+		setExpandedKeys((prev) => prev.filter((key) => key !== productId))
 		onChange?.(items.filter((it) => it.product_id !== productId))
 	}
 
@@ -406,6 +440,82 @@ const ItemsEditorComponent = ({
 					? { ...it, override: { ...it.override, ...patch } }
 					: it
 			)
+		)
+	}
+
+	/**
+	 * patch 單一變體的價格覆寫
+	 *
+	 * 只重建「該商品那一列 + 該變體那一筆」，其餘 item 的 object reference
+	 * 完全不動 —— 賣場可以到 500 筆商品，每次按鍵都重建全部會讓輸入明顯延遲。
+	 * 該變體還沒有任何設定時補上一份空殼（價格三欄 null + 灌水 0），
+	 * 避免 InputNumber 讀到 undefined 從受控變非受控。
+	 */
+	const handlePatchVariationOverride = (
+		productId: number,
+		variationId: string,
+		patch: Partial<TPriceOverride>
+	) => {
+		onChange?.(
+			items.map((it) => {
+				if (it.product_id !== productId) return it
+				const current = it.variations?.[variationId] ?? emptyVariationOverride()
+				return {
+					...it,
+					variations: {
+						...it.variations,
+						[variationId]: {
+							...current,
+							override: { ...current.override, ...patch },
+						},
+					},
+				}
+			})
+		)
+	}
+
+	/** patch 單一變體的灌水購買人數（最小重建範圍同上） */
+	const handlePatchVariationInflated = (
+		productId: number,
+		variationId: string,
+		count: number
+	) => {
+		onChange?.(
+			items.map((it) => {
+				if (it.product_id !== productId) return it
+				const current = it.variations?.[variationId] ?? emptyVariationOverride()
+				return {
+					...it,
+					variations: {
+						...it.variations,
+						[variationId]: { ...current, inflated_count: count },
+					},
+				}
+			})
+		)
+	}
+
+	/**
+	 * 移除孤兒鍵：賣場存了這個 variation_id，但 WC 端已經沒有這個變體
+	 *
+	 * 不移除的話送出時會被後端 `ItemValidator` 以 `InvalidVariation` 打回 400。
+	 * 用 filter 重建而非 `delete`，避免動到原本的 variations 物件。
+	 */
+	const handleRemoveOrphanVariation = (
+		productId: number,
+		variationId: string
+	) => {
+		onChange?.(
+			items.map((it) => {
+				if (it.product_id !== productId) return it
+				if (!it.variations?.[variationId]) return it
+				return {
+					...it,
+					variations: Object.fromEntries(
+						Object.entries(it.variations).filter(([key]) => key !== variationId)
+					),
+				}
+			})
 		)
 	}
 
@@ -465,28 +575,78 @@ const ItemsEditorComponent = ({
 		{
 			title: '商品名稱',
 			dataIndex: 'product_id',
-			width: 280,
+			width: 320,
 			render: (productId: number, record) => {
 				const { state, product } = resolveDisplay(record)
 
-				// 有完整 record 時直接用 #/products 那顆 ProductName，
-				// 名稱 / #id / SKU / 縮圖的呈現自然一致（不另外刻一套）
-				if (product) return <ProductName record={toWpRecord(product)} />
+				/*
+				 * 只有可變商品 / 可變訂閱才給展開鈕。
+				 * enrich 還沒回來 / 查詢失敗 / 商品已刪除時 `product` 是 undefined，
+				 * 判斷不出商品型別就**不給展開**（不知道型別就不該讓人展開）。
+				 */
+				const canExpand = !!isVariable(product?.type as string)
+				const expanded = expandedKeys.includes(record.product_id)
 
+				/*
+				 * ⚠️ 外層 flex 容器的 `min-w-0` 缺一不可：flex item 的 min-width
+				 * 預設是 `auto`（拒絕收縮到小於內容寬度），少了它長商品名稱會撐破欄位、
+				 * 橫向蓋掉右邊的「商品類型 / 狀態 / 價格」等欄位，而且**不會有任何錯誤訊息**。
+				 * 展開鈕與佔位塊則要 `flex-none`，否則會被 flex-shrink 壓扁變形。
+				 *
+				 * 不可展開的列渲染一個等寬佔位塊，讓所有列的商品名稱
+				 * 都對齊在同一條垂直線上（不會因為有沒有展開鈕而左右錯開）。
+				 */
 				return (
-					<div>
-						<div className="font-medium">
-							{'pending' === state ? (
-								<Skeleton.Input active size="small" style={{ width: 140 }} />
-							) : (
-								(record._name ?? `#${productId}`)
-							)}
-						</div>
-						<div className="text-xs text-gray-500">
-							<Tag bordered={false}>#{productId}</Tag>
-							{record._sku ? <code>{record._sku}</code> : null}
-							{'missing' === state ? <Tag color="red">商品已失效</Tag> : null}
-						</div>
+					<div className="flex items-center gap-2 min-w-0">
+						{canExpand ? (
+							<Button
+								type="text"
+								size="small"
+								className="flex-none"
+								aria-label={expanded ? '收合變體' : '展開變體'}
+								icon={
+									expanded ? <MinusSquareOutlined /> : <PlusSquareOutlined />
+								}
+								onClick={() => toggleExpanded(record.product_id)}
+								disabled={disabled}
+							/>
+						) : (
+							<span className="w-6 flex-none" />
+						)}
+
+						{/*
+						 * 有完整 record 時直接用 #/products 那顆 ProductName，
+						 * 名稱 / #id / SKU / 縮圖的呈現自然一致（不另外刻一套）。
+						 * `[&_.at-name]:truncate` 是必要的：ProductName 內建的截斷寫成
+						 * `[&_*]:at-truncate`（後代選擇器），對純字串 name 從來沒生效過。
+						 */}
+						{product ? (
+							<ProductName
+								record={toWpRecord(product)}
+								className="min-w-0 [&_.at-name]:truncate"
+							/>
+						) : (
+							<div className="min-w-0">
+								<div className="font-medium truncate">
+									{'pending' === state ? (
+										<Skeleton.Input
+											active
+											size="small"
+											style={{ width: 140 }}
+										/>
+									) : (
+										(record._name ?? `#${productId}`)
+									)}
+								</div>
+								<div className="text-xs text-gray-500">
+									<Tag bordered={false}>#{productId}</Tag>
+									{record._sku ? <code>{record._sku}</code> : null}
+									{'missing' === state ? (
+										<Tag color="red">商品已失效</Tag>
+									) : null}
+								</div>
+							</div>
+						)}
 					</div>
 				)
 			},
@@ -695,6 +855,41 @@ const ItemsEditorComponent = ({
 						dataSource={items}
 						columns={columns}
 						components={{ body: { row: BodyRow } }}
+						expandable={{
+							/*
+							 * 關掉 antd 預設插在最左邊的展開欄 —— 使用者要的是
+							 * 「商品**圖片左側**」，而圖片在商品名稱欄內由 ProductName 渲染，
+							 * 所以展開鈕改成自己刻在那一欄的 ProductName 之前。
+							 */
+							showExpandColumn: false,
+							expandedRowKeys: expandedKeys,
+							rowExpandable: (record) =>
+								!!isVariable(resolveDisplay(record).product?.type as string),
+							expandedRowRender: (record) => (
+								<VariationOverrideEditor
+									productId={record.product_id}
+									value={record.variations ?? {}}
+									onPatchOverride={(variationId, patch) =>
+										handlePatchVariationOverride(
+											record.product_id,
+											variationId,
+											patch
+										)
+									}
+									onPatchInflated={(variationId, count) =>
+										handlePatchVariationInflated(
+											record.product_id,
+											variationId,
+											count
+										)
+									}
+									onRemoveOrphan={(variationId) =>
+										handleRemoveOrphanVariation(record.product_id, variationId)
+									}
+									disabled={disabled}
+								/>
+							),
+						}}
 						pagination={{
 							current: currentPage,
 							pageSize,
@@ -706,10 +901,14 @@ const ItemsEditorComponent = ({
 							onChange: (nextPage, nextPageSize) => {
 								setPage(nextPage)
 								if (nextPageSize) setPageSize(nextPageSize)
+
+								// 換頁 / 換每頁筆數後畫面上是另一批商品，
+								// 展開狀態留著會讓「哪幾列是展開的」與使用者的認知脫節
+								setExpandedKeys([])
 							},
 						}}
 						size="small"
-						scroll={{ x: 1390 }}
+						scroll={{ x: 1430 }}
 						locale={{
 							emptyText: (
 								<Empty

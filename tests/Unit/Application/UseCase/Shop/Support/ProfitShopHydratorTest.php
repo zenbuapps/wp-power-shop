@@ -54,11 +54,12 @@ final class ProfitShopHydratorTest extends TestCase {
 					],
 					'variations'     => [
 						301 => [
-							'override' => [
+							'override'       => [
 								'regular_price' => '900',
 								'sale_price'    => '850',
 								'signup_fee'    => null,
 							],
+							'inflated_count' => 9,
 						],
 					],
 				],
@@ -79,8 +80,10 @@ final class ProfitShopHydratorTest extends TestCase {
 		$this->assertSame( 50, $item->inflated_count->value() );
 		$this->assertCount( 1, $item->variations );
 		$this->assertArrayHasKey( 301, $item->variations );
-		$this->assertSame( '900', $item->variations[301]->regular_price );
-		$this->assertSame( '850', $item->variations[301]->sale_price );
+		// Phase 9：variations 的 value 是 VariationOverride，價格改由 ->override 取
+		$this->assertSame( '900', $item->variations[301]->override->regular_price );
+		$this->assertSame( '850', $item->variations[301]->override->sale_price );
+		$this->assertSame( 9, $item->variations[301]->inflated_count->value() );
 
 		// ---- 再驗證 to_output() 序列化端（完整 round-trip 到 API response 形狀）----
 		$output = ProfitShopHydrator::to_output( $shop, '2026-01-01 00:00:00', '2026-01-02 00:00:00' );
@@ -106,6 +109,7 @@ final class ProfitShopHydratorTest extends TestCase {
 			],
 			$out_item['variations'][301]['override']
 		);
+		$this->assertSame( 9, $out_item['variations'][301]['inflated_count'] );
 	}
 
 	/**
@@ -180,7 +184,132 @@ final class ProfitShopHydratorTest extends TestCase {
 		$this->assertCount( 1, $item->variations );
 		$this->assertArrayHasKey( 1031, $item->variations );
 		$this->assertIsInt( array_key_first( $item->variations ), 'variations 鍵必須是 int，而非字串' );
-		$this->assertSame( '500', $item->variations[1031]->regular_price );
+		$this->assertSame( '500', $item->variations[1031]->override->regular_price );
+	}
+
+	/**
+	 * edge：【R-7 前端側】variations 缺 inflated_count 鍵 → 0
+	 *
+	 * 舊分支 / 舊快取的前端仍可能送出只有 override 的 variations，必須讀為 0 而非炸掉。
+	 *
+	 * @group edge
+	 * @group smoke
+	 */
+	public function test_variation_missing_inflated_count_defaults_to_zero(): void {
+		$input = $this->build_input(
+			[
+				[
+					'product_id' => 210,
+					'variations' => [
+						301 => [
+							'override' => [
+								'regular_price' => '500',
+								'sale_price'    => null,
+								'signup_fee'    => null,
+							],
+						],
+					],
+				],
+			]
+		);
+
+		$item = ProfitShopHydrator::from_input( 1, $input )->items()[0];
+
+		$this->assertArrayHasKey( 301, $item->variations, '防空斷言：variation 應被建立' );
+		$this->assertSame( '500', $item->variations[301]->override->regular_price, '價格必須照常讀取' );
+		$this->assertSame( 0, $item->variations[301]->inflated_count->value(), '缺鍵應為 0' );
+	}
+
+	/**
+	 * edge：variations 的 inflated_count 為負數 → sanitize 為 0（不拋例外）
+	 *
+	 * 沿用 InflatedCount VO 既有的 max(0, $value) 容錯設計，與商品層行為一致。
+	 *
+	 * @group edge
+	 */
+	public function test_negative_variation_inflated_count_is_sanitized_to_zero(): void {
+		$input = $this->build_input(
+			[
+				[
+					'product_id' => 211,
+					'variations' => [
+						301 => [
+							'override'       => [
+								'regular_price' => '500',
+								'sale_price'    => null,
+								'signup_fee'    => null,
+							],
+							'inflated_count' => -8,
+						],
+					],
+				],
+			]
+		);
+
+		$item = ProfitShopHydrator::from_input( 1, $input )->items()[0];
+
+		$this->assertArrayHasKey( 301, $item->variations, '防空斷言：variation 應被建立' );
+		$this->assertSame( 0, $item->variations[301]->inflated_count->value(), '負數應被 sanitize 為 0' );
+	}
+
+	/**
+	 * edge：variations 的 inflated_count 為數字字串 "15" → 轉為 int 15
+	 *
+	 * @group edge
+	 */
+	public function test_string_variation_inflated_count_is_cast_to_int(): void {
+		$input = $this->build_input(
+			[
+				[
+					'product_id' => 212,
+					'variations' => [
+						301 => [
+							'override'       => [
+								'regular_price' => '500',
+								'sale_price'    => null,
+								'signup_fee'    => null,
+							],
+							'inflated_count' => '15',
+						],
+					],
+				],
+			]
+		);
+
+		$item = ProfitShopHydrator::from_input( 1, $input )->items()[0];
+
+		$this->assertArrayHasKey( 301, $item->variations, '防空斷言：variation 應被建立' );
+		$this->assertSame( 15, $item->variations[301]->inflated_count->value() );
+	}
+
+	/**
+	 * error：變體層 sale_price 高於 regular_price → 拋 InvalidPriceOverride
+	 *
+	 * 後端 PriceOverride VO 是唯一真相：不因前端 Form rule 已擋就放寬。
+	 *
+	 * @group error
+	 */
+	public function test_variation_sale_price_greater_than_regular_throws(): void {
+		$input = $this->build_input(
+			[
+				[
+					'product_id' => 213,
+					'variations' => [
+						301 => [
+							'override'       => [
+								'regular_price' => '500',
+								'sale_price'    => '900',
+								'signup_fee'    => null,
+							],
+							'inflated_count' => 0,
+						],
+					],
+				],
+			]
+		);
+
+		$this->expectException( InvalidPriceOverride::class );
+		ProfitShopHydrator::from_input( 1, $input );
 	}
 
 	/**

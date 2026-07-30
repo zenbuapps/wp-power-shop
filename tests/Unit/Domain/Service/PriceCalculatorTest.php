@@ -33,6 +33,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Service\PriceCalculator;
 use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\ProductSnapshot;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\InflatedCount;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PriceOverride;
+use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\VariationOverride;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -460,6 +461,10 @@ final class PriceCalculatorTest extends TestCase {
 	/**
 	 * 建立 OverrideItem fixture
 	 *
+	 * 各 test 仍以 PriceOverride 描述變體覆寫（本檔測的是價格 fallback，與灌水銷量無關），
+	 * 由本 helper 統一包成 Phase 9 起 OverrideItem::$variations 要求的 VariationOverride。
+	 * 灌水銷量一律給 0，不影響 PriceCalculator 的任何一層 fallback。
+	 *
 	 * @param PriceOverride|null         $parent_override     Parent override
 	 * @param array<int, PriceOverride>  $variation_overrides variation_id => PriceOverride
 	 *
@@ -469,11 +474,19 @@ final class PriceCalculatorTest extends TestCase {
 		?PriceOverride $parent_override = null,
 		array $variation_overrides = []
 	): OverrideItem {
+		$variations = array_map(
+			static fn( PriceOverride $override ): VariationOverride => new VariationOverride(
+				$override,
+				new InflatedCount( 0 )
+			),
+			$variation_overrides
+		);
+
 		return new OverrideItem(
 			product_id: 123,
 			override: $parent_override ?? new PriceOverride( null, null, null ),
 			inflated_count: new InflatedCount( 0 ),
-			variations: $variation_overrides,
+			variations: $variations,
 		);
 	}
 

@@ -21,6 +21,7 @@ import type {
 	TProfitShop,
 	TProfitShopInput,
 } from '@/pages/admin/ProfitShop/types'
+import type { TProductVariation, TSimpleAttribute } from '@/types/wcRestApi'
 
 /** 後端統一回應包裹 */
 export type TWrappedResponse<T> = {
@@ -312,5 +313,76 @@ export const useShopItemProducts = (productIds: number[]) => {
 		isLoading: activeQueries.some((q) => q.isLoading),
 		isError: activeQueries.some((q) => q.isError),
 		hasQuery: activeQueries.length > 0,
+	}
+}
+
+/**
+ * 單一商品的變體查詢上限
+ *
+ * WC REST 的 `per_page` 硬上限就是 100，超過的變體拿不到 ——
+ * 這是 API 限制不是本專案的選擇，因此不做分頁載入，改為在 UI 明講被截斷（TD-16）。
+ */
+export const VARIATION_PAGE_LIMIT = 100
+
+/**
+ * wc-rest 變體記錄
+ *
+ * `TProductBase.attributes` 宣告成 `TAttribute[] | TSimpleAttribute[]` 的聯集，
+ * 直接 `.map((a) => a.option)` 會因為「聯集的陣列」而讀不到 `option`。
+ * 變體端點實際只回 `{ id, name, option }` 這種單值形狀，這裡收窄成 `TSimpleAttribute[]`。
+ */
+export type TShopVariationInfo = Omit<TProductVariation, 'attributes'> & {
+	attributes: TSimpleAttribute[]
+}
+
+/**
+ * 取得單一商品的變體清單（走 wc-rest）
+ *
+ * ⚠️ **刻意設計成「由展開列的子元件呼叫」**，不在 ItemsEditor 那一層查：
+ * rc-table 的 `expandedRowRender` 天然 lazy（沒展開過的列根本不 render），
+ * 所以查詢自然只會發生在使用者真的展開的那個商品上，不會有 N+1；
+ * 收合只是 `display:none` 不會 unmount，重新展開也不會重查。
+ * 反過來說，若把查詢寫在 ItemsEditor，就會為了固定 hook 數量而被迫像
+ * `useShopItemProducts` 那樣寫死 N 個 `useList`。
+ *
+ * ⚠️ `per_page` **必須當 filter 送**（見 useShopItemProducts 同款註解）：
+ * 6 個 dataProvider 共用同一個 factory，`pagination` 只會被序列化成 Powerhouse 風格的
+ * `paged` / `posts_per_page`，而 WooCommerce 只認 `page` / `per_page` ——
+ * 少了這條 filter 會靜默退回每頁 10 筆，變體一多就看不到後面的。
+ */
+export const useProductVariations = (productId: number, enabled = true) => {
+	const isEnabled = enabled && Number.isFinite(productId) && productId > 0
+
+	const query = useList<TShopVariationInfo>({
+		resource: `products/${productId}/variations`,
+		dataProviderName: 'wc-rest',
+		filters: [
+			{
+				field: 'per_page',
+				operator: 'eq' as const,
+				value: VARIATION_PAGE_LIMIT,
+			},
+		],
+		pagination: { pageSize: VARIATION_PAGE_LIMIT },
+		queryOptions: {
+			enabled: isEnabled,
+
+			// 與賣場編輯頁其他查詢一致：切回視窗不重新抓，避免蓋掉編輯中的內容
+			refetchOnWindowFocus: false,
+		},
+	})
+
+	const variations = useMemo(() => query.data?.data ?? [], [query.data])
+
+	return {
+		variations,
+
+		// `total` 取自 x-wp-total header；antd-toolkit 在缺 header 時 fallback 成 1，
+		// 所以只拿它當「補充資訊」用，判斷是否被截斷一律以實際筆數為準
+		total: query.data?.total ?? 0,
+
+		// 停用中的查詢其 isLoading 恆為 true，不夾 isEnabled 會讓收合的列一直顯示骨架
+		isLoading: isEnabled && query.isLoading,
+		isError: query.isError,
 	}
 }
