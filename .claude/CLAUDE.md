@@ -58,6 +58,7 @@ pnpm release:major
 17. **Don't** 用 `agent-browser` 之類的瀏覽器自動化 CLI 截圖時假設呼叫端 shell 的 `cd` 會影響它的相對路徑——`agent-browser` 是**獨立行程**，相對路徑是相對於它自己的工作目錄（通常是專案根），**不是**呼叫端 shell 當下所在目錄。截圖 / 輸出檔案一律傳**絕對路徑**，否則檔案會落在專案根目錄，混進 `git status` 的 untracked 清單，有被 `git add -A` 誤收進版本庫的風險。
 18. **Don't** 以為 Refine dataProvider 的錯誤物件（`HttpError`）帶有 `error.response.data`——Refine 只保留 `{ message, statusCode }`，原始 response body（含後端 `code` / `data`）已經不見，`statusCode` 甚至可能與真實 HTTP 狀態碼不符。錯誤訊息解析要 fallback 到 `error.message`，不要假設一定讀得到 `response.data.code`。詳見 `react.rule.md` §3。
 19. **Don't** 寫帶 `tw-` prefix 的 Tailwind class——`tailwind.config.js` **沒有設 `prefix`**，class 一律無前綴（`mb-2` / `flex`）。唯一的例外是 config `plugins` 手寫的 6 個（`tw-hidden` / `tw-block` / `tw-inline` / `tw-fixed` / `tw-columns-1` / `tw-columns-2`，因為無前綴版與 WP 衝突被 `blocklist` 擋掉）。寫錯不會有 build 錯誤，樣式只是安靜地不生效。另：Tailwind entry 是 `js/src/assets/styles/tailwind.css`，**新增 SPA bundle 時必須 import**，否則該 bundle 的 utility 全部無效。詳見 `react.rule.md` §10。
+20. **Don't** 假設 `<Tooltip>` 包 disabled `<Button>` 會顯示提示——antd v5 拿掉了 v4 的 disabled 相容包裝，瀏覽器又不對 disabled `<button>` 派發滑鼠事件，提示因此永遠不會出現，且沒有任何錯誤訊息。也**不要**只靠 antd 目前會在 `disabled` 時抽掉 `<Button href>` 的 `href` 就假設安全——外開連結按鈕該拆成停用 / 可用兩條 render 分支，別把 `href` 和 `disabled` 一起塞給同一顆 `<Button>`。詳見 `react.rule.md` §2。
 
 ## Profit Shop Domain（v1 開發中）
 

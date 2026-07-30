@@ -50,6 +50,16 @@
 | 8 | 欄位很多時給 `scroll={{ x: <總寬> }}`，操作欄 `fixed: 'right'` |
 | 9 | **不開獨立 ID 欄**——主要名稱欄用 `NameId`（`antd-toolkit`）同時呈現名稱與 `#id`，並包 `<Link>` 點擊進編輯頁 |
 
+### 8 的補充：操作欄的外開連結按鈕
+
+操作欄若有「開啟 XXX」這類連到站外 / 前台網址的按鈕（例如 `#/profit-shop` 的「開啟商店」），
+且依資料狀態可能停用（slug 未設定 / 賣場已刪除 / shortcode 模式無直開入口……），一律拆成
+停用 / 可用兩條 render 分支，**不要**把 `href` 和 `disabled` 一起塞給同一顆 `<Button>`，也
+**不要**指望 `<Tooltip>` 直接包 disabled `<Button>` 就會顯示停用原因——兩者都是 antd v5 的
+component-level 陷阱，寫法與原因見 `react.rule.md` §2。
+
+參考實作：`pages/admin/ProfitShop/List/index.tsx` 的 `resolveOpenShopBlockedReason`。
+
 ### 9 的寫法
 
 ```tsx
