@@ -38,6 +38,31 @@ export type TProfitShopMode =
 export const PROFIT_SHOP_URL_PREFIX = 'profit-shop'
 
 /**
+ * 賣場 shortcode 的標籤名稱
+ *
+ * ⚠️ 必須與 PHP `add_shortcode()` 註冊的 tag 逐字一致
+ * （`inc/classes/Domains/ProfitShop/Infrastructure/WordPress/ProfitShopShortcode.php`）。
+ * 改 tag 時兩邊都要動 —— 而且不只是「兩邊同步」而已：站長已經貼進文章 / 頁面內容的
+ * 舊短碼是**存在 post_content 裡的純文字**，不會隨程式碼一起更名，改 tag 會讓那些
+ * 已發佈的頁面安靜地渲染不出賣場（WordPress 對未註冊的 shortcode 是原樣輸出，
+ * 不會報錯）。真要改名，PHP 端必須保留舊 tag 當 alias。
+ */
+export const PROFIT_SHOP_SHORTCODE_TAG = 'power_shop_profit_shop'
+
+/**
+ * 組出賣場的 shortcode 字串，形如 `[power_shop_profit_shop id="123"]`
+ *
+ * 抽成函式而非在各呼叫點自行拼接：attr 名稱（`id`）、雙引號、無多餘空白這些格式
+ * 細節必須與 PHP 端 `shortcode_atts()` 解析的形狀對齊，字串格式散落多處遲早分歧，
+ * 而且分歧的症狀是「複製出來的短碼貼上去沒反應」——沒有任何錯誤訊息可循。
+ *
+ * 用 `id` 而非 `slug` 當定位鍵是後端已定案的契約：id 是不變的 post ID，
+ * 站長改永久連結不會讓已貼出去的短碼失效（也因此**沒設 slug 的賣場一樣複製得出可用的短碼**）。
+ */
+export const buildProfitShopShortcode = (id: number): string =>
+	`[${PROFIT_SHOP_SHORTCODE_TAG} id="${id}"]`
+
+/**
  * 價格覆寫（三欄皆 nullable，null 代表「不覆寫該欄位」＝沿用商品原價）
  *
  * 對應 OpenAPI PriceOverride 與 PHP `Domain\ValueObject\PriceOverride`。

@@ -5,7 +5,10 @@
  * 由 ProfitShopRenderer::render_shop() 注入 $shop_for_template。
  * 走 theme get_header / get_footer，所以這裡只負責 main 內容區塊。
  *
- * 注意：本檔不可被直接訪問；只能透過 ProfitShopRenderer 載入。
+ * 也由 ProfitShopShortcode::render_template() 載入（額外注入 $is_shortcode_context = true），
+ * 此時外層標籤改用 <div>——見下方 $wrapper_tag 的說明。
+ *
+ * 注意：本檔不可被直接訪問；只能透過 ProfitShopRenderer / ProfitShopShortcode 載入。
  */
 
 declare(strict_types=1);
@@ -24,9 +27,17 @@ if ( $partner_term instanceof \WP_Term ) {
 }
 
 $is_draft_preview = ( 'publish' !== $shop->status() );
+
+// 外層標籤：獨立頁面用 <main>，shortcode 情境改用 <div>。
+// 理由：shortcode 嵌在宿主頁面內容裡，宿主頁面已經有自己的 <main>，
+// 而 HTML spec 規定一份文件內只能有一個非 hidden 的 main，巢狀 <main> 是無效 HTML。
+// $is_shortcode_context 未定義時（ProfitShopRenderer 的獨立頁面路徑）預設為 false，
+// 維持 <main> 行為 100% 不變。
+$is_shortcode_context = isset( $is_shortcode_context ) && true === $is_shortcode_context;
+$wrapper_tag          = $is_shortcode_context ? 'div' : 'main';
 ?>
 
-<main class="ps-profit-shop-front" style="max-width:1200px;margin:32px auto;padding:0 16px;">
+<<?php echo \esc_html( $wrapper_tag ); ?> class="ps-profit-shop-front" style="max-width:1200px;margin:32px auto;padding:0 16px;">
 
 	<?php if ( $is_draft_preview ) : ?>
 		<div style="background:#fff7e6;border:1px solid #ffd591;border-radius:6px;padding:12px 16px;margin-bottom:24px;color:#874d00;">
@@ -173,4 +184,4 @@ $is_draft_preview = ( 'publish' !== $shop->status() );
 	endif;
 	?>
 
-</main>
+</<?php echo \esc_html( $wrapper_tag ); ?>>

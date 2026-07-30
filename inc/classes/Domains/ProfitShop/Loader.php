@@ -18,6 +18,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\SingleProductPric
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\PartnerPortalRenderer;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopRenderer;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopShortcode;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRules;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\SystemClock;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
@@ -38,6 +39,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
  * Phase 4-C2：加上 AddToCartHook（注入 profit_shop_id）+ CartItemMetaDisplay（cart UI 分潤標記）。
  * Phase 5-A.1：加上 PageRateLimitService + WpClientIpProvider（前台頁面 IP-based DoS 緩解）。
  * Phase 9：加上 SingleProductPriceHook（WC 單品頁套用賣場覆寫價，含變體）。
+ * TD-13（前半）：加上 ProfitShopShortcode（[power_shop_profit_shop id="..."]，把賣場嵌入任意頁面）。
  */
 final class Loader {
 
@@ -68,6 +70,12 @@ final class Loader {
 			CptProfitShopRepository::instance(),
 			$page_rate_limit,
 			$ip_provider
+		);
+
+		// TD-13（前半）：shortcode 呈現模式的實際實作。與 ProfitShopRenderer 共用同一份 template，
+		// 但外層標籤改用 <div>（宿主頁面已有自己的 <main>），且不注入 SEO meta。
+		ProfitShopShortcode::instance(
+			CptProfitShopRepository::instance()
 		);
 
 		V2Api::instance();
