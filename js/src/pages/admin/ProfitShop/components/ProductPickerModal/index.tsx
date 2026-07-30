@@ -69,7 +69,7 @@ const ProductPickerBodyComponent = ({
 						record: TPickerRecord,
 						index: number
 					): ReactNode => (
-						<div className="tw-flex tw-items-center tw-gap-2">
+						<div className="flex items-center gap-2">
 							{originalRender?.(value, record, index) as ReactNode}
 							{existingIds.has(Number(record?.id)) ? (
 								<Tag color="green">已加入</Tag>

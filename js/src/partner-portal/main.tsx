@@ -20,6 +20,9 @@ import { ConfigProvider } from 'antd'
 import { createRoot } from 'react-dom/client'
 import { HashRouter } from 'react-router'
 
+// portal 跑在前台，拿不到 admin 的 CSS；自帶 Tailwind utility 才不依賴其他 plugin
+import '@/assets/styles/tailwind.css'
+
 import App from './App'
 import { AuthProvider } from './auth/AuthContext'
 import { ErrorBoundary } from './components/ErrorBoundary'

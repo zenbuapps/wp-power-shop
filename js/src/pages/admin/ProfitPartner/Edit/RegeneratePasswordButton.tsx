@@ -132,7 +132,7 @@ const RegeneratePasswordButtonComponent = ({
 				description={
 					<>
 						<div>夥伴的舊密碼將立即失效，新密碼僅會顯示一次。</div>
-						<div className="tw-mt-1 tw-text-xs tw-text-orange-500">
+						<div className="mt-1 text-xs text-orange-500">
 							所有舊登入 token 也會同步失效。
 						</div>
 					</>
@@ -169,15 +169,15 @@ const RegeneratePasswordButtonComponent = ({
 						<>
 							請立即複製並交給{partnerName ? `「${partnerName}」` : '夥伴'}
 							保管。
-							<div className="tw-mt-1 tw-text-xs">
+							<div className="mt-1 text-xs">
 								為您的安全，5 分鐘後將自動清除此視窗。
 							</div>
 						</>
 					}
-					className="tw-mb-4"
+					className="mb-4"
 				/>
 				{/* LOW-2: Input.Password 預設 mask；user 點 toggle 後才顯示明文 */}
-				<Space.Compact className="tw-w-full">
+				<Space.Compact className="w-full">
 					<Input.Password
 						value={plainPassword ?? ''}
 						readOnly

@@ -69,9 +69,7 @@ export const useProductPickerModal = ({
 				>
 					加入賣場 ({selectedCount})
 				</Button>
-				<span className="tw-text-sm tw-text-gray-500">
-					已選 {selectedCount} 筆
-				</span>
+				<span className="text-sm text-gray-500">已選 {selectedCount} 筆</span>
 			</>
 		),
 

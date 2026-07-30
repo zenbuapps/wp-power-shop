@@ -2,6 +2,7 @@
 import { ThemedLayoutV2, ThemedSiderV2, ErrorComponent } from '@refinedev/antd'
 import { Refine } from '@refinedev/core'
 import '@refinedev/antd/dist/reset.css'
+import '@/assets/styles/tailwind.css'
 import routerBindings, {
 	UnsavedChangesNotifier,
 	NavigateToResource,

@@ -99,7 +99,7 @@ const ResetButtonComponent = () => {
 					showIcon
 					message="此操作不可逆"
 					description="所有設定將還原為系統預設值，目前的自訂值會被覆寫。"
-					className="tw-mb-4"
+					className="mb-4"
 				/>
 				<Form layout="vertical" disabled={isLoading}>
 					<Item

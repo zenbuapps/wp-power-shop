@@ -1,0 +1,31 @@
+/**
+ * Tailwind entry —— 讓 tailwind.config.js 真正產出 utility
+ *
+ * 為什麼需要這個檔案：
+ * 本專案原本雖然裝了 `tailwindcss`、`postcss.config.cjs` 也掛了 tailwind plugin、
+ * `tailwind.config.js` 也寫得好好的，但**沒有任何 CSS 檔宣告 `@tailwind` directive**
+ * —— PostCSS 是掃到 directive 才把 utility 注入該位置的，沒有 directive 就等於
+ * 整份 config 沒有任何消費者，本專案產出 0 個 utility。
+ *
+ * 後果是：畫面上還能生效的 class，全部是 powerhouse plugin 的 `admin.min.css`
+ * （全域 enqueue）順便帶進來的副產品。而 powerhouse 的 Tailwind build 只掃 powerhouse
+ * 自己的原始碼，本專案能用哪些 class 因此變成不可控的外部相依 —— 寫了一個 powerhouse
+ * 剛好沒用到的 class（實測 `max-w-3xl` / `list-disc` / `pl-5` / `border-b` 都是），
+ * 它不會生效，也不會有任何 build 錯誤，只是樣式安靜地不見。
+ *
+ * 加上這個 entry 後，本專案自行產出所有實際用到的 utility，不再看別的 plugin 臉色。
+ *
+ * ── 為何只有 base + utilities，沒有 components ──
+ * `@tailwind components` 是給 `@apply` 自訂元件類別用的，本專案沒有這種用法。
+ * `@tailwind base` 在 `corePlugins.preflight: false`（見 tailwind.config.js）之下
+ * **不會**輸出 CSS reset，只留 `--tw-*` CSS 變數宣告 —— 那些變數是 shadow / ring /
+ * transform 這類 composite utility 的運作前提，不能省。
+ *
+ * ⚠️ class 命名：`tailwind.config.js` **沒有設 `prefix`**，所以 utility 一律是
+ * 無前綴的標準名稱（`mb-2`、`flex`）。只有 config `plugins` 裡手寫的那 6 個
+ * （`tw-hidden` / `tw-block` / `tw-inline` / `tw-fixed` / `tw-columns-1` / `tw-columns-2`）
+ * 才帶 `tw-` —— 它們的無前綴版本被 `blocklist` 擋掉，因為會與 WordPress 既有樣式衝突。
+ */
+
+@tailwind base;
+@tailwind utilities;

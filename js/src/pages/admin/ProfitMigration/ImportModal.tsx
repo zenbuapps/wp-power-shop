@@ -120,12 +120,12 @@ const ImportModalComponent = ({
 				description={
 					<>
 						遷入後 legacy 一頁賣場資料將轉換為 Profit Shop。
-						<div className="tw-mt-1 tw-text-xs">
+						<div className="mt-1 text-xs">
 							原資料雖會保留，但若需手動回退，需聯絡管理員處理。
 						</div>
 					</>
 				}
-				className="tw-mb-4"
+				className="mb-4"
 			/>
 
 			<Form layout="vertical" disabled={isLoading}>

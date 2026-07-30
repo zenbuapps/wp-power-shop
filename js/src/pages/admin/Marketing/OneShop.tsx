@@ -24,13 +24,13 @@ const OneShopPageComponent = () => {
 	const legacyAdminUrl = `${SITE_URL}/wp-admin/edit.php?post_type=power-shop`
 
 	return (
-		<div className="tw-max-w-3xl tw-mx-auto tw-py-6">
+		<div className="max-w-3xl mx-auto py-6">
 			<Title level={3}>一頁賣場</Title>
 			<Paragraph type="secondary">
 				選擇要使用的版本：推薦使用全新的 Profit Shop 系統。
 			</Paragraph>
 
-			<Space direction="vertical" size="large" className="tw-w-full">
+			<Space direction="vertical" size="large" className="w-full">
 				<Card
 					title={
 						<>
@@ -41,7 +41,7 @@ const OneShopPageComponent = () => {
 				>
 					<Paragraph>
 						全新的分潤賣場系統：
-						<ul className="tw-list-disc tw-pl-5 tw-mt-2 tw-mb-0">
+						<ul className="list-disc pl-5 mt-2 mb-0">
 							<li>支援多個分潤夥伴（partner）</li>
 							<li>支援價格覆寫（price override）與浮報數（inflated count）</li>
 							<li>內建 cart hook 防止前台價格竄改</li>

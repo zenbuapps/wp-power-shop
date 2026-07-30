@@ -212,7 +212,7 @@ const ProfitSettingsComponent = () => {
 							},
 						]}
 					>
-						<InputNumber min={0} max={100} className="tw-w-full" />
+						<InputNumber min={0} max={100} className="w-full" />
 					</Item>
 
 					<Item
