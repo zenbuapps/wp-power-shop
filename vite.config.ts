@@ -23,12 +23,16 @@ export default defineConfig({
 		// liveReload(__dirname + '/**/*.php'), // Optional, if you want to reload page on php changed
 
 		v4wp({
-			// Multi-entry：admin SPA 與 partner self-service portal 共用同一個 build pipeline。
+			// Multi-entry：admin SPA、partner self-service portal、分潤賣場前台
+			// 共用同一個 build pipeline。
 			// 使用 array 形式可保持 manifest key 為原始 entry path（既有 PHP enqueue 不需改動）。
 			// Phase 4-B1.2：partner portal 入口為 mock，由 4-B1.3 react-master 接續實作主體。
+			// 分潤賣場前台（profit-shop-front）：mount 點 #profit_shop_front_app，
+			// URL /profit-shop/{slug}/，與 admin SPA 完全隔離（不含 Refine / dataProvider）。
 			input: [
 				'js/src/main.tsx',
 				'js/src/partner-portal/main.tsx',
+				'js/src/profit-shop-front/main.tsx',
 			],
 			outDir: 'js/dist',
 		}),
