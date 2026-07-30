@@ -32,6 +32,18 @@ importers:
       '@blocknote/react':
         specifier: 0.30.0
         version: 0.30.0(@types/hast@3.0.4)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@dnd-kit/core':
+        specifier: 6.3.1
+        version: 6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@dnd-kit/modifiers':
+        specifier: 6.0.1
+        version: 6.0.1(@dnd-kit/core@6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
+      '@dnd-kit/sortable':
+        specifier: 7.0.2
+        version: 7.0.2(@dnd-kit/core@6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
+      '@dnd-kit/utilities':
+        specifier: 3.2.2
+        version: 3.2.2(react@18.3.1)
       '@refinedev/antd':
         specifier: 5.46.1
         version: 5.46.1(@refinedev/core@4.57.9(@tanstack/react-query@4.39.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(antd@5.26.1(luxon@3.7.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(dayjs@1.11.13)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)

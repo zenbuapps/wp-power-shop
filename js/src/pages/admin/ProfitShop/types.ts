@@ -26,6 +26,18 @@ export type TProfitShopMode =
 	(typeof PROFIT_SHOP_MODE)[keyof typeof PROFIT_SHOP_MODE]
 
 /**
+ * 賣場前台 URL 前綴（永久連結用）
+ *
+ * ⚠️ 必須與 PHP `RewriteRules::SHOP_REWRITE_PREFIX` 一致
+ * （`inc/classes/Domains/ProfitShop/Infrastructure/WordPress/RewriteRules.php:36`）。
+ * 前台網址形如 `{SITE_URL}/profit-shop/{slug}/`。改前綴時兩邊都要動。
+ *
+ * 注意這與 admin SPA 的 `#/profit-shop/...` 路由**同名但無關** —— 後者是
+ * `resources/index.tsx` 定義的前端路由，不是 WordPress rewrite。
+ */
+export const PROFIT_SHOP_URL_PREFIX = 'profit-shop'
+
+/**
  * 價格覆寫（三欄皆 nullable，null 代表「不覆寫該欄位」＝沿用商品原價）
  *
  * 對應 OpenAPI PriceOverride 與 PHP `Domain\ValueObject\PriceOverride`。

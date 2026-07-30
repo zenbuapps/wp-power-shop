@@ -208,11 +208,20 @@ const CHUNK_COUNT = 5
  */
 export type TShopItemProductInfo = TProductRecord
 
-/** 把 product_id 陣列切成固定 CHUNK_COUNT 塊，不足的塊為空陣列 */
+/**
+ * 把 product_id 陣列切成固定 CHUNK_COUNT 塊，不足的塊為空陣列
+ *
+ * ⚠️ **切塊前先排序**：`map` 是「id → 商品」的查表，結果與 items 的排列順序無關，
+ * 但 chunk 內容會直接進 react-query 的 queryKey。若照 items 原順序切，
+ * 使用者拖曳排序（商品集合沒變、只換位置）會讓 queryKey 變動 → 整批重新查詢，
+ * 表格閃一次 Skeleton 且類型 / 狀態 / 價格 / 庫存欄短暫變成「—」。
+ * 排序後，同一組 id 的任意排列都對應同一個 queryKey。
+ */
 const toChunks = (ids: number[]): number[][] => {
+	const sorted = [...ids].sort((a, b) => a - b)
 	const chunks: number[][] = []
 	for (let i = 0; i < CHUNK_COUNT; i++) {
-		chunks.push(ids.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE))
+		chunks.push(sorted.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE))
 	}
 	return chunks
 }

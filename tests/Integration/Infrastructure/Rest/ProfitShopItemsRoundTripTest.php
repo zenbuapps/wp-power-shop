@@ -442,6 +442,100 @@ final class ProfitShopItemsRoundTripTest extends TestCase {
 		$this->assertSame( 'not_found', $response->get_data()['code'] ?? null );
 	}
 
+	// ========== Rule: 後置（持久化）- items 的排列順序即賣場前台的商品顯示順序 ==========
+
+	/**
+	 * happy：items 陣列順序原樣保留（前台 template 依此順序渲染商品）
+	 *
+	 * 賣場編輯頁的商品表格支援拖曳排序，排序結果就是直接改變 items 陣列的排列。
+	 * 這條鎖住「送什麼順序、讀回來就是什麼順序」——若哪天 Hydrator / Repository
+	 * 改用 product_id 當 key 或中途 sort，拖曳排序會靜默失效（存檔成功但順序跑掉）。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_items_order_is_preserved_through_round_trip(): void {
+		$product_c  = $this->createSimpleProduct( [ 'name' => 'iPad Air', 'regular_price' => '777' ] );
+		$product_id_c = $product_c->get_id();
+
+		$shop_id = $this->create_shop_via_api( [], 'items-rt-order' );
+
+		$desired_order = [ $this->product_id_b, $product_id_c, $this->product_id_a ];
+
+		$response = $this->put_items(
+			$shop_id,
+			'items-rt-order',
+			array_map(
+				static fn( int $pid ): array => [
+					'product_id'     => $pid,
+					'inflated_count' => 0,
+					'override'       => [
+						'regular_price' => null,
+						'sale_price'    => null,
+						'signup_fee'    => null,
+					],
+				],
+				$desired_order
+			)
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+
+		$after = $this->get_shop( $shop_id );
+		$this->assertSame( 200, $after['status'] );
+
+		$get_items = $after['data']['items'] ?? [];
+		$this->assertCount( 3, $get_items, 'GET 應還原 3 筆 item（防空斷言）' );
+
+		$actual_order = array_map( static fn( array $item ): int => (int) $item['product_id'], $get_items );
+		$this->assertSame( $desired_order, $actual_order, 'items 讀回的順序必須與送出時完全一致' );
+	}
+
+	/**
+	 * happy：重新排序後再存一次，新順序取代舊順序（拖曳排序的直接契約）
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_reordered_items_persist_the_new_order(): void {
+		$shop_id = $this->create_shop_via_api( [], 'items-rt-reorder' );
+
+		$make_items = static fn( array $ids ): array => array_map(
+			static fn( int $pid ): array => [
+				'product_id'     => $pid,
+				'inflated_count' => 0,
+				'override'       => [
+					'regular_price' => null,
+					'sale_price'    => null,
+					'signup_fee'    => null,
+				],
+			],
+			$ids
+		);
+
+		$first_order = [ $this->product_id_a, $this->product_id_b ];
+		$this->assertSame( 200, $this->put_items( $shop_id, 'items-rt-reorder', $make_items( $first_order ) )->get_status() );
+
+		$before = $this->get_shop( $shop_id );
+		$this->assertSame(
+			$first_order,
+			array_map( static fn( array $item ): int => (int) $item['product_id'], $before['data']['items'] ?? [] ),
+			'測試前置：初始順序應為 [A, B]'
+		);
+
+		// 使用者在後台把 B 拖到 A 前面
+		$swapped_order = [ $this->product_id_b, $this->product_id_a ];
+		$this->assertSame( 200, $this->put_items( $shop_id, 'items-rt-reorder', $make_items( $swapped_order ) )->get_status() );
+
+		$after = $this->get_shop( $shop_id );
+		$this->assertSame( 200, $after['status'] );
+		$this->assertSame(
+			$swapped_order,
+			array_map( static fn( array $item ): int => (int) $item['product_id'], $after['data']['items'] ?? [] ),
+			'重新排序後讀回的順序必須是新順序 [B, A]'
+		);
+	}
+
 	// ========== Helpers ==========
 
 	/**

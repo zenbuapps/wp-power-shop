@@ -1,46 +1,70 @@
-import { ExportOutlined } from '@ant-design/icons'
-import {
-	Form,
-	Input,
-	InputNumber,
-	Radio,
-	Slider,
-	type FormInstance,
-	type FormRule,
-} from 'antd'
+import { Form, Input, Tabs, type FormInstance, type TabsProps } from 'antd'
 import { memo } from 'react'
 
-import { useEnv } from '@/hooks'
-import { PartnerSelector } from '@/pages/admin/ProfitPartner/components/PartnerSelector'
 import {
-	ItemsEditor,
-	validateItemsPriceOverride,
-} from '@/pages/admin/ProfitShop/components/ItemsEditor'
-import { SlugInput } from '@/pages/admin/ProfitShop/components/SlugInput'
+	AnalyticsTab,
+	BasicTab,
+	ItemsTab,
+	ProfitTab,
+} from '@/pages/admin/ProfitShop/components/tabs'
 import {
 	PROFIT_SHOP_MODE,
 	PROFIT_SHOP_STATUS,
 	type TProfitShop,
 } from '@/pages/admin/ProfitShop/types'
 
-const { Item } = Form
-
-/** 分潤比例驗證規則（Slider + InputNumber 兩個 Form.Item 共用） */
-const RATE_RULES: FormRule[] = [
-	{ required: true, message: '請輸入分潤比例' },
-	{
-		type: 'number',
-		min: 0,
-		max: 100,
-		message: '分潤比例需介於 0-100',
-	},
-]
-
 type TProfitShopFormProps = {
 	form: FormInstance // 受 antd Form 控制；由父層 useForm 傳入
 	record?: TProfitShop // 編輯模式：傳入目前 record，用於 currentSlug + items 預設值
 	submitting?: boolean // 建立 / 更新中（用於 disabled）
 	mode: 'create' | 'edit' // 4-A2：Create 模式不開放 ItemsEditor（建立時 items: []）
+	activeTab?: string // 受控 Tab（驗證失敗時父層切到出錯的那一頁）
+	onTabChange?: (key: string) => void
+}
+
+/** Tab key ↔ 欄位對映的單一真相（Tabs 定義也在本檔，兩者必須同步） */
+const FIELD_TO_TAB: Record<string, string> = {
+	title: 'basic',
+	slug: 'basic',
+	mode: 'basic',
+	status: 'basic',
+	partner_term_id: 'profit',
+	rate: 'profit',
+	items: 'items',
+}
+
+/** antd `validateFields()` reject 時的 error 形狀 */
+type TValidateError = {
+	errorFields?: { name: (string | number)[]; errors: string[] }[]
+}
+
+/**
+ * 這個 error 是不是 antd 的表單驗證失敗（而非後端錯誤）
+ */
+export const isFormValidationError = (err: unknown): err is TValidateError =>
+	!!err && 'object' === typeof err && 'errorFields' in err
+
+/**
+ * 把驗證錯誤換算成「該切到哪個 Tab」+「要提示什麼訊息」
+ *
+ * ⚠️ 這是「按了建立卻沒反應」的解方 —— 本表單有 2～4 個 Tab，`forceRender` 讓所有
+ * 欄位都會註冊並參與驗證，但**非 active 的 Tab pane 是 `display:none`**，
+ * 紅字錯誤提示使用者根本看不到。若父層又只是 `return` 掉驗證失敗，
+ * 畫面就完全沒有任何回饋（例：停在「分潤設定」按建立，其實是「基本設定」的
+ * slug 沒填）。所以驗證失敗時必須主動切頁 + 跳通知。
+ */
+export const resolveValidationFeedback = (
+	err: TValidateError
+): { tabKey?: string; messages: string[] } => {
+	const fields = err.errorFields ?? []
+	const messages = fields.flatMap((f) => f.errors ?? []).filter(Boolean)
+
+	// 取第一個對得上 Tab 的欄位；對不上（未來新增欄位忘了登記）就不切頁，只跳通知
+	const tabKey = fields
+		.map((f) => FIELD_TO_TAB[String(f.name?.[0] ?? '')])
+		.find(Boolean)
+
+	return { tabKey, messages }
 }
 
 /**
@@ -48,25 +72,55 @@ type TProfitShopFormProps = {
  *
  * Edit / Create 兩頁共用；不負責 submit，由父層處理 onFinish。
  *
- * 4-A2 變更：
- *   - partner_term_id：InputNumber → PartnerSelector（下拉選擇 + 搜尋）
- *   - items：唯讀 Tag list → ItemsEditor（僅 edit 模式啟用，create 仍寫死 [] 避免複雜度）
+ * 版型：對齊 `#/products/edit/:id`，以 Tabs 分頁組織欄位，
+ * 「發佈 / 草稿」開關則移到 Card footer（由父層 `footerButtons` 渲染）。
+ *
+ * ⚠️ 所有 Tab 一律 `forceRender` —— antd Tabs 預設只在點開時才 mount 該 pane，
+ * 未 mount 的 `Form.Item` 不會註冊到 form store，`validateFields()` 會**跳過**
+ * 那些必填欄位（例：使用者沒點開「分潤設定」就按儲存，`partner_term_id`
+ * 的 required 規則不會觸發，反而讓不完整的資料送到後端）。
  */
 const ProfitShopFormComponent = ({
 	form,
 	record,
 	submitting,
 	mode,
+	activeTab,
+	onTabChange,
 }: TProfitShopFormProps) => {
-	const { SITE_URL, KEBAB } = useEnv()
+	const isEdit = 'edit' === mode
 
-	/**
-	 * 分潤夥伴管理頁的完整 admin URL
-	 *
-	 * 用完整 URL（而非 Refine `<Link>`）才能 target="_blank" 開新分頁，
-	 * 讓使用者建完夥伴後回到本頁不遺失填到一半的表單內容。
-	 */
-	const partnerAdminUrl = `${SITE_URL}/wp-admin/admin.php?page=${KEBAB}#/profit-partner`
+	const items: TabsProps['items'] = [
+		{
+			key: 'basic',
+			label: '基本設定',
+			forceRender: true,
+			children: <BasicTab currentSlug={record?.slug} />,
+		},
+		{
+			key: 'profit',
+			label: '分潤設定',
+			forceRender: true,
+			children: <ProfitTab />,
+		},
+
+		// 建立賣場時 items 一律送 []，需先有 shop id 才能編輯商品覆寫
+		...(isEdit
+			? [
+					{
+						key: 'items',
+						label: '賣場商品',
+						forceRender: true,
+						children: <ItemsTab submitting={submitting} />,
+					},
+					{
+						key: 'analytics',
+						label: '銷售數據',
+						children: <AnalyticsTab />,
+					},
+				]
+			: []),
+	]
 
 	return (
 		<Form
@@ -79,106 +133,17 @@ const ProfitShopFormComponent = ({
 				rate: 10,
 			}}
 		>
-			<Item
-				name="title"
-				label="賣場名稱"
-				rules={[
-					{ required: true, message: '請輸入賣場名稱' },
-					{ max: 200, message: '長度不可超過 200 字元' },
-				]}
-			>
-				<Input placeholder="例：夏季限定夥伴賣場" />
-			</Item>
+			{/*
+			 * 狀態（發佈 / 草稿）由 Card footer 的 Switch 操作，但欄位本身必須在這裡註冊：
+			 * rc-field-form 的 `validateFields()` 只回傳**已註冊 Field** 的值，
+			 * 沒有這個隱藏 Item 的話 `values.status` 會是 undefined，
+			 * 使用者切了開關卻存不進去。
+			 */}
+			<Form.Item name="status" hidden>
+				<Input />
+			</Form.Item>
 
-			<Item
-				name="slug"
-				label="Slug（網址識別）"
-				rules={[
-					{ required: true, message: '請輸入 slug' },
-					{
-						pattern: /^[a-z0-9_-]+$/,
-						message: '僅允許小寫英文、數字、連字號（-）與底線（_）',
-					},
-				]}
-				extra="會經 5 類衝突檢查（保留字 / 站台 page / 既有賣場 / 夥伴 / 商品分類）"
-			>
-				<SlugInput currentSlug={record?.slug} />
-			</Item>
-
-			<Item
-				name="status"
-				label="狀態"
-				rules={[{ required: true, message: '請選擇狀態' }]}
-			>
-				<Radio.Group>
-					<Radio value={PROFIT_SHOP_STATUS.DRAFT}>草稿</Radio>
-					<Radio value={PROFIT_SHOP_STATUS.PUBLISH}>已上架</Radio>
-				</Radio.Group>
-			</Item>
-
-			<Item
-				name="mode"
-				label="呈現模式"
-				rules={[{ required: true, message: '請選擇呈現模式' }]}
-			>
-				<Radio.Group>
-					<Radio value={PROFIT_SHOP_MODE.PAGE}>獨立頁面</Radio>
-					<Radio value={PROFIT_SHOP_MODE.SHORTCODE}>Shortcode</Radio>
-				</Radio.Group>
-			</Item>
-
-			<Item
-				name="partner_term_id"
-				label="分潤夥伴"
-				rules={[
-					{ required: true, message: '請選擇分潤夥伴' },
-					{
-						type: 'number',
-						min: 1,
-						message: '請選擇有效的分潤夥伴',
-					},
-				]}
-				extra={
-					<>
-						若清單為空，請先到
-						<a href={partnerAdminUrl} target="_blank" rel="noopener noreferrer">
-							「分潤夥伴」
-							<ExportOutlined className="ml-1" />
-						</a>
-						頁面建立夥伴
-					</>
-				}
-			>
-				<PartnerSelector />
-			</Item>
-
-			<Item label="分潤比例">
-				<div className="flex items-center gap-4">
-					<Item name="rate" noStyle rules={RATE_RULES}>
-						<Slider className="flex-1" min={0} max={100} step={1} />
-					</Item>
-					<Item name="rate" noStyle rules={RATE_RULES}>
-						<InputNumber
-							min={0}
-							max={100}
-							step={1}
-							addonAfter="%"
-							style={{ width: 110 }}
-						/>
-					</Item>
-				</div>
-			</Item>
-
-			{mode === 'edit' && (
-				<Item
-					name="items"
-					label="賣場商品"
-					rules={[{ validator: validateItemsPriceOverride }]}
-					extra="可新增、移除商品；原價／特價覆寫留空代表沿用商品原價，填 0 代表免費贈品"
-				>
-					<ItemsEditor disabled={submitting} />
-				</Item>
-			)}
+			<Tabs items={items} activeKey={activeTab} onChange={onTabChange} />
 		</Form>
 	)
 }

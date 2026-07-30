@@ -1,10 +1,14 @@
 import { CheckCircleFilled, CloseCircleFilled } from '@ant-design/icons'
 import { useApiUrl, useCustom } from '@refinedev/core'
 import { Alert, Input, Spin } from 'antd'
+import { CopyText, useEnv } from 'antd-toolkit'
 import { debounce } from 'lodash-es'
 import { memo, useEffect, useMemo, useState } from 'react'
 
-import type { TSlugValidationOutput } from '@/pages/admin/ProfitShop/types'
+import {
+	PROFIT_SHOP_URL_PREFIX,
+	type TSlugValidationOutput,
+} from '@/pages/admin/ProfitShop/types'
 
 type TSlugInputProps = {
 	value?: string // 受 antd Form.Item 控制的目前值
@@ -12,6 +16,7 @@ type TSlugInputProps = {
 	currentSlug?: string // 跳過驗證的目前 slug（編輯模式：自己的 slug 不算衝突）
 	placeholder?: string
 	disabled?: boolean
+	showPermalink?: boolean // 顯示前台網址 addon + 複製鈕（僅「獨立頁面」模式，見 BasicTab）
 }
 
 /** Slug 格式 regex：小寫英數 + 連字號 / 底線（與後端 InvalidPartnerSlug 對齊） */
@@ -31,9 +36,14 @@ const SlugInputComponent = ({
 	currentSlug,
 	placeholder = 'my-shop',
 	disabled,
+	showPermalink = true,
 }: TSlugInputProps) => {
 	const apiUrl = useApiUrl('power-shop')
+	const { SITE_URL } = useEnv()
 	const [debouncedSlug, setDebouncedSlug] = useState<string>('')
+
+	// 與 `#/products/edit/:id` 的「永久連結」同款：前綴 addon + 尾端複製鈕
+	const shopBaseUrl = `${SITE_URL}/${PROFIT_SHOP_URL_PREFIX}`
 
 	// debounce 寫入 debouncedSlug，從而觸發 useCustom
 	const updateDebouncedSlug = useMemo(
@@ -103,10 +113,16 @@ const SlugInputComponent = ({
 				placeholder={placeholder}
 				disabled={disabled}
 				suffix={suffix}
+				addonBefore={showPermalink ? `${shopBaseUrl}/` : undefined}
+				addonAfter={
+					showPermalink ? (
+						<CopyText text={`${shopBaseUrl}/${value ?? ''}/`} />
+					) : undefined
+				}
 			/>
 			{!!debouncedSlug && !isFormatValid && (
 				<Alert
-					className="tw-mt-2"
+					className="mt-2"
 					type="error"
 					showIcon
 					message="Slug 格式錯誤"
@@ -115,12 +131,12 @@ const SlugInputComponent = ({
 			)}
 			{shouldQuery && !isFetching && conflicts.length > 0 && (
 				<Alert
-					className="tw-mt-2"
+					className="mt-2"
 					type="error"
 					showIcon
 					message={`與 ${conflicts.length} 個既有資源衝突`}
 					description={
-						<ul className="tw-m-0 tw-pl-4">
+						<ul className="m-0 pl-4">
 							{conflicts.map((c) => (
 								<li
 									key={`${c.conflict_kind}-${c.conflicting_slug}-${c.conflicting_id ?? 'null'}`}

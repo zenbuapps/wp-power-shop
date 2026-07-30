@@ -1,4 +1,24 @@
-import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
+import {
+	DeleteOutlined,
+	HolderOutlined,
+	InfoCircleOutlined,
+	PlusOutlined,
+} from '@ant-design/icons'
+import {
+	DndContext,
+	PointerSensor,
+	useSensor,
+	useSensors,
+	type DragEndEvent,
+} from '@dnd-kit/core'
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers'
+import {
+	SortableContext,
+	arrayMove,
+	useSortable,
+	verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import {
 	App,
 	Button,
@@ -18,7 +38,17 @@ import {
 	ProductStock,
 	POST_STATUS,
 } from 'antd-toolkit/wp'
-import { memo, useCallback, useMemo, type ComponentProps } from 'react'
+import {
+	createContext,
+	memo,
+	useCallback,
+	useContext,
+	useMemo,
+	useState,
+	type ComponentProps,
+	type CSSProperties,
+	type HTMLAttributes,
+} from 'react'
 
 import { TProductRecord } from '@/components/product/types'
 import { ProductPickerModal } from '@/pages/admin/ProfitShop/components/ProductPickerModal'
@@ -37,6 +67,9 @@ import type {
  */
 const SOFT_ITEM_LIMIT = 500
 
+/** 已加入商品表格的預設每頁筆數 */
+const DEFAULT_PAGE_SIZE = 20
+
 type TItemsEditorProps = {
 	value?: TShopItemRow[] // 受 antd Form.Item 控制的目前值
 	onChange?: (value: TShopItemRow[]) => void // 由 antd Form.Item 注入
@@ -44,7 +77,7 @@ type TItemsEditorProps = {
 }
 
 /** 商品資料補不到時，類型 / 狀態 / 價格 / 庫存欄一律顯示這個 */
-const DASH = <span className="tw-text-gray-400">—</span>
+const DASH = <span className="text-gray-400">—</span>
 
 /**
  * 收斂 antd-toolkit 對 `type` 欄位的型別宣告落差
@@ -112,6 +145,100 @@ export const validateItemsPriceOverride = async (
 	throw new Error(`商品 ${ids} 的特價覆寫不得高於原價覆寫`)
 }
 
+/** `useSortable` 回傳的把手事件綁定 */
+type TSortableListeners = ReturnType<typeof useSortable>['listeners']
+
+/**
+ * 把整列的拖曳把手綁定往下傳給把手欄
+ *
+ * antd Table 的 `components.body.row` 只能換掉 `<tr>`，無法把 props 塞進特定 `<td>`，
+ * 所以 `useSortable` 拿到的 `listeners` 只能靠 Context 傳給 DragHandle。
+ */
+const RowContext = createContext<{
+	setActivatorNodeRef?: (element: HTMLElement | null) => void
+	listeners?: TSortableListeners
+}>({})
+
+/**
+ * 拖曳把手
+ *
+ * **只有按住把手才能拖動整列** —— 列內有 InputNumber / 清除 / 移除按鈕，
+ * 若把 listeners 綁在整個 `<tr>` 上，PointerSensor 會攔截指標事件讓輸入框無法操作。
+ */
+const DragHandle = ({ disabled }: { disabled?: boolean }) => {
+	const { setActivatorNodeRef, listeners } = useContext(RowContext)
+	return (
+		<Button
+			type="text"
+			size="small"
+			icon={<HolderOutlined />}
+			style={{ cursor: disabled ? 'not-allowed' : 'move' }}
+			ref={setActivatorNodeRef}
+			disabled={disabled}
+			{...listeners}
+		/>
+	)
+}
+
+/** antd Table 傳給 body row 的 props（有資料的列才帶 `data-row-key`） */
+type TBodyRowProps = HTMLAttributes<HTMLTableRowElement> & {
+	'data-row-key'?: number
+}
+
+/** 可拖曳的 `<tr>`，僅用於真的有資料的列 */
+const SortableRow = ({
+	'data-row-key': rowKey,
+	...props
+}: TBodyRowProps & { 'data-row-key': number }) => {
+	const {
+		attributes,
+		listeners,
+		setNodeRef,
+		setActivatorNodeRef,
+		transform,
+		transition,
+		isDragging,
+	} = useSortable({ id: rowKey })
+
+	const style: CSSProperties = {
+		...props.style,
+		transform: CSS.Translate.toString(transform),
+		transition,
+		...(isDragging ? { position: 'relative', zIndex: 9999 } : {}),
+	}
+
+	const context = useMemo(
+		() => ({ setActivatorNodeRef, listeners }),
+		[setActivatorNodeRef, listeners]
+	)
+
+	return (
+		<RowContext.Provider value={context}>
+			<tr
+				{...props}
+				{...attributes}
+				data-row-key={rowKey}
+				ref={setNodeRef}
+				style={style}
+			/>
+		</RowContext.Provider>
+	)
+}
+
+/**
+ * body row 分流
+ *
+ * 空資料時 antd 仍會用這個元件渲染 `ant-table-placeholder` 那一列，
+ * 它**沒有** `data-row-key` —— 直接丟給 `useSortable` 會拿到 `id: undefined`，
+ * 所以在這層先擋掉（hooks 不能寫在條件式裡，因此拆成兩個元件）。
+ */
+const BodyRow = (props: TBodyRowProps) => {
+	if (undefined === props['data-row-key']) return <tr {...props} />
+	return (
+		<SortableRow {...(props as TBodyRowProps & { 'data-row-key': number })} />
+	)
+}
+
 /**
  * OverrideItem 列表編輯器
  *
@@ -139,6 +266,19 @@ const ItemsEditorComponent = ({
 	)
 
 	const enrich = useShopItemProducts(existingProductIds)
+
+	const [page, setPage] = useState(1)
+	const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+
+	/**
+	 * 夾住頁碼，不用 `useEffect` 同步
+	 *
+	 * 移除商品會讓總頁數縮水，若使用者正停在最後一頁（例如第 100 頁只剩 1 筆，
+	 * 移除後只剩 99 頁），非受控的 antd Table 會停在已不存在的頁碼顯示空表。
+	 * 這裡在 render 時直接夾住，比 `useEffect` 少一次 render，也不會閃空白。
+	 */
+	const maxPage = Math.max(1, Math.ceil(items.length / pageSize))
+	const currentPage = Math.min(page, maxPage)
 
 	/**
 	 * 逐列推導顯示狀態
@@ -221,6 +361,10 @@ const ItemsEditorComponent = ({
 			const next = [...items, ...toAdd]
 			onChange?.(next)
 
+			// 新列附加在末端，分頁後會落在最後一頁；直接跳過去，
+			// 否則使用者停在第 1 頁會以為「按了沒反應」
+			setPage(Math.ceil(next.length / pageSize))
+
 			notification.success({ message: `已加入 ${toAdd.length} 筆` })
 
 			if (next.length > SOFT_ITEM_LIMIT) {
@@ -231,7 +375,7 @@ const ItemsEditorComponent = ({
 				})
 			}
 		},
-		[items, onChange, notification]
+		[items, onChange, notification, pageSize]
 	)
 
 	const picker = useProductPickerModal({
@@ -265,7 +409,59 @@ const ItemsEditorComponent = ({
 		)
 	}
 
+	/**
+	 * 拖曳感測器
+	 *
+	 * `distance: 1` 讓「單純點擊把手」不會被判定為拖曳，
+	 * 避免在把手上誤觸時整列跳動。
+	 */
+	const sensors = useSensors(
+		useSensor(PointerSensor, { activationConstraint: { distance: 1 } })
+	)
+
+	/**
+	 * 當前頁的列
+	 *
+	 * `SortableContext` 只能認得畫面上實際渲染的列，所以要跟 Table 的分頁切齊 ——
+	 * 這也代表**拖曳只能在同一頁內進行**（跨頁請先調整每頁筆數）。
+	 */
+	const pagedItems = useMemo(
+		() => items.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+		[items, currentPage, pageSize]
+	)
+
+	const sortableIds = useMemo(
+		() => pagedItems.map((it) => it.product_id),
+		[pagedItems]
+	)
+
+	/**
+	 * 套用拖曳結果
+	 *
+	 * index 一律**回全域 `items` 陣列查**（product_id 唯一），不是頁內相對位置 ——
+	 * 這樣不必自己換算分頁 offset，也不會在第 2 頁以後算錯位置。
+	 */
+	const handleDragEnd = useCallback(
+		({ active, over }: DragEndEvent) => {
+			if (!over || active.id === over.id) return
+
+			const from = items.findIndex((it) => it.product_id === Number(active.id))
+			const to = items.findIndex((it) => it.product_id === Number(over.id))
+			if (from < 0 || to < 0) return
+
+			onChange?.(arrayMove(items, from, to))
+		},
+		[items, onChange]
+	)
+
 	const columns: TableProps<TShopItemRow>['columns'] = [
+		{
+			title: '排序',
+			key: 'sort',
+			width: 60,
+			align: 'center',
+			render: () => <DragHandle disabled={disabled} />,
+		},
 		{
 			title: '商品名稱',
 			dataIndex: 'product_id',
@@ -279,14 +475,14 @@ const ItemsEditorComponent = ({
 
 				return (
 					<div>
-						<div className="tw-font-medium">
+						<div className="font-medium">
 							{'pending' === state ? (
 								<Skeleton.Input active size="small" style={{ width: 140 }} />
 							) : (
 								(record._name ?? `#${productId}`)
 							)}
 						</div>
-						<div className="tw-text-xs tw-text-gray-500">
+						<div className="text-xs text-gray-500">
 							<Tag bordered={false}>#{productId}</Tag>
 							{record._sku ? <code>{record._sku}</code> : null}
 							{'missing' === state ? <Tag color="red">商品已失效</Tag> : null}
@@ -345,36 +541,40 @@ const ItemsEditorComponent = ({
 				const { regular_price: regular, sale_price: sale } = record.override
 				const invalid = isSaleOverRegular(record.override)
 				return (
-					<div className="tw-flex tw-flex-col tw-gap-1">
+					<div>
+						<div className="mb-2">
+							<Space size={4}>
+								<InputNumber
+									size="small"
+									min={0}
+									prefix="原價"
+									value={toInputValue(regular)}
+									placeholder="沿用原價"
+									onChange={(v) =>
+										handlePatchOverride(record.product_id, {
+											regular_price: toPriceString(v),
+										})
+									}
+									disabled={disabled}
+									style={{ width: 150 }}
+								/>
+								<Button
+									size="small"
+									type="link"
+									onClick={() =>
+										handlePatchOverride(record.product_id, {
+											regular_price: null,
+										})
+									}
+									disabled={disabled || null === regular}
+								>
+									清除
+								</Button>
+							</Space>
+						</div>
 						<Space size={4}>
 							<InputNumber
-								min={0}
-								prefix="原價"
-								value={toInputValue(regular)}
-								placeholder="沿用原價"
-								onChange={(v) =>
-									handlePatchOverride(record.product_id, {
-										regular_price: toPriceString(v),
-									})
-								}
-								disabled={disabled}
-								style={{ width: 150 }}
-							/>
-							<Button
 								size="small"
-								type="link"
-								onClick={() =>
-									handlePatchOverride(record.product_id, {
-										regular_price: null,
-									})
-								}
-								disabled={disabled || null === regular}
-							>
-								清除
-							</Button>
-						</Space>
-						<Space size={4}>
-							<InputNumber
 								min={0}
 								prefix="特價"
 								value={toInputValue(sale)}
@@ -400,7 +600,7 @@ const ItemsEditorComponent = ({
 							</Button>
 						</Space>
 						{invalid ? (
-							<div className="tw-text-xs tw-text-red-500">不得高於原價</div>
+							<div className="text-xs text-red-500 mt-1">不得高於原價</div>
 						) : null}
 					</div>
 				)
@@ -408,16 +608,18 @@ const ItemsEditorComponent = ({
 		},
 		{
 			title: (
-				<Tooltip title="前台會顯示 真實購買人數 + 灌水購買人數">
-					<span className="tw-cursor-help tw-border-b tw-border-dashed">
-						灌水購買人數
-					</span>
-				</Tooltip>
+				<>
+					灌水購買人數
+					<Tooltip title="前台會顯示 真實購買人數 + 灌水購買人數">
+						<InfoCircleOutlined className="ml-1 text-gray-400" />
+					</Tooltip>
+				</>
 			),
 			dataIndex: 'inflated_count',
 			width: 170,
 			render: (n: number, record) => (
 				<InputNumber
+					size="small"
 					min={0}
 					value={n}
 					onChange={(v) =>
@@ -451,7 +653,7 @@ const ItemsEditorComponent = ({
 	]
 
 	return (
-		<div className="tw-flex tw-flex-col tw-gap-3">
+		<div className="flex flex-col gap-3">
 			<div className="mb-4">
 				<Button
 					type="primary"
@@ -470,22 +672,55 @@ const ItemsEditorComponent = ({
 				existingIds={picker.existingIds}
 			/>
 
-			<Table<TShopItemRow>
-				rowKey="product_id"
-				dataSource={items}
-				columns={columns}
-				pagination={false}
-				size="small"
-				scroll={{ x: 1330 }}
-				locale={{
-					emptyText: (
-						<Empty
-							image={Empty.PRESENTED_IMAGE_SIMPLE}
-							description="尚未加入任何商品"
-						/>
-					),
-				}}
-			/>
+			{items.length > 0 ? (
+				<div className="text-xs text-gray-500">
+					拖曳最左側的
+					<HolderOutlined className="mx-1" />
+					把手可調整商品順序，此順序即賣場前台的商品排列順序（僅能在同一頁內拖曳，跨頁請先加大每頁筆數）。
+				</div>
+			) : null}
+
+			<DndContext
+				sensors={sensors}
+				modifiers={[restrictToVerticalAxis]}
+				onDragEnd={handleDragEnd}
+			>
+				<SortableContext
+					items={sortableIds}
+					strategy={verticalListSortingStrategy}
+					disabled={disabled}
+				>
+					<Table<TShopItemRow>
+						rowKey="product_id"
+						dataSource={items}
+						columns={columns}
+						components={{ body: { row: BodyRow } }}
+						pagination={{
+							current: currentPage,
+							pageSize,
+							total: items.length,
+							size: 'small',
+							showSizeChanger: true,
+							pageSizeOptions: [20, 50, 100],
+							showTotal: (total) => `共 ${total} 筆商品`,
+							onChange: (nextPage, nextPageSize) => {
+								setPage(nextPage)
+								if (nextPageSize) setPageSize(nextPageSize)
+							},
+						}}
+						size="small"
+						scroll={{ x: 1390 }}
+						locale={{
+							emptyText: (
+								<Empty
+									image={Empty.PRESENTED_IMAGE_SIMPLE}
+									description="尚未加入任何商品"
+								/>
+							),
+						}}
+					/>
+				</SortableContext>
+			</DndContext>
 		</div>
 	)
 }

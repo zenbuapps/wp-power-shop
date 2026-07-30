@@ -1,15 +1,20 @@
 import { Edit } from '@refinedev/antd'
 import { useParsed } from '@refinedev/core'
-import { App, Form, Skeleton, Tag } from 'antd'
-import { memo, useEffect, useRef } from 'react'
+import { App, Form, Skeleton, Switch, Tag } from 'antd'
+import { memo, useEffect, useRef, useState } from 'react'
 
-import { ProfitShopForm } from '@/pages/admin/ProfitShop/components/ProfitShopForm'
+import {
+	ProfitShopForm,
+	isFormValidationError,
+	resolveValidationFeedback,
+} from '@/pages/admin/ProfitShop/components/ProfitShopForm'
 import { ShopActionsButtons } from '@/pages/admin/ProfitShop/Edit/ShopActionsButtons'
 import {
 	useProfitShopOne,
 	useProfitShopUpdate,
 } from '@/pages/admin/ProfitShop/hooks'
 import {
+	PROFIT_SHOP_STATUS,
 	type TOverrideItemInput,
 	type TProfitShop,
 	type TProfitShopInput,
@@ -35,7 +40,22 @@ const EditComponent = () => {
 	const { data, isLoading, isFetching } = useProfitShopOne(id)
 	const updater = useProfitShopUpdate()
 
+	// 受控 Tab：驗證失敗時要能主動切到出錯的那一頁（見 ProfitShopForm 的 resolveValidationFeedback）
+	const [activeTab, setActiveTab] = useState('basic')
+
 	const record: TProfitShop | undefined = data?.data?.data
+
+	/**
+	 * footer 的「發佈 / 草稿」開關值
+	 *
+	 * 刻意**不**在 footer 另包一個 `<Form form={form}>` 來掛 `Form.Item`：
+	 * rc-field-form 每次 render 都會用該 `<Form>` 的 `initialValues` 覆寫 store 的
+	 * initial 值，第二個沒帶 `initialValues` 的 Form 會把 `ProfitShopForm` 設好的
+	 * 預設值清成 undefined。改用 `useWatch` 讀 + `setFieldValue` 寫，
+	 * 值一樣進同一個 form store，送出時 `values.status` 照樣拿得到。
+	 */
+	const watchedStatus = Form.useWatch('status', form)
+	const status = watchedStatus ?? record?.status
 
 	// 防止 React Query refetch（window focus / staleTime 過期）後 record reference 變更，
 	// 觸發 useEffect 覆蓋使用者正在編輯中的內容。
@@ -104,8 +124,23 @@ const EditComponent = () => {
 				description: `#${record.id} ${values.title ?? ''}`,
 			})
 		} catch (err) {
-			// antd Form.validateFields 失敗時 err 會帶 errorFields，不視為後端錯誤
-			if (err && typeof err === 'object' && 'errorFields' in err) return
+			/*
+			 * antd `validateFields()` 失敗不是後端錯誤，但**不能靜默 return** ——
+			 * 欄位分散在多個 Tab，非 active 的 pane 是 display:none，紅字提示看不到，
+			 * 使用者只會覺得「按了儲存沒反應」。主動切到出錯的 Tab 並跳通知。
+			 */
+			if (isFormValidationError(err)) {
+				const { tabKey, messages } = resolveValidationFeedback(err)
+				if (tabKey) setActiveTab(tabKey)
+				notification.warning({
+					message: '尚有欄位未填寫',
+					description: messages.length
+						? messages.join('、')
+						: '請檢查各分頁的必填欄位',
+				})
+				return
+			}
+
 			const mapped = mapProfitShopException(err)
 			if (mapped.fieldErrors) {
 				const fields = Object.entries(mapped.fieldErrors).map(
@@ -186,6 +221,24 @@ const EditComponent = () => {
 			headerButtons={() =>
 				record ? <ShopActionsButtons shop={record} /> : null
 			}
+			footerButtons={({ defaultButtons }) => (
+				<>
+					<Switch
+						className="mr-4"
+						checkedChildren="發佈"
+						unCheckedChildren="草稿"
+						checked={PROFIT_SHOP_STATUS.PUBLISH === status}
+						disabled={!record || updater.isLoading}
+						onChange={(checked) =>
+							form.setFieldValue(
+								'status',
+								checked ? PROFIT_SHOP_STATUS.PUBLISH : PROFIT_SHOP_STATUS.DRAFT
+							)
+						}
+					/>
+					{defaultButtons}
+				</>
+			)}
 			goBack={undefined}
 			footerButtonProps={{}}
 			recordItemId={record?.id}
@@ -200,6 +253,8 @@ const EditComponent = () => {
 					record={record}
 					submitting={updater.isLoading}
 					mode="edit"
+					activeTab={activeTab}
+					onTabChange={setActiveTab}
 				/>
 			)}
 		</Edit>
