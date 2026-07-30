@@ -52,13 +52,24 @@
 
 ### 8 的補充：操作欄的外開連結按鈕
 
-操作欄若有「開啟 XXX」這類連到站外 / 前台網址的按鈕（例如 `#/profit-shop` 的「開啟商店」），
-且依資料狀態可能停用（slug 未設定 / 賣場已刪除 / shortcode 模式無直開入口……），一律拆成
-停用 / 可用兩條 render 分支，**不要**把 `href` 和 `disabled` 一起塞給同一顆 `<Button>`，也
-**不要**指望 `<Tooltip>` 直接包 disabled `<Button>` 就會顯示停用原因——兩者都是 antd v5 的
-component-level 陷阱，寫法與原因見 `react.rule.md` §2。
+操作欄若有「開啟 XXX」這類連到站外 / 前台網址的按鈕（例如 `#/profit-shop` 的「開啟」），
+且依資料狀態可能停用（slug 未設定 / 賣場已刪除……），一律拆成停用 / 可用兩條 render 分支，
+**不要**把 `href` 和 `disabled` 一起塞給同一顆 `<Button>`，也**不要**指望 `<Tooltip>` 直接
+包 disabled `<Button>` 就會顯示停用原因——兩者都是 antd v5 的 component-level 陷阱，
+寫法與原因見 `react.rule.md` §2。
 
-參考實作：`pages/admin/ProfitShop/List/index.tsx` 的 `resolveOpenShopBlockedReason`。
+**同一個操作欄位置依資料狀態渲染「不同動作」時，抽成一個 `renderPrimaryAction(record)`
+函式**，不要在 JSX 裡塞多層三元運算。`#/profit-shop` 是現成範例：獨立頁面模式渲染「開啟」
+（連前台網址），Shortcode 模式渲染「複製」（複製 `[power_shop_profit_shop id="…"]` 短碼），
+兩者各自有獨立的停用判斷函式。
+
+⚠️ **各動作的停用條件要分開判斷、不要為了 DRY 併成一個函式**——它們看起來高度相似，
+但差異點往往正是關鍵：`resolveOpenShopBlockedReason` 檢查 slug（沒 slug 組不出網址），
+`resolveCopyShortcodeBlockedReason` **刻意不檢查 slug**（短碼以 `id` 定位，沒設永久連結
+一樣複製得出可用的短碼）。併成一個函式會讓「沒設 slug 的 shortcode 賣場」白白失去複製入口。
+
+參考實作：`pages/admin/ProfitShop/List/index.tsx` 的 `renderPrimaryAction` /
+`resolveOpenShopBlockedReason` / `resolveCopyShortcodeBlockedReason`。
 
 ### 9 的寫法
 

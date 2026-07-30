@@ -50,7 +50,7 @@ pnpm release:major
 9. **Don't** remove the Enqueue Guard (`General::in_url(['page=power-shop'])`)
 10. **Don't** 在 ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings 用 `useTable` / `useForm`（後端 `{code, data}` 與 antd-toolkit dataProvider shape 不相容）—— 用 `useCustom` / `useCustomMutation` 並明確指定 `dataProviderName: 'power-shop'`
 11. **Partner self-service portal** 是**獨立 SPA bundle**（mount 點 `#profit_partner_portal`，URL `/profit-report/{slug}/`），與 admin SPA 完全隔離。Auth 走 cookie + sessionStorage metadata（永不存 token）；不用 Refine / dataProvider，直接 axios + `useCustom`/`useCustomMutation`；不打包 admin（grep `App1` / `Refine` 0 命中為驗收）。
-12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**（**非 React**）。原因：customer-facing + SEO（自然流量重點）+ 不破壞 WC cart / checkout 既有流程。AddToCart 用 **query string `profit_shop_id`** + WC `woocommerce_add_cart_item_data` filter 在 cart_item_data 注入分潤標記，再交給 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。
+12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**（**非 React**）。原因：customer-facing + SEO（自然流量重點）+ 不破壞 WC cart / checkout 既有流程。AddToCart 用 **query string `profit_shop_id`** + WC `woocommerce_add_cart_item_data` filter 在 cart_item_data 注入分潤標記，再交給 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。**Shortcode 呈現模式**另有 `[power_shop_profit_shop id="{post_id}"]`（`ProfitShopShortcode`，與上述 template 共用同一份，靠 `$is_shortcode_context` 旗標把外層 `<main>` 換成 `<div>`）；⚠️ 但 shortcode 模式的賣場**公開網址仍然開得起來**（`ProfitShopRenderer` 不檢查 `mode`），`BasicTab.tsx` 的據實告知警語不可移除，詳見 `profit-shop.rule.md` §7 與 `specs/tech-debt.md` TD-13。
 13. **Always** 讓 admin 列表頁遵循 `.claude/rules/admin-list-ui.rule.md` 的「篩選卡片 + 實體列表 & 新增按鈕」標準版型（基準範本 `#/products`）：兩張 `antd-toolkit` 的 `Card`、新增按鈕在列表卡片內 Table 之上、Table 鋪 `defaultTableProps` + `getDefaultPaginationProps({label})`。**Don't** 用 Refine `<List>` 當列表頁外框、**Don't** 用 `antd` 的 `Card`。
 14. **Don't** 假設 `pnpm lint` 存在——實際腳本是 `pnpm lint:ts`（含 `--fix`）與 `pnpm lint:php`（含 `phpcbf`，會改檔案）；CI / agent 唯讀檢查用 `npx eslint "js/src/**/*.{ts,tsx}"`（不加 `--fix`）與 `composer lint`。
 15. **Don't** 把 antd `<Form>`（尤其 `type="submit"` 按鈕）直接放進 `antd-toolkit` 的 `SimpleModal` 而不處理事件冒泡——遮罩對所有冒泡 click 呼叫 `preventDefault()`，會連帶取消表單送出且無任何錯誤訊息。修法與清單見 `react.rule.md` §6.4 與 `admin-list-ui.rule.md` §7。
@@ -67,7 +67,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性）。Phase 7 / 8 / 9 尚未 commit（實作變更見 `git status`），已知問題與技術債見 `specs/tech-debt.md`。
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式可實際嵌入頁面）。Phase 7 / 8 / 9 **已全部 commit**（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）。已知問題與技術債見 `specs/tech-debt.md`。
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 

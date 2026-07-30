@@ -494,29 +494,70 @@ Y 尚未實作，Y 做完後必須回來改這裡」，讓下一個動到 Y 的�
 
 前端拖曳實作與分頁限制見 `react.rule.md` §6.5「`ItemsEditor` 商品拖曳排序」。
 
-### Shortcode 模式目前沒有實作（只是一個 DB 標記）
+### Shortcode 模式：短碼已可用，但公開網址**仍然開得起來**（TD-13 只解決一半）
 
-`ShopMode::SHORTCODE` 這個 enum 值可以存、可以讀，但**整個 `inc/` 沒有任何
-`add_shortcode()` 註冊**，`ProfitShopRenderer::maybe_render` 也**完全不檢查 `mode`**
-（只看 slug 與 status）。所以現階段：
+`ProfitShopShortcode`（`Infrastructure/WordPress/ProfitShopShortcode.php`）註冊
+`[power_shop_profit_shop id="{post_id}"]`，站長可把賣場商品列表嵌入任意頁面內容。
+`#/profit-shop` 列表頁對 shortcode 模式的賣場顯示「複製」按鈕（而非「開啟」），
+按下即複製這串短碼。
 
-- Shortcode 模式的賣場**拿不到任何可用的 shortcode**
-- `/profit-shop/{slug}/` 公開網址照樣開得起來、照樣被索引
-- 行為與「獨立頁面」100% 相同
+**但 TD-13 只解決了前半**。`ProfitShopRenderer::maybe_render` 依然**完全不檢查
+`mode`**（只看 slug 與 status），所以：
 
-`BasicTab.tsx` 因此以警語**據實告知**站長「Shortcode 模式仍會保留公開網址」——
-**不要**為了 UI 好看把永久連結欄位藏起來，那會讓站長誤以為賣場沒有對外入口。
-補完這個功能需要兩件事（Renderer 對 shortcode 回 404 + 實作 `add_shortcode` 並在後台
-提供可複製字串），已登記為 `specs/tech-debt.md` TD-13。
+| | 現況 |
+|---|---|
+| 短碼可用性 | ✅ 已實作，貼進頁面能渲染 |
+| `/profit-shop/{slug}/` 公開網址 | ⚠️ **仍然開得起來、仍會被搜尋引擎索引** |
 
-`#/profit-shop` 列表頁的「開啟商店」按鈕（`List/index.tsx` 的
-`resolveOpenShopBlockedReason`）遵循同一條紀律：shortcode 賣場會停用這顆按鈕，但停用
-原因刻意寫成「Shortcode 模式的賣場以短碼嵌入頁面呈現，如需直接開啟公開網址請改為獨立頁面
-模式」，**不寫**「沒有前台網址」。停用只是拿掉「直接開啟」這個 UI 捷徑，`/profit-shop/{slug}/`
-網址本身**仍然開得起來、也仍會被索引**（見上）——UI 入口有無，與網址本身是否存在，是兩件
-不能混為一談的事。`BasicTab.tsx` 的警語（頁面內據實告知）與列表頁按鈕的停用文案（列表頁不
-提供捷徑）是同一條紀律的兩種呈現，未來若補完 TD-13（Renderer 對 shortcode 回 404），這顆
-按鈕的停用邏輯與文案都要一併重新檢視。
+刻意不一起做 Renderer 的 mode 檢查：那會讓**既有已上線**的 shortcode 模式賣場前台網址
+突然變 404，blast radius 遠大於本次需求。`specs/tech-debt.md` TD-13 已更新為「部分解決」。
+
+因此 `BasicTab.tsx` 那句「Shortcode 模式仍會保留公開網址」的警語**依然成立、不可移除**
+——**不要**因為列表頁現在有「複製」按鈕、看起來功能完整了，就把它當成過時文案清掉。
+UI 入口有無，與網址本身是否存在，是兩件不能混為一談的事（同一條紀律的兩種呈現：
+`BasicTab` 在頁面內據實告知網址仍存在，列表頁只是不提供「直接開啟」的捷徑）。
+
+**兩個 resolve 函式刻意不合併**（`List/index.tsx`）：
+
+| 函式 | 檢查項 | 為什麼不同 |
+|------|--------|-----------|
+| `resolveOpenShopBlockedReason` | 無 slug／已 trash | 「開啟」需要組出 `/profit-shop/{slug}/`，沒 slug 就組不出網址 |
+| `resolveCopyShortcodeBlockedReason` | **只**檢查已 trash | 短碼以 **`id`** 定位賣場，**沒設 slug 的賣場一樣複製得出可用的短碼** |
+
+看起來 80% 相同，但那個 slug 條件是**唯一且關鍵**的差異，為了 DRY 併成一個函式會讓
+「沒設永久連結的 shortcode 賣場」白白失去複製入口。
+
+**為何短碼用 `id` 而非 `slug`**：id 是不變的 post ID；slug 可被站長隨時改動，而**已經貼進
+post_content 的短碼是純文字、不會隨之更新**。同理，`ProfitShopShortcode::TAG` 這個 tag
+字串一旦改名，所有已發佈頁面裡的舊短碼會安靜地渲染不出東西——WordPress 對未註冊的
+shortcode 是**原樣輸出純文字、不報錯**。真要改 tag 必須在 PHP 端保留舊 tag 當 alias。
+前端 `PROFIT_SHOP_SHORTCODE_TAG`（`types.ts`）與此常數是同一個硬契約的兩端，改一邊必須改另一邊。
+
+**共用 template 的 `<main>` / `<div>` 旗標**：`templates/profit-shop-front.php` 同時服務
+`ProfitShopRenderer`（獨立頁面）與 `ProfitShopShortcode`（嵌入宿主頁面），靠
+`$is_shortcode_context` 決定外層標籤。**未定義時預設 `false`**，`ProfitShopRenderer`
+路徑的輸出因此一個字元都沒變。理由是 HTML spec 規定一份文件內只能有一個非 hidden 的
+`<main>`，shortcode 情境宿主頁面已經有自己的 `<main>`，巢狀是無效 HTML。
+`ProfitShopShortcodeTest` 有兩條測試分別鎖死兩個方向
+（`test_output_uses_div_wrapper_and_never_main` 與
+`test_template_defaults_to_main_wrapper_without_flag`），避免日後有人「順手統一」成單一標籤。
+
+**shortcode callback 的四條紀律**：
+
+1. **一律 `return` 字串、永不 `echo`**——shortcode 若直接輸出，內容會跑到頁面最前面
+   （`the_content` 之外）。實作用 `ob_start()` + `require` + `ob_get_clean()`，
+   且 `require` 包在 try/catch 內，渲染拋例外時 `ob_end_clean()` 收掉緩衝並回空字串，
+   不讓宿主頁面壞掉
+2. **id 驗證與 `AddToCartHook` 同一條紀律**：`ctype_digit` 純數字檢查 + 額外拒前導零
+   （`'007'`），避免「看起來像數字」的字串被 `(int)` 悄悄轉成合法 ID
+3. **status 可見性與 `ProfitShopRenderer::maybe_render` 逐字一致**：publish 對外可見；
+   非 publish 只有 `current_user_can( 'edit_post', $shop->id )` 為 true 才渲染
+   （**特定 post id** 的 ownership 檢查，不是 `edit_posts`）
+4. **失敗訊息不洩漏賣場存在性**：一般訪客一律拿到空字串；有 `edit_posts` 能力者才看得到
+   除錯提示，且「找不到 / 已刪除」與「未發佈且無預覽權限」**共用同一句訊息**——否則
+   只有 `edit_posts`（例如 Author）的使用者能靠訊息差異推斷出草稿賣場的存在
+
+不注入 SEO meta（`<title>` / canonical）：宿主頁面自己有，注入會造成雙 title。
 
 ### Partner 夥伴圖片：只持久化 image_id，image_url 是唯讀衍生欄位
 

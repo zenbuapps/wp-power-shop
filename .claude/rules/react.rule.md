@@ -54,7 +54,7 @@ Ant Design v5 的 `App.useApp()` 要拿到可用的 `notification` / `message` /
 
 **新元件開發規範**：任何要用 `App.useApp()` 拿 `notification` / `message` / `modal` 的元件，**先確認掛載點的 `main.tsx` 有 `<AntdApp>` provider**（admin SPA 與 partner-portal SPA 是各自獨立的 React root，要分別確認各自的 `main.tsx`）。若新增第三個獨立 SPA bundle，這是**必須**補上的 provider，不是可選項。
 
-### ⚠️ antd v5 停用按鈕：`<Tooltip>` 包 disabled `<Button>` 不顯示 + `href`/`disabled` 別只信 library 內部行為（`ProfitShop/List`「開啟商店」按鈕踩坑）
+### ⚠️ antd v5 停用按鈕：`<Tooltip>` 包 disabled `<Button>` 不顯示 + `href`/`disabled` 別只信 library 內部行為（`ProfitShop/List`「開啟」按鈕踩坑）
 
 同一顆按鈕、兩個各自獨立、都要記住的坑。
 
@@ -68,7 +68,7 @@ antd v5 拿掉了 v4 的 disabled 相容包裝（`node_modules/antd/lib/tooltip/
 <Tooltip title={blockedReason}>
   <span className="inline-block cursor-not-allowed">
     <Button disabled className="pointer-events-none" icon={<ExportOutlined />}>
-      開啟商店
+      開啟
     </Button>
   </span>
 </Tooltip>
@@ -80,7 +80,7 @@ antd v5 拿掉了 v4 的 disabled 相容包裝（`node_modules/antd/lib/tooltip/
 
 antd 5.26.1 的 `Button`（`node_modules/antd/lib/button/button.js`）偵測到 `href` 時會渲染成 `<a>`，且**確實**會在 `disabled` 時把 `href` 抽掉（L258：`href: mergedDisabled ? undefined : linkButtonRestProps.href`）；同檔案的 `handleClick`（L188）另外對 disabled / loading 呼叫 `e.preventDefault()`，旁邊有一句註解引用 `github.com/ant-design/ant-design/issues/30207`——兩處是同一個「disabled 時真的不能被觸發」目標下的獨立防線，可見這塊行為過去確實出過包，才需要雙重防禦。單顆 `<Button href disabled>` 在目前版本因此是安全的。
 
-即便如此，`ProfitShop/List` 的「開啟商店」按鈕仍**刻意拆成停用 / 可用兩條 render 分支**，不把 `href` 與 `disabled` 一起餵給同一顆 `<Button>`：停用分支整顆按鈕**不帶 `href`**，DOM 裡完全沒有網址，左鍵／中鍵／Ctrl 點擊／右鍵「在新分頁開啟」全都無從觸發。理由：這個「停用時不可點」的 invariant 若寄託在 antd 內部實作，未來版本行為一變就是安靜的「停用卻仍可點開」漏洞——不會有型別錯誤（TS 本來就允許 `href` 與 `disabled` 同時給），也不會有測試攔到。拆成兩條分支後，invariant 由自己的程式碼保證，不依賴第三方套件的實作細節。
+即便如此，`ProfitShop/List` 的「開啟」按鈕仍**刻意拆成停用 / 可用兩條 render 分支**，不把 `href` 與 `disabled` 一起餵給同一顆 `<Button>`：停用分支整顆按鈕**不帶 `href`**，DOM 裡完全沒有網址，左鍵／中鍵／Ctrl 點擊／右鍵「在新分頁開啟」全都無從觸發。理由：這個「停用時不可點」的 invariant 若寄託在 antd 內部實作，未來版本行為一變就是安靜的「停用卻仍可點開」漏洞——不會有型別錯誤（TS 本來就允許 `href` 與 `disabled` 同時給），也不會有測試攔到。拆成兩條分支後，invariant 由自己的程式碼保證，不依賴第三方套件的實作細節。
 
 **新元件開發規範**：
 - 停用按鈕要顯示原因時，一律用上面 A 的 `<span>` 包法，不要期待 `<Tooltip>` 直接包 disabled `<Button>` 就會動
