@@ -927,15 +927,29 @@ components:
         variations:
           type: object
           description: |
-            variation_id => { override } 對照表。
-            key 為 variation ID 字串，value 物件僅含 override 欄位。
+            variation_id => { override, inflated_count } 對照表。
+            key 為 variation ID 字串。
             variation 必須屬於同筆的 product_id，否則 ItemValidator 拋 InvalidVariation。
-            目前 Admin UI 尚未開放編輯，保留供後續迭代。
+
+            Phase 9（2026-07-30）起 value 物件新增 `inflated_count`，讓可變商品能逐變體
+            設定灌水購買人數；賣場編輯頁的「賣場商品」表格可展開 variable /
+            variable-subscription 商品逐一編輯。
+            向後相容：Phase 9 之前寫入的資料無此鍵，
+            CptProfitShopRepository::build_override_item() 以 `?? 0` 接住，不需 migration。
           additionalProperties:
             type: object
             properties:
               override:
                 $ref: '#/components/schemas/PriceOverride'
+              inflated_count:
+                type: integer
+                default: 0
+                minimum: 0
+                description: |
+                  該變體的灌水購買人數（fake count，不影響庫存）。
+                  缺鍵視為 0；負數由 InflatedCount VO sanitize 為 0。
+                  ⚠️ 目前賣場前台只渲染父商品卡片，變體層 inflated_count
+                  尚無前台顯示位置（見 specs/tech-debt.md TD-15）。
       required:
         - product_id
 
@@ -1134,27 +1148,20 @@ components:
           minLength: 1
           maxLength: 30
           pattern: '^[a-z0-9][a-z0-9\-]{0,29}$'
-          default: shop
+          default: powershop
+          description: >-
+            powershop CPT 的 rewrite slug。⚠️ 不是賣場前台網址 ——
+            前台走 RewriteRules::SHOP_REWRITE_PREFIX（固定 profit-shop）。
         report_slug:
           type: string
           minLength: 1
           maxLength: 30
           pattern: '^[a-z0-9][a-z0-9\-]{0,29}$'
-          default: report
-        default_rate:
-          type: integer
-          minimum: 0
-          maximum: 100
-          default: 10
-          description: 超出範圍將被 clamp
-        page_template:
-          type: string
-          default: default
+          default: profit-report
+          description: Partner 報表頁面的 rewrite slug（/{report_slug}/{partner-slug}/）
       required:
         - rewrite_slug
         - report_slug
-        - default_rate
-        - page_template
 
     LegacyShopRef:
       type: object

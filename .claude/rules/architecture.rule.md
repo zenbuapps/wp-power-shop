@@ -225,7 +225,8 @@ applyTo: "**/*.{php,ts,tsx}"
 inc/classes/Domains/ProfitShop/
 │
 ├── Domain/                          # 純 PHP，禁依賴 WP / WC
-│   ├── ValueObject/                 # PriceOverride / ProfitRate / PartnerSlug / InflatedCount / ShopMode / SlugConflict
+│   ├── ValueObject/                 # PriceOverride / ProfitRate / PartnerSlug / InflatedCount / ShopMode / SlugConflict /
+│   │                                #   VariationOverride（Phase 9，PriceOverride + InflatedCount 聚合，OverrideItem::$variations 的 value）
 │   ├── Entity/                      # OverrideItem / ProfitShop（status invariant）/ SettlementRecord
 │   ├── Service/                     # PriceCalculator / ProfitCalculator / RoundingStrategy interface
 │   ├── Repository/                  # ProfitShopRepository / PartnerRepository / SettlementRepository（Interface only）
@@ -259,9 +260,14 @@ inc/classes/Domains/ProfitShop/
 │   │                                #   RewriteRulesFlusher / WpProductLookup / WpSlugConflictLookup /
 │   │                                #   WpTransientStore / SystemClock / WpAdminEmailNotifier /
 │   │                                #   WpSaltProvider（Phase 3-D，context 白名單防 silent salt rotation）
-│   ├── WooCommerce/                 # Phase 3-D 新層：CartPriceOverrideHook（前台 cart 價格防竄改，
-│   │                                #   add_cart_item_data + get_cart_item_from_session +
-│   │                                #   before_calculate_totals priority 999 + draft shop fallback）
+│   ├── WooCommerce/                 # AddToCartHook（Phase 4-C2，priority 5，注入 profit_shop_id，
+│   │                                #   三道閘門防偽造）/ CartPriceOverrideHook（Phase 3-D，前台 cart
+│   │                                #   價格防竄改，add_cart_item_data + get_cart_item_from_session +
+│   │                                #   before_calculate_totals priority 999 + draft shop fallback）/
+│   │                                #   CartItemMetaDisplay（Phase 4-C2，cart UI「來自賣場 XXX」，
+│   │                                #   woocommerce_get_item_data filter）/ SingleProductPriceHook
+│   │                                #   （Phase 9，WC 單品頁套用賣場覆寫價含變體，template_redirect
+│   │                                #   priority 20，改寫 variation prices hash 隔離跨賣場快取污染）
 │   └── Rest/                        # ExceptionMapper（Domain Exception → HTTP，Phase 3-E：+filter test seam；
 │   │                                #   Phase 6-A1：+WeakPassword → 422 weak_password + data.reasons[]）+
 │   │                                #   V2Api（27 endpoint：Phase 3-E +validate-slug、Phase 6-A1 +partner-auth/change-password）
@@ -288,12 +294,14 @@ plugin.php
                   ├→ Report\Dashboard\Core\V2Api::instance() # 既有報表 REST API
                   └→ ProfitShop\Loader::instance()           # Profit Shop sub-loader
                       ├→ Infrastructure/WordPress/CptRegistrar / TaxonomyRegistrar / RewriteRules
-                      ├→ Infrastructure/WordPress/PartnerPortalRenderer::instance() # Phase 4-B，partner portal mount 點
-                      ├→ Infrastructure/WordPress/ProfitShopRenderer::instance(...) # Phase 4-C1，賣場前台 PHP renderer，DI ProfitShopRepositoryInterface
+                      ├→ PageRateLimitService + WpClientIpProvider::instance() # Phase 5-A.1，前台頁面 rate-limit 共用基礎設施
+                      ├→ Infrastructure/WordPress/PartnerPortalRenderer::instance(...) # Phase 4-B，partner portal mount 點；Phase 5-A.1 起注入 rate-limit + ip provider
+                      ├→ Infrastructure/WordPress/ProfitShopRenderer::instance(...) # Phase 4-C1，賣場前台 PHP renderer，DI ProfitShopRepositoryInterface；Phase 5-A.1 起注入 rate-limit + ip provider
+                      ├→ Infrastructure/Rest/V2Api::instance() # 27+ 個 endpoint（Phase 6-A1 +partner-auth/change-password）
                       ├→ Infrastructure/WooCommerce/AddToCartHook::instance(...)   # Phase 4-C2，priority 5（早於 CartPriceOverrideHook 的 10），DI ProfitShopRepositoryInterface
                       ├→ Infrastructure/WooCommerce/CartPriceOverrideHook::instance() # Phase 3-D，priority 10 / 999，admin context guard
                       ├→ Infrastructure/WooCommerce/CartItemMetaDisplay::instance(...) # Phase 4-C2，woocommerce_get_item_data filter，涵蓋 mini-cart / cart / checkout
-                      └→ Infrastructure/Rest/V2Api::instance() # 27 個 endpoint（Phase 6-A1 +partner-auth/change-password）
+                      └→ Infrastructure/WooCommerce/SingleProductPriceHook::instance(...) # Phase 9，template_redirect priority 20，WC 單品頁套用賣場覆寫價（含變體），DI ProfitShopRepositoryInterface
 ```
 
 ### Partner Portal 載入流程（Phase 4-B）

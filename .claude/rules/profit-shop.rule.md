@@ -255,9 +255,16 @@ if ( null !== $password_changed_at && $issued_at < $password_changed_at ) {
   "product_id": 101,
   "inflated_count": 0,
   "override": { "regular_price": "50000", "sale_price": "49900", "signup_fee": null },
-  "variations": { "1031": { "override": { "regular_price": null, "sale_price": "990", "signup_fee": null } } }
+  "variations": {
+    "1031": {
+      "override": { "regular_price": null, "sale_price": "990", "signup_fee": null },
+      "inflated_count": 0
+    }
+  }
 }
 ```
+
+> `variations[vid].inflated_count` 是 **Phase 9（2026-07-30）** 新增欄位，見下方「變體層覆寫」小節。Phase 7 當時的 `variations[vid]` 只有 `override`；本節 BUG-A 敘述維持 Phase 7 原文不動，新舊行為差異記在下方獨立小節，避免把兩個 Phase 的變更混寫在同一段歷史敘述裡。
 
 `ProfitShopHydrator::from_input`（`Application/UseCase/Shop/Support/ProfitShopHydrator.php:113-128`）、`CptProfitShopRepository`（序列化 `:284-295` / 反序列化 `:346-370`）、`ItemValidator::validate`（`:62-76`）**從一開始就只讀寫這個巢狀形狀**，PHP 端沒有任何一處讀取過扁平的 `price_override` / `variation_id` 欄位。
 
@@ -283,6 +290,188 @@ grep -rn "price_override" inc/
 **型別選擇**：`override.regular_price` / `sale_price` / `signup_fee` 都是 `string | null`，不是 `number | null`——`PriceOverride` VO 本身是 nullable **string**（`PriceOverride.php:34-48`），用 `bccomp` 走十進位字串比較避免浮點誤差（`PriceOverride.php:66`）。前端若「簡化」改回 `number` 會需要在邊界處重新序列化成字串，且會重新引入十進位 / 浮點誤差風險——**不要**這樣做。
 
 **契約並存期風險評估（低風險，已確認）**：前後端同一 plugin bundle 同時發版，不存在「舊前端 + 新後端」或「新前端 + 舊後端」的過渡期。即使存在，PHP 本來就忽略扁平欄位，行為等同現況，不會更差。DB 內既有 items 資料一直是巢狀 + null（舊前端送的扁平值從未寫入），**不需要 migration**，IT round-trip 測試驗證既有資料可正常讀取。
+
+---
+
+### 變體層覆寫：VariationOverride VO + 委派法 + SingleProductPriceHook（Phase 9）
+
+賣場編輯頁「賣場商品」表格可展開 `variable` / `variable-subscription` 商品，逐一設定每個
+變體的原價 / 特價覆寫與灌水購買人數。`OverrideItem::$variations` 的 value 型別因此從
+`PriceOverride` 升級為 `VariationOverride`（`Domain/ValueObject/VariationOverride.php`）：
+
+```php
+final class VariationOverride {
+    public function __construct(
+        public readonly PriceOverride $override,
+        public readonly InflatedCount $inflated_count
+    ) {}
+}
+```
+
+**為什麼不直接把 `inflated_count` 塞進 `PriceOverride`**：`PriceOverride` 是純粹的三欄價格
+VO，同時被 `PriceCalculator` 的六層 fallback chain 與 `ProductSnapshot` 使用；混入與價格無關
+的銷量欄位會污染它在那些場景的語意，所以另外包一層 `VariationOverride` 聚合兩者。
+
+#### `get_variation_override()` 簽章不可改——這是委派法能讓下游零改動的關鍵
+
+`OverrideItem::get_variation_override( int $variation_id ): ?PriceOverride` 改用**委派**
+取值，但**回傳型別維持 `?PriceOverride` 不變**：
+
+```php
+public function get_variation_override( int $variation_id ): ?PriceOverride {
+    return ( $this->variations[ $variation_id ] ?? null )?->override;
+}
+```
+
+`PriceCalculator::calculate()` 與 `CartPriceOverrideHook::resolve_effective_price()` 只需要
+價格，兩者因此**零改動**——`git diff --stat` 對這兩個檔案完全空白。若有人「順手」把回傳型別
+改成 `?VariationOverride`（例如想省一次 `->override` 存取），這兩處呼叫端會靜默拿到物件而非
+價格，PHP 不會報型別錯誤（弱型別 `?->` 呼叫鏈仍會執行），只會在後續運算把物件當字串用時
+出現非預期結果——最終效果是**變體覆寫價靜默退回原價 = 商家損失**，且沒有任何錯誤訊息可查。
+`tests/Unit/Domain/Entity/OverrideItemTest.php::test_get_variation_override_still_returns_price_override_after_delegation`
+用 `assertNotInstanceOf` 鎖死這個簽章契約。
+
+**真實環境已實測驗證**（`wp eval` 直接讀 Repository，非自動化測試）：對一筆帶變體覆寫的真實賣場資料
+`readback` 出 `vid=79 override=999/888 ... [override class: PriceOverride]`、
+`vid=86 override=777/null ... [override class: PriceOverride]`、未覆寫的
+`vid=80 override=NULL ... [override class: -]`——委派後 `get_variation_override()` 回傳的
+物件 class 確實是 `PriceOverride`（不是 `VariationOverride`），簽章契約在真實 WordPress 執行環境
+（非測試 fixture）成立，與單元測試互為佐證。
+
+注意 `( $this->variations[ $variation_id ] ?? null )?->override`（先 `??` 再 `?->`）而不是
+直接寫 `$this->variations[ $variation_id ]?->override`——後者在鍵不存在時仍會觸發 PHP 的
+「Undefined array key」Warning（`?->` 只抑制「呼叫方法/屬性於 null」的錯誤，不抑制陣列存取
+本身的 Warning），先 `?? null` 正規化成明確的 `null` 才能安全串接 `?->`。
+
+#### `CptProfitShopRepository` 的 `?? 0` 是舊資料唯一的接住點，重構時不可移除
+
+Phase 9 之前寫入的 `_profit_shop_items` postmeta，`variations[vid]` 只有 `override`、沒有
+`inflated_count` 鍵。`CptProfitShopRepository::build_override_item()` 反序列化時：
+
+```php
+$v_inflated_raw = isset( $variation_row['inflated_count'] )
+    ? (int) $variation_row['inflated_count']
+    : 0;
+```
+
+缺鍵時讀為 `0`（語意正確：沒設定過灌水人數 = 0），下次儲存時該筆自然補上這個鍵，
+**不需要 migration**。這行 `?? 0`（實際寫法是 `isset() ? … : 0`）是舊資料唯一的接住點，
+拿掉它會讓帶舊格式資料的賣場一律讀取失敗或拋錯。鎖死的測試：
+`CptProfitShopRepositoryTest::test_legacy_variations_json_without_inflated_count_defaults_to_zero`
+（同時斷言價格仍讀得出來，避免「整筆物件被丟棄所以碰巧得到預設值 0」的偽綠燈）與
+`test_legacy_variations_json_is_upgraded_on_next_save`（證明重新儲存後該筆資料自然補齊，
+不需額外的資料轉換腳本）。
+
+#### `OverrideItem` 建構子 fail-fast 型別守衛
+
+`OverrideItem::__construct()` 對傳入的 `$variations` 逐一檢查每個 value 是否為
+`VariationOverride` 實例，不是就立即拋 `\InvalidArgumentException`：
+
+```php
+foreach ( $variations as $variation_id => $variation ) {
+    if ( ! $variation instanceof VariationOverride ) {
+        throw new \InvalidArgumentException( /* ... */ );
+    }
+    $this->variations[ (int) $variation_id ] = $variation;
+}
+```
+
+**理由**：PHP 的 docblock 型別（`array<int, VariationOverride>`）只是給 IDE / PHPStan 看的
+文件式標註，語言本身**無法在 runtime 檢查 array 的 value 型別**。如果日後有任何一處呼叫端
+不小心混入升級前的舊型別（`PriceOverride`）或其他物件，`get_variation_override()` 委派取
+`->override` 只會安靜地得到 `null` 加一則 PHP Warning，**不會拋出任何例外**——下游看到的
+結果是「這個變體的覆寫價消失了」，`CartPriceOverrideHook` 因此退回商品原價，商家蒙受損失
+卻毫無警訊。這與 BUG-A（前端送扁平契約，PHP 安靜忽略）、cart signature normalize 兩端不一致
+（`wc_format_decimal` 正規化沒對齊，簽章驗證安靜失敗退回原價）是**同一種失敗模式**——這個
+codebase 已經在兩個不同場景吃過虧：資料形狀錯誤時，寧可在建構當下就 fail-fast 拋例外，
+也不要讓它在深層呼叫鏈裡安靜退化成「看起來正常運作，其實悄悄少算了錢」。
+`OverrideItemTest::test_construct_rejects_non_variation_override_values` 鎖死此行為。
+
+#### `SingleProductPriceHook`：WC 單品頁套用賣場覆寫價（含變體），解決「價格跳動」
+
+在 Phase 9 開放變體覆寫 UI 之前，`Infrastructure/WooCommerce/` 內只有 3 個 hook
+（`AddToCartHook` / `CartPriceOverrideHook` / `CartItemMetaDisplay`），全部只作用於購物車。
+顧客的實際動線因此存在落差：賣場前台卡片顯示 override 價 → 點「前往選購」進 WC 單品頁 →
+單品頁顯示**商品原始價格**（本外掛零介入）→ 選變體加入購物車 → 購物車又變回 override 價。
+這個「單品頁一個價、購物車另一個價」的落差過去一直存在，但因為後台從未開放設定變體覆寫，
+沒有人踩過；Phase 9 一開放變體覆寫 UI，這個落差就變成顧客可見的信任問題（原計畫 R-1）。
+`Infrastructure/WooCommerce/SingleProductPriceHook.php` 補上這塊，三條紀律缺一不可：
+
+1. **hook 名稱要對，價格區間與單一價格是兩組不同 filter**：WC 的
+   `WC_Product_Variable_Data_Store_CPT::read_price_data()` 讀取子變體價格區間時用的是
+   `'edit'` context（`class-wc-product-variable-data-store-cpt.php:319-321`），
+   `woocommerce_product_variation_get_price` 這系列 filter **只對 `'view'` context 生效**，
+   對「價格區間」（`get_available_variations()` 的 `display_price` 之外，還有
+   `get_variation_price('min'/'max')` 這類彙總值）**無效**。要覆寫價格區間必須另外掛
+   `woocommerce_variation_prices_price` / `_regular_price` / `_sale_price`（三參數簽章
+   `($value, $variation, $parent)`）。本類**兩組都掛**——`woocommerce_product_get_price`
+   系列覆寫「已選定單一變體」的實際結帳價，`woocommerce_variation_prices_*` 系列覆寫價格
+   區間顯示。漏掉任何一組都會出現「單品頁顯示的價格區間」與「選定某個變體後看到的價格」
+   不一致。
+2. **必須把賣場 ID 併入 `woocommerce_get_variation_prices_hash`**：WC 把變體價格陣列快取在
+   transient，`get_price_hash()`（`abstract-wc-product-data-store-cpt.php:433-445`）組
+   hash 時只納入掛在 `woocommerce_variation_prices_price` 等 filter 上的**callback 名稱**，
+   **不含賣場 ID**。若不處理，「賣場 A 覆寫商品 X 的變體價」與「賣場 B 覆寫同一商品 X 的
+   變體價」會算出同一把 hash key，兩個賣場會**互相讀到對方的快取價格**——一般訪客因為
+   `$wp_filter` 為空、hash 自然與賣場情境不同而不受影響，問題只發生在「同一個變體商品被
+   多個賣場各自覆寫不同價格」的情境。`filter_variation_prices_hash()` 把 `shop_id` 塞進
+   hash 來源陣列，讓每個賣場各自落在獨立的快取分桶。
+3. **filter 只在 `is_product() && 帶合法 profit_shop_id` 時才註冊，不可改成常駐**：
+   `maybe_register_filters()` 掛在 `template_redirect` priority 20（晚於 `ProfitShopRenderer`
+   的 9），且**只在確認是單品頁、profit_shop_id 有效、賣場 `status='publish'`、目前商品
+   確實屬於該賣場**（三道閘門與 `AddToCartHook` 同一條紀律）之後才呼叫 `add_filter`。
+   若改成一律註冊（不分頁面類型），`woocommerce_product_get_price` 這類 filter 在 **view
+   context** 會把價格蓋回覆寫價，等於**抵銷了 `CartPriceOverrideHook` 在驗章失敗時刻意
+   fallback 回商品原價的安全保護**——那個 fallback 存在的意義就是「簽章對不上就不能相信
+   這個覆寫價」，若單品頁的 filter 不看簽章、無條件套用，這道防線會被繞過。
+
+**價格語意必須與 `CartPriceOverrideHook::resolve_effective_price()` 逐字一致**：變體只要有
+任一覆寫欄位（原價或特價），就**整組**採用變體層的 override，**不與商品層逐欄混用**。
+`SingleProductPriceHook::resolve_prices()` 的判斷順序（先看變體層 `sale_price` /
+`regular_price` 是否非 null，有就整組回傳變體層值；否則才 fallback 到商品層 override）
+與 `CartPriceOverrideHook` 完全對齊。若改成逐欄位各自 fallback（例如變體只設了特價，原價
+去讀商品層），會出現「單品頁顯示商品層特價 500、購物車實收變體層原價 600」這種本階段
+存在的目的就是要消滅的價格跳動。
+
+新增測試：`tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php`
+（11 method）：simple 商品覆寫 / 只設原價保留原特價 / 變體覆寫僅作用於該變體 / 變體覆寫不與
+父層逐欄混用 / 賣場不存在或非 publish 不覆寫 / 商品不屬於賣場不覆寫 / 無 query string 不
+註冊 filter / 非單品頁不註冊 filter / hash 依賣場區隔 / hash 對其他商品不受影響。
+
+**真實環境端到端驗證**（人工在瀏覽器操作，非自動化測試；臨時測試賣場設定：商品 63 Hoodie，
+變體 79 覆寫原價/特價 `999/888`、變體 86 只覆寫原價 `777`（不設特價）、變體 80/81 不覆寫；
+驗證後臨時賣場與購物車項目皆已清除，站台資料回到驗證前狀態）：
+
+| 驗證項 | 結果 |
+|--------|------|
+| 單品頁價格區間（帶 `?profit_shop_id`） | `NT$45 – NT$888`（原始應為 `NT$42 – NT$45`）——最低價從 42 變成 45，因為變體 79 的特價 42 被覆寫掉不再是最低值，這個「區間端點位移」是 filter 生效的指紋 |
+| `get_available_variations()` 逐變體 `display_price` / `display_regular_price` | 變體 79：888 / 999（覆寫生效）；變體 86：777 / 777（只設原價，`get_sale_price` 正確回 `''` 而非沿用商品原特價，未渲染出假的劃線價）；變體 80 / 81：45 / 45（未覆寫，維持原樣） |
+| **負向驗證（最關鍵）**：不帶 `?profit_shop_id` 時 | 價格區間與逐變體價格**全數回到原始值**（`42–45`，79=42、86/80/81=45），零覆寫殘留。同時證明兩件事：filter 只在帶合法 query string 時才註冊（不常駐）；`woocommerce_get_variation_prices_hash` 改對了（沒改的話這裡會讀到 `45–888` 的污染快取） |
+| 三處價格一致性 | 賣場前台卡片 → 單品頁（888）→ 加購變體 79 後 Store API `/wc/store/v1/cart` 的 `price` / `line_total` / `total_price` 皆為 `"888"`，三處完全一致 |
+
+商品層 `inflated_count` 前台顯示（第六階段）也已人工驗證：臨時賣場商品 63 設定 `inflated_count: 7`、
+真實銷量 873，賣場前台實際顯示「已售 **880** 件」＝ 873 + 7，數字精確吻合；一般賣場（`test-shop-alpha`）
+實測 `[E2E] Test Product` 顯示「已售 4 件」、`銷售方案` 顯示「已售 2 件」，`inflated_count` 為
+0 的商品（`T-Shirt` / `E2E Frontend Test Course`）**不顯示**「已售 0 件」，`> 0` 守門正確；
+`<title>` SEO meta 也確認正確（「測試賣場 Alpha｜測試夥伴 Alpha 的分潤賣場 - turbo」）。
+
+#### ⚠️ 一條會重複發生的失誤模式：規劃期寫的「緩解文案」與後續才拍板的「加強措施」在同一次改動內並存時，文案不會自動跟著更新
+
+第五階段規劃當時，`SingleProductPriceHook`（第六-B 階段）**是否要做**還沒拍板，所以規劃文件先在
+`VariationOverrideEditor` 展開列加了一句「據實揭露」：變體覆寫價只在購物車生效、單品頁仍顯示原價。
+後來團隊決定連第六-B 一起做，`SingleProductPriceHook` 上線後單品頁**已經**顯示覆寫價，但那句
+「仍顯示原價」的文案**沒有人回頭去改**——第一輪文件同步只顧著記錄新功能，直到真的在真實環境把
+第六-B 端到端跑過一次（單品頁區間 `42–45` → `45–888`）才發現這句話已經與事實相反。
+
+**這不是本次唯一一次會發生的情況**：任何規劃文件裡「先寫『目前還沒做到 X，所以要跟使用者說 Y』」
+的緩解文案，只要後續同一次或下一次改動把 X 做掉了，Y 就必須跟著改，而且**改文案這件事不會被
+任何自動化閘門攔到**——tsc / eslint / phpunit 都不會因為一句過時的中文說明而變紅。
+
+**規則**：往後任一次改動讓 `SingleProductPriceHook` 的作用範圍變化（例如額外覆蓋 grouped /
+external 商品類型、或反過來收斂範圍），一併檢查 `VariationOverrideEditor` 與其他任何帶有
+「單品頁 / 商品單頁是否顯示覆寫價」語意的 UI 文案（`<Alert>` / `<Tooltip>` / 說明文字）是否仍然
+成立；新增任何「目前做不到 X」的據實揭露文案時，最好在旁邊的程式碼註解註明「這句話的前提是
+Y 尚未實作，Y 做完後必須回來改這裡」，讓下一個動到 Y 的人有機會看到提醒。
 
 ---
 
@@ -346,6 +535,49 @@ Partner 夥伴圖片存於 termmeta `_partner_image_id`（attachment ID），**�
 
 前端對應元件（複用商品 `Gallery` / `PartnerSelector` 頭像 / 列表夥伴圖片欄）見 `react.rule.md` §6.5。
 
+### `SettingsDto` 只放有消費點的欄位，且預設值必須與 rewrite fallback 同步
+
+`SettingsDto`（`Application/DTO/SettingsDto.php`）對應 `#/profit-settings` 設定頁，目前**只有兩個欄位**：
+
+| 欄位 | 消費點 | 實際影響 |
+|------|--------|----------|
+| `rewrite_slug` | `CptRegistrar::get_rewrite_slug()` → `register_post_type` 的 `rewrite.slug` | powershop CPT 的永久連結 `/{rewrite_slug}/{post-name}/` |
+| `report_slug` | `RewriteRules::get_report_slug()` → `add_rewrite_rule` pattern | partner 報表網址 `/{report_slug}/{partner-slug}/` |
+
+**兩條紀律：**
+
+1. **新增設定欄位前先確定「誰會讀它」**。曾經存在的 `default_rate`（預設分潤比例）與
+   `page_template`（頁面模板）從 Phase 3-B 就零消費點——`grep -rn "default_rate\|page_template" inc/`
+   除了 DTO 自己的定義之外，一處讀取都沒有。站長在設定頁填了值、存檔成功、
+   重新整理還讀得回來，但**填什麼都不影響任何行為**：新建賣場不吃 `default_rate`
+   （`rate` 一律由 `ProfitShopInput` 帶），賣場前台固定 `require templates/profit-shop-front.php`
+   （`ProfitShopRenderer.php:222`），根本沒有讀 `page_template` 的分支。
+   這種「存得進去、讀得出來、但沒人用」的欄位比缺功能更糟——它讓站長以為自己已經設定好了。
+   兩欄已於「移除無消費點設定」一役全鏈路刪除（DTO / api.yml / 前端 / 測試），
+   `DtoRoundTripTest::test_settings_dto_ignores_unknown_keys` 與
+   `UpdateSettingsTest::test_ignores_removed_fields`（IT）鎖死「舊 payload 仍帶這兩欄也不會復活」。
+   wp_options 內的殘留 key 由 `from_array` 忽略、下次 `save()` 自然覆蓋，**不需要 migration**。
+
+2. **`SettingsDto::from_array` 的預設值必須與 `CptRegistrar::DEFAULT_REWRITE_SLUG`
+   / `RewriteRules::DEFAULT_REPORT_SLUG` 逐字一致**。兩邊各自持有一份 fallback：
+
+   ```
+   option 不存在時（例如剛按下「還原預設」）
+     ├─ GET /profit-settings  → SettingsRepository::get() → SettingsDto::from_array([]) → 畫面顯示的值
+     └─ 實際 rewrite rule     → RewriteRules::get_report_slug() → DEFAULT_REPORT_SLUG → 真正生效的值
+   ```
+
+   兩份預設值曾經不同步（DTO 給 `'shop'` / `'report'`，實際生效的是 `'powershop'` / `'profit-report'`），
+   後果是站長 reset 後在設定頁看到 `report`，照著去開 `/report/{partner}/` 卻吃 404——
+   畫面與現實不一致，而且**不會有任何錯誤訊息**提示他看到的是假的。
+   `DtoRoundTripTest::test_settings_dto_defaults_match_rewrite_fallbacks` 與
+   `GetSettingsTest` / `ResetSettingsTest` 的預設值斷言三處同時鎖住這個契約。
+
+⚠️ **`rewrite_slug` 不是賣場前台網址**。賣場前台走 `RewriteRules::SHOP_REWRITE_PREFIX`
+（**固定常數** `'profit-shop'`，`RewriteRules.php:36`），與本設定完全無關。設定頁的欄位標籤
+與 `extra` 說明曾誤寫成「影響賣場前台網址」，改動這兩處文案時務必對照實際消費點，
+不要憑欄位名稱望文生義。
+
 ---
 
 ## 8. Slug 衝突（spec §6.11）
@@ -400,6 +632,23 @@ Phase 7 新增測試（賣場編輯頁商品選擇器，PHP 端僅測試、無�
 
 **實測結果**（2026-07-29）：Unit 338 / 669 assertions / 1 failure（327 baseline + 11 新增）；Integration 168 / 723 assertions / 21 failures（158 baseline + 10 新增）；e2e `06-profit-shop` 4 passed；e2e `01`～`05` 162 passed 零 regression。`composer test` 的 21 個 integration 失敗 + 1 個 unit 失敗**全部 pre-existing**，與 Phase 7 改動無關（已用「移出新測試檔案再單獨跑」的方式驗證）。PHP 測試環境（`.wp-env.json` / `tests/bootstrap.php` / `@group` 陷阱）見 `wordpress.rule.md` §11；完整已知問題清單見 `specs/tech-debt.md`。
 
+Phase 9 新增測試（賣場商品變體層價格 / 灌水人數覆寫）：
+- `tests/Unit/Domain/Entity/OverrideItemTest.php`（**+8 method，共 19**）：`VariationOverride` 建構 / `set_variation_override` 新增與覆寫 / `remove_variation_override` / `get_variation_inflated_count` / `to_array` 新形狀（含 `inflated_count`）/ **`get_variation_override` 委派後仍回 `?PriceOverride`**（`assertNotInstanceOf` 鎖死簽章）/ 建構子對非 `VariationOverride` 值 fail-fast / `set_variation_override` 第三參數 null 時保留既有灌水數
+- `tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php`（**+4 method，共 15**）：variations 迴圈建 `VariationOverride`、缺 `inflated_count` 鍵預設 0、負數正規化、既有 11 method 全綠即證委派法未破壞 BUG-A 回歸鎖
+- `tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php`（**+2 method，共 12**）：`test_legacy_variations_json_without_inflated_count_defaults_to_zero`（R-7 核心，同時斷言價格仍讀得出來）+ `test_legacy_variations_json_is_upgraded_on_next_save`（證明重新儲存後自然補齊，無需 migration）
+- `tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php`（**+5 method，共 17**）：變體層 override + inflated_count round-trip、變體 sale > regular → 400、variation 不屬於 product → 400
+- `tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php`（**新檔，11 method**）：見上方「變體層覆寫」小節列舉的 11 個案例
+- `tests/Unit/Domain/Service/PriceCalculatorTest.php`：**不改斷言**，`make_item()` helper 內部改用 `array_map` 包 `VariationOverride`（15 個呼叫點原封不動），全綠即為委派法零破壞既有定價邏輯的證明
+
+**實測結果**（2026-07-30，baseline 以動工前實測為準，非文件既有數字——CLAUDE.md 記載的 Phase 8 數字 340/171 與本次動工前實測的 341/173 有落差，1 個 unit failure / 21 個 integration failures 完全吻合，判斷是先前記錄時機差異，不影響回歸判斷）：
+
+| 層級 | Baseline（動工前） | 完成後 | 差異 |
+|------|---------------------|--------|------|
+| Unit | 341 / 670 assertions / 1 failure | 353 / 694 / 1 | +12 tests，failure 未增加（TD-2 pre-existing） |
+| Integration | 173 / 754 / 21 failures | 191 / 850 / 21 | +18 tests，failure 未增加（TD-1 pre-existing，21 條失敗名稱與順序與 baseline 完全相同） |
+
+`composer lint` / `vendor/bin/phpcs inc/`：136/136 → 138/138（+2 新檔）全綠。`@group` 已逐檔驗證（`--filter XxxTest --testdox` 筆數 == 檔內 `test_` 方法數），無靜默跳過。
+
 ---
 
 ## 10. 註冊流程
@@ -442,6 +691,7 @@ Phase 7 新增測試（賣場編輯頁商品選擇器，PHP 端僅測試、無�
 | Phase 6-A2（Partner 自助修密碼前端 UI：ChangePassword.tsx HIGH-RISK + useChangePassword + forceLogoutAndRedirect + Login `?reason=password_changed` + partnerExceptionMapper context-aware）| `c80b4cc` |
 | Phase 7（賣場編輯頁商品選擇器重構：`ProductTableBody` 抽取 + `ProductPickerModal` + items 巢狀契約修正 BUG-A + `ProfitShopHydratorTest` / `ProfitShopItemsRoundTripTest`）| （尚未 commit，見 `git status` 與 `specs/plan/2026-07-29-profit-shop-product-selector-plan.md`） |
 | Phase 8（Partner 夥伴圖片：termmeta `_partner_image_id` + `image_url` 唯讀衍生 + 複用商品 `Gallery` 元件（單張圓形）+ Selector 頭像 + `#/profit-partner` 列表頁對齊標準版型）| （尚未 commit，見 `git status`） |
+| Phase 9（賣場商品變體層價格 / 灌水人數覆寫：`VariationOverride` VO + `OverrideItem` 委派法 + `SingleProductPriceHook`（WC 單品頁套價，解決價格跳動）+ 商品層 inflated_count 接上賣場前台 + `ItemsEditor` 展開列 UI）| （尚未 commit，見 `git status` 與 `specs/plan/2026-07-30-profit-shop-variation-override-plan.md`） |
 
 設計與決策來源：
 - `specs/2026-05-06-profit-shop-design.md`（含 Q1-Q6 plan 階段決策、§4 endpoint、§6.11 slug 衝突、§7 例外對映）
@@ -819,3 +1069,9 @@ $raw = $_GET['profit_shop_id'] ?? $_POST['profit_shop_id'] ?? null;
 **Modal 只做新增，不做移除**：移除既有賣場商品仍在下方的商品列表操作，`ProductPickerModal` 內沒有移除入口（Q4 範圍邊界）。
 
 **變體不可選**：`variations` 契約結構保留（見 §7「OverrideItem items 契約」），但 Modal 內的變體子列 checkbox 維持 disabled，UI 不開放選變體（Q3 範圍邊界）。
+
+> Phase 9 補充：上面說的是 **Modal 內選擇父商品時不能順便勾選變體**，這條邊界維持不變。
+> 變體覆寫本身**另有入口**——已加入賣場的父商品，若是 `variable` / `variable-subscription`，
+> 可在 `ItemsEditor` 主表格的商品名稱欄展開設定每個變體的價格與灌水購買人數，見 §7「變體層
+> 覆寫」與 `react.rule.md` §6.5。兩者是不同層級的操作：Modal 負責「把哪些商品加進賣場」，
+> 展開列負責「已加入的可變商品要不要逐變體覆寫」。

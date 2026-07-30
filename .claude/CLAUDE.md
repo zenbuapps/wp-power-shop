@@ -59,6 +59,7 @@ pnpm release:major
 18. **Don't** 以為 Refine dataProvider 的錯誤物件（`HttpError`）帶有 `error.response.data`——Refine 只保留 `{ message, statusCode }`，原始 response body（含後端 `code` / `data`）已經不見，`statusCode` 甚至可能與真實 HTTP 狀態碼不符。錯誤訊息解析要 fallback 到 `error.message`，不要假設一定讀得到 `response.data.code`。詳見 `react.rule.md` §3。
 19. **Don't** 寫帶 `tw-` prefix 的 Tailwind class——`tailwind.config.js` **沒有設 `prefix`**，class 一律無前綴（`mb-2` / `flex`）。唯一的例外是 config `plugins` 手寫的 6 個（`tw-hidden` / `tw-block` / `tw-inline` / `tw-fixed` / `tw-columns-1` / `tw-columns-2`，因為無前綴版與 WP 衝突被 `blocklist` 擋掉）。寫錯不會有 build 錯誤，樣式只是安靜地不生效。另：Tailwind entry 是 `js/src/assets/styles/tailwind.css`，**新增 SPA bundle 時必須 import**，否則該 bundle 的 utility 全部無效。詳見 `react.rule.md` §10。
 20. **Don't** 假設 `<Tooltip>` 包 disabled `<Button>` 會顯示提示——antd v5 拿掉了 v4 的 disabled 相容包裝，瀏覽器又不對 disabled `<button>` 派發滑鼠事件，提示因此永遠不會出現，且沒有任何錯誤訊息。也**不要**只靠 antd 目前會在 `disabled` 時抽掉 `<Button href>` 的 `href` 就假設安全——外開連結按鈕該拆成停用 / 可用兩條 render 分支，別把 `href` 和 `disabled` 一起塞給同一顆 `<Button>`。詳見 `react.rule.md` §2。
+21. **Don't** 想把 antd `<Table>` 的展開圖示放進「某個欄位內」（而非表格最左端）時，還去改 `components.body.row` 或另外處理展開列——用 `showExpandColumn: false` 關掉預設最左展開欄，改在目標欄位自刻按鈕 + 受控 `expandedRowKeys`（非受控點了沒反應）即可；`expandable` 與自訂 `components.body.row`（例如 dnd-kit 拖曳排序）**零衝突**，因為 rc-table 渲染展開列時只傳 `className` / `style` 給自訂 row component、**不傳 `data-row-key`**，會自動落進「先判斷 `data-row-key` 是否存在」這種既有守門的 fallback 分支。`expandedRowRender` 也天然 lazy（沒展開過的列不 render，收合是 `display:none` 不 unmount），查詢可以直接寫在展開列渲染的子元件裡，不需要自己刻快取。詳見 `react.rule.md` §6.5「`ItemsEditor` 變體展開列」。
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -66,7 +67,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片）。Phase 7 / 8 尚未 commit（實作變更見 `git status`），已知問題與技術債見 `specs/tech-debt.md`。
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台 + AddToCart 端到端 + Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性）。Phase 7 / 8 / 9 尚未 commit（實作變更見 `git status`），已知問題與技術債見 `specs/tech-debt.md`。
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -306,7 +307,87 @@ Partner 可設定夥伴圖片，顯示於分潤夥伴列表、編輯頁與賣場
 - V2Api / ExceptionMapper / Domain Service / Auth 全部零修改；不引入新 npm / composer 套件
 - **驗證數據**：Unit 340 / 677 assertions / 1 failure（338 baseline + 2 新增，failure 為 pre-existing TD-2）；Integration 171 / 742 assertions / 21 failures（168 baseline + 3 新增，21 failures 全 pre-existing TD-1）；`npx tsc --noEmit` 127（baseline 127）；`npx eslint` 0 errors / 135 warnings（baseline 同）；`composer lint` 154/154 全綠；`pnpm build` 成功
 
+### Phase 9（賣場商品變體層價格 / 灌水人數覆寫）已完工（尚未 commit）
+
+> 上游需求：`#/profit-shop/edit/{id}` 的「賣場商品」表格，`variable` / `variable-subscription` 商品在**商品圖片左側**顯示展開鈕，點開後可對每個變體覆寫價格與灌水購買人數。
+> 實作計劃：`specs/plan/2026-07-30-profit-shop-variation-override-plan.md`（含資料流分析、錯誤 / 失敗處理登記表、8 個階段）
+
+| 層 | 內容 | 路徑 |
+|----|------|------|
+| Domain ValueObject | **新增** `VariationOverride`（`PriceOverride` + `InflatedCount` 兩參數皆必填，`to_array()` 輸出 `{override, inflated_count}`；刻意不把 `inflated_count` 塞進 `PriceOverride`，避免污染它在 `PriceCalculator` / `ProductSnapshot` 的其他用途） | `Domain/ValueObject/VariationOverride.php` |
+| Domain Entity | `OverrideItem::$variations` 型別升級為 `array<int, VariationOverride>`；`get_variation_override(int): ?PriceOverride` **簽章不變、改為委派**（`return ( $this->variations[$vid] ?? null )?->override`）；新增 `get_variation_inflated_count()`；`set_variation_override()` 加可選第三參數；建構子加 fail-fast 型別守衛（非 `VariationOverride` 值立即拋 `\InvalidArgumentException`） | `Domain/Entity/OverrideItem.php` |
+| Infrastructure（新層） | **新增** `SingleProductPriceHook`：WC 單品頁套用賣場覆寫價（含變體），解決「單品頁一個價、購物車另一個價」的價格跳動；`template_redirect` priority 20，只在 `is_product()` 且網址帶合法 `profit_shop_id` 時才註冊 filter；沿用 `AddToCartHook` 三道閘門（shop 存在 / `status=publish` / product 屬於該 shop）；掛 `woocommerce_product_get_price` 系列（單一變體實際結帳價）+ `woocommerce_variation_prices_*` 系列（價格區間，因 WC 讀值走 `'edit'` context 而需另掛）+ 改寫 `woocommerce_get_variation_prices_hash` 併入 shop_id（防跨賣場快取污染） | `Infrastructure/WooCommerce/SingleProductPriceHook.php` |
+| Application / Persistence | `ProfitShopHydrator::build_override_item()` + `CptProfitShopRepository::build_override_item()` 的 variations 迴圈改建 `VariationOverride`；反序列化對缺 `inflated_count` 鍵的舊資料一律 `?? 0`（唯一向後相容接住點，不需 migration） | `Application/UseCase/Shop/Support/ProfitShopHydrator.php` + `Infrastructure/Persistence/CptProfitShopRepository.php` |
+| 前台顯示 | 商品層 `inflated_count` 首次接上賣場前台：`get_total_sales() + inflated_count` > 0 時顯示「已售 N 件」；變體層 `inflated_count` 暫無顯示位置（見 `specs/tech-debt.md` TD-15） | `Infrastructure/WordPress/templates/profit-shop-front.php` |
+| Loader | 註冊 `SingleProductPriceHook::instance()` | `Loader.php` |
+| OpenAPI | `OverrideItemInput.variations.additionalProperties` 加 `inflated_count`（`integer`, `default: 0`, `minimum: 0`），description 同步標註向後相容與 TD-15 | `specs/api/api.yml` |
+| Frontend 型別 / 填表 | `TVariationOverride` 加 `inflated_count: number`；`Edit/index.tsx` 填表時逐筆正規化 `variations`（補齊 `override` 三欄 + `inflated_count: 0`，與商品層同一套理由：DB 可能回缺欄位的舊資料） | `pages/admin/ProfitShop/types.ts` + `Edit/index.tsx` |
+| Frontend Hook | **新增** `useProductVariations(productId, enabled)`：走 `wc-rest` `GET /products/{id}/variations`，`per_page` 當 filter 送（§3 陷阱）；**刻意設計成由展開列的子元件呼叫**，不在 `ItemsEditor` 那一層查，靠 rc-table `expandedRowRender` 天然 lazy 避開 N+1 與 Rules of Hooks 限制 | `pages/admin/ProfitShop/hooks.ts` |
+| Frontend 共用工具 | **新增**（計劃外，master 自決）`utils.ts`：`emptyPriceOverride` / `emptyVariationOverride` / `toInputValue` / `toPriceString` / `isSaleOverRegular` 五個純函式，供 `ItemsEditor`（商品層）與 `VariationOverrideEditor`（變體層）共用，避免兩份實作讓「留空 vs 填 0」語意分歧 | `pages/admin/ProfitShop/utils.ts` |
+| Frontend 元件 | **新增** `VariationOverrideEditor`：展開列內容，4 欄變體子表格（變體 / 目前價格 / 覆寫價格 / 灌水購買人數）+ 孤兒鍵處理（賣場存了某 variation_id 但 WC 已無此變體，顯示「變體已失效」+ 移除鈕，不可靜默隱藏）+ R-1 據實揭露 `<Alert>` | `pages/admin/ProfitShop/components/VariationOverrideEditor/index.tsx` |
+| Frontend 表格改版 | `ItemsEditor`：`showExpandColumn: false` 關掉 antd 預設最左展開欄，改在「商品名稱」欄自刻展開鈕（滿足「圖片左側」需求）；受控 `expandedRowKeys`；`rowExpandable` 限定 `isVariable(product?.type)`；三個變體 patch handler（最小重建範圍：只重建該商品那一列 + 該變體那一筆）；`validateItemsPriceOverride` 擴充涵蓋變體層（訊息同時指出商品與變體）；換頁 / 移除商品時同步清理 `expandedKeys` | `pages/admin/ProfitShop/components/ItemsEditor.tsx` |
+| 測試 | 5 個 PHP 測試檔異動：`OverrideItemTest`（+8）、`ProfitShopHydratorTest`（+4）、`CptProfitShopRepositoryTest`（+2）、`ProfitShopItemsRoundTripTest`（+5）、**新增** `SingleProductPriceHookTest`（11）；`PriceCalculatorTest` 的 `make_item()` helper 改用 `array_map` 包 `VariationOverride`，15 個呼叫點斷言不變 | `tests/Unit/` + `tests/Integration/` |
+
+**Phase 9 完工要點**：
+- **委派法把破壞面壓到最小**：`OverrideItem::get_variation_override()` 簽章維持 `?PriceOverride` 不變，`PriceCalculator` / `CartPriceOverrideHook` / `ItemValidator` / `V2Api` / `AddToCartHook` **五檔零修改**（`git diff --stat` 完全空白），只有 `OverrideItemTest` 需要新增測試鎖住「委派後回傳型別不漂移」這個 invariant（`assertNotInstanceOf`）；**真實環境 `wp eval` readback 已人工驗證**回傳 class 確實是 `PriceOverride`，簽章契約在真實執行環境成立
+- **R-1 CRITICAL GAP 已解決，且已人工端到端驗證**：規劃階段發現「變體覆寫價只在購物車生效，WC 單品頁沒有價格 filter」會讓顧客看到「單品頁一個價、購物車另一個價」的價格跳動，一旦開放變體覆寫 UI 就會變成使用者可見的信任問題。`SingleProductPriceHook`（第六-B 階段）補上這塊，且刻意收斂作用範圍（只在 `is_product()` 且帶合法 `profit_shop_id` 時才註冊 filter），不影響購物車 / 結帳既有流程。真實環境測試確認：單品頁價格區間隨變體覆寫位移（`42–45` → `45–888`）、逐變體 `display_price` / `display_regular_price` 正確、**負向驗證**（不帶 query string 時價格與 hash 皆完整回到原始值，零殘留）、賣場卡片 / 單品頁 / 購物車三處價格一致（皆為 888）。詳見 `profit-shop.rule.md` §7「SingleProductPriceHook」
+- **R-2 部分解決，商品層已人工驗證**：商品層 `inflated_count` 首次接上賣場前台顯示（此前是「存得進去、讀得出來、沒人用」的反模式），真實環境實測「已售 880 件」＝真實銷量 873 + `inflated_count` 7，數字精確吻合；一般賣場 `test-shop-alpha` 亦實測正確（含 `> 0` 守門）。變體層因為賣場前台只渲染父商品卡片、變體選擇整段發生在 WC 單品頁，暫無顯示位置，前端已誠實揭露（Tooltip 文案刻意與商品層不同，見 `react.rule.md` §6.5），登記 `specs/tech-debt.md` TD-15
+- **rc-table 內部行為逐行驗證後才動手**：`showExpandColumn: false`、展開列不帶 `data-row-key`（與既有 dnd-kit 拖曳排序零衝突）、`expandedRowRender` 天然 lazy 且收合不 unmount——三條都是先讀 `rc-table` 原始碼才確認可行，不是憑經驗猜的，詳見 `react.rule.md` §6.5「`ItemsEditor` 變體展開列」
+- **舊資料向後相容零 migration**：`CptProfitShopRepository` 對缺 `inflated_count` 鍵的舊 `variations[vid]` 一律 `?? 0`，下次儲存自然補齊；兩條 IT 測試鎖住這個行為（缺鍵讀為 0 且價格仍讀得出來、重新儲存後自然升級格式）
+- **三層錯誤處理分工延續 Phase 7 慣例**：前端守門（批次上限、Form rule）+ 後端 Domain 驗證（`ItemValidator` + `PriceOverride` VO，唯一真相，不因前端已擋就放寬）+ 降級不阻斷（變體補齊查詢失敗只影響顯示，不影響編輯與儲存）
+- 過程中發現並登記數個非本次 scope 但值得記錄的觀察：`composer lint` 在 HEAD 就不綠（成因是未追蹤的 `.claude/tmp/` 暫存目錄被 phpcs 掃到，`vendor/bin/phpcs inc/` 才是有意義的閘門，TD-18）、`memo(VariationOverrideEditor)` 因 inline callback 而實際不生效（TD-19，非正確性問題，效能觀察）、`CartItemMetaDisplay` 的 item_data 在 WooCommerce Cart Block / Store API 路徑下顯示 `undefined:`（TD-21，與 Phase 9 無關，人工驗證時發現）
+- **一個差點漏掉、已當場修正的文案落差**：`VariationOverrideEditor` 的 R-1 據實揭露 `<Alert>` 文案是規劃階段（`SingleProductPriceHook` 是否要做尚未拍板時）寫的，`SingleProductPriceHook` 後來確定要做且做完之後，那句「單品頁仍顯示原價」就與事實相反了，但沒有人回頭改。真實環境端到端驗證（單品頁區間 `42–45`→`45–888`）才抓到這個落差，team lead 已即時修正文案；已解決的原委與教訓見 `specs/tech-debt.md`「已解決」章節的 TD-20，同型失誤模式已寫進 `profit-shop.rule.md` §7「`SingleProductPriceHook`」章節（往後任何改動 `SingleProductPriceHook` 作用範圍時都要對照檢查相關 UI 文案）
+- 不引入新 npm / composer 套件；不動 `PriceCalculator` / `CartPriceOverrideHook` / `ItemValidator` / `V2Api` / `AddToCartHook`；`ProductPickerModal` 的「變體不可勾選」邊界不受影響（變體覆寫走 `ItemsEditor` 展開列，是不同的操作入口）
+
+**驗證數據（自動化）**（實測，2026-07-30；baseline 以**動工前實測**為準，非沿用 Phase 8 文件記載的數字——兩者 failure 數 1 / 21 完全吻合，僅 pass 數有出入，判斷是先前記錄時機差異，不影響回歸判斷）：
+
+| 層級 | Baseline（動工前實測） | 完成後 | 判定 |
+|---|---|---|---|
+| Unit | 341 tests / 670 assertions / 1 failure | **353 / 694 / 1** | +12 tests，failure 未增加（TD-2 pre-existing） |
+| Integration | 173 / 754 / 21 failures | **191 / 850 / 21** | +18 tests，failure 未增加（TD-1 pre-existing），21 條失敗名稱與順序與 baseline 完全相同 |
+| `vendor/bin/phpcs inc/` | 136/136 綠 | **138/138 綠** | +2 新檔 |
+| `npx tsc --noEmit` | 127 | **127** | 持平 |
+| `npx eslint "js/src/**/*.{ts,tsx}"` | 0 errors / 135 warnings | **0 errors / 135 warnings** | 持平 |
+| `pnpm build` | 成功 | **✓ 38.70s** | 成功 |
+
+`@group` 已逐檔驗證（`--filter XxxTest --testdox` 筆數 == 檔內 `test_` 方法數），無靜默跳過。
+
+**驗證數據（真實環境人工端到端驗證，2026-07-30，team lead 執行）**——這是唯一直接在瀏覽器 / `wp eval` 操作真實站台的驗證，性質與上面的自動化閘門不同；⚠️ **請勿誤讀為「全部通過」**，第五階段的 admin UI 手動清單仍未執行，見表格最後一列：
+
+**① 第六階段：商品層 `inflated_count` 前台顯示 —— ✅ 已驗證**
+
+| 賣場 | 商品 | 真實銷量 | `inflated_count` | 前台顯示 |
+|------|------|----------|-------------------|----------|
+| 臨時測試賣場 | Hoodie（商品 63） | 873 | 7 | 「已售 **880** 件」＝ 873 + 7，數字精確吻合 |
+| `test-shop-alpha` | `[E2E] Test Product` | — | — | NT$800 劃掉 → NT$600 +「已售 4 件」 |
+| `test-shop-alpha` | `銷售方案` | — | — | NT$10,017 → NT$200 +「已售 2 件」 |
+| `test-shop-alpha` | `T-Shirt` / `E2E Frontend Test Course` | — | 0 | **未顯示**「已售 0 件」（`> 0` 守門正確） |
+
+`<title>` SEO meta 亦確認正確：「測試賣場 Alpha｜測試夥伴 Alpha 的分潤賣場 - turbo」。
+
+**② 第六-B 階段：`SingleProductPriceHook`（單品頁變體價格）—— ✅ 已驗證**
+
+臨時賣場設定：商品 63 Hoodie，變體 79 覆寫 `999/888`、變體 86 覆寫 `777`（不設特價）、變體 80/81 不覆寫。
+
+- **Repository 讀回**（`wp eval`）：`vid=79 override=999/888 inflated=3 [override class: PriceOverride]`——委派法簽章契約在真實環境成立（回傳的是 `PriceOverride`，不是 `VariationOverride`）
+- **單品頁價格區間**：帶 `?profit_shop_id` 從 `NT$42–NT$45` 變為 `NT$45–NT$888`（區間端點位移是 filter 生效的指紋）
+- **逐變體 `get_available_variations()`**：79→`888/888`（原/特價 999/888）、86→`777/777`（只設原價，未渲染出「原價劃掉→特價」假象）、80/81→`45/45`（未覆寫，維持原樣）
+- **負向驗證（最關鍵）**：**不帶** `?profit_shop_id` 時價格與逐變體價格**全數回到原始值**（`42–45`），零殘留——同時證明 filter 只在帶合法 query string 時才註冊（不常駐），且 `woocommerce_get_variation_prices_hash` 改對了（沒改的話會讀到 `45–888` 的污染快取）
+- **三處價格一致性**：賣場卡片 → 單品頁（888）→ 加購變體 79 後 Store API `/wc/store/v1/cart` 的 `price` / `line_total` / `total_price` 皆為 `"888"`
+
+**③ 第五階段：`ItemsEditor` 展開列 admin UI 手動驗收清單（計劃書列的 11 條）—— ⏳ 尚未驗證**
+
+需登入 `wp-admin` 操作才能驗證：`+` icon 位置在商品圖片左側、展開/收合不重查（Network 面板確認）、
+拖曳排序（含展開狀態下）、換頁 / 換每頁筆數清空展開狀態、移除已展開商品無 console error、
+100 筆商品輸入無明顯延遲、驗證訊息切到出錯 Tab 等。這條清單需要使用者本人操作 wp-admin
+（agent 不會代為輸入登入密碼），本輪未執行，**不要當作已通過**。
+
+驗證①②所用的臨時賣場與購物車項目**已全部清理**，站台資料已還原至驗證前狀態（剩餘 powershop
+只有既有的 #2225 `123` 與 #1932 `test-shop-alpha`）。
+
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
+
+> 本清單於 Phase 9 文件同步時清過一輪：原第 8、9、13 項（賣場前台 IP-based rate-limit / 賣場前台快取效能 / `ProfitShop::has_item` Domain method）核對程式碼後確認**已分別在 Phase 5-A.1（`PageRateLimitService` + `ProfitShopRenderer::maybe_render` 的 429 處理）與 Phase 5-B（`ProfitShopRenderer` publish 不送 `nocache_headers()` 條件化 + `ProfitShop::has_item()`，後者現由 Phase 9 `SingleProductPriceHook` 直接消費）完工**，只是 commit 之後這份清單沒有跟著移除，予以刪除並重新編號；其餘項目核對後仍未完工，維持原樣。
 
 優先順序：
 1. **LoginRateLimiter context-aware message provider**（reviewer 順手：audit log + admin email 在 `pwchange:{id}` pseudo-slug 場景目前語意誤導為「登入失敗」，需抽 message provider 區分 login / pwchange context）
@@ -316,12 +397,11 @@ Partner 可設定夥伴圖片，顯示於分潤夥伴列表、編輯頁與賣場
 5. **6-A2 OBS 順手 3 條**：partnerExceptionMapper context-aware DRY 重構（LOW-7 master 自決跳過：兩函式 80% 相同但語意差異點需保留 caller） / Login `?reason=` query string 多 reason 擴充（目前僅 `password_changed`） / ChangePassword 失敗清欄位策略文件化到 react.rule.md HIGH-RISK 表
 6. **'power-shop' dataProvider thin wrapper**（Phase 4-A1 自決踩坑紀錄遺留）：包 `{code, data}` 讓未來頁面能用 useTable / useForm
 7. **賣場前台 SEO 強化**：`pre_get_document_title` filter（與 SEO plugin 整合，4-C1 m-3）/ Open Graph / structured data
-8. **賣場前台 IP-based rate-limit**（4-C1 security LOW-1，跨 `/profit-shop/*/` URL 防爬）
-9. **賣場前台快取效能**（4-C1 security LOW-3：publish 賣場對未登入者送對 CDN 友善 headers）
-10. **rate-limit 5/15min 改 3 次**（reviewer L-3，產品決策層）
-11. **token 三條讀取路徑收斂**（reviewer M-5，目前已 PHPDoc 化但未刪路徑）
-12. **賣場前台 inline style 抽 CSS file**（4-C1 m-10）+ `img loading='lazy'`（m-6）等 NIT 微優化
-13. **`ProfitShop::has_item(int): bool` Domain method**（4-C2 INFO-2 DDD 重構，目前由 AddToCartHook 自己 foreach）
+8. **rate-limit 5/15min 改 3 次**（reviewer L-3，產品決策層）
+9. **token 三條讀取路徑收斂**（reviewer M-5，目前已 PHPDoc 化但未刪路徑）
+10. **賣場前台 inline style 抽 CSS file**（4-C1 m-10）+ `img loading='lazy'`（m-6）等 NIT 微優化
+11. **變體層 `inflated_count` 前台顯示**（Phase 9 R-2 未竟事項，見 `specs/tech-debt.md` TD-15）：賣場前台目前只渲染父商品卡片，變體選擇整段發生在 WC 單品頁；要顯示變體層灌水人數需另外介入單品頁渲染，範圍大於商品層
+12. **變體查詢改走分頁載入**（Phase 9 R-4，見 `specs/tech-debt.md` TD-16）：`wc-rest` `per_page` 硬上限 100，變體超過 100 個的商品目前只顯示前 100 個
 
 ### Reviewer 累積的「未來補強建議」（非 blocking）
 

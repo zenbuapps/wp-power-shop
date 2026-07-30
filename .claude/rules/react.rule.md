@@ -451,6 +451,66 @@ onClick: (e) => {
 
 這樣卡片模式下 DOM 結構零變化，只有非卡片模式（例如被當內嵌篩選器塞進其他版面）才會多墊一段 margin。`admin-list-ui.rule.md` §7 也記了這條，供 Modal 情境查閱。
 
+### ⚠️ `NameId` 的內建截斷對「純字串 name」無效 —— 長商品名稱會撐破表格
+
+`antd-toolkit` 的 `NameId` 把名稱截斷寫成 **`[&_*]:at-truncate`**：
+
+```jsx
+// antd-toolkit dist（反編譯自 bundle）
+<div className={cn('at-flex at-items-end at-gap-x-1', className)}>
+  <div className="at-name at-min-w-0 at-m-0 [&_*]:at-truncate">{name}</div>
+  <div className="at-id ... at-shrink-0">#{id}</div>
+</div>
+```
+
+`[&_*]:` 是**後代元素**選擇器 —— 只有當 `name` 是 ReactNode（會渲染出子元素）時才生效。
+而 `ProductName` 傳進去的是 `record.name` **純字串**，沒有任何後代元素，
+**那條 truncate 從來沒有作用過**。名稱一長就會撐破 `width: 300` 的欄位，
+橫向蓋住右邊的「商品類型 / 狀態 / 價格」等欄位（`table-layout: fixed` 下欄寬不變，
+是 cell 內容溢出）。
+
+**修法**（`useColumns.tsx` 商品名稱欄，勿刪）：
+
+```tsx
+<ProductName<TProductRecord>
+  record={record}
+  className="min-w-0 [&_.at-name]:truncate"
+  onClick={() => edit('products', record?.id)}
+/>
+```
+
+- `[&_.at-name]:truncate` —— 直接對 `.at-name`（antd-toolkit 的穩定 class，非 hash）
+  補上 `overflow:hidden` + `text-overflow:ellipsis` + `white-space:nowrap`
+- `min-w-0` —— 給「ProductName 被放進 flex 容器」的情境用（見下），放在 `<td>` 裡無副作用
+
+### flex 容器內的截斷：祖先鏈上少一個 `min-w-0` 就全毀
+
+`ProductPickerModal` 為了在名稱後面外掛「已加入」Tag，把 `ProductName` 包了一層 flex：
+
+```tsx
+<div className="flex items-center gap-2 min-w-0">   {/* ← min-w-0 缺一不可 */}
+  {originalRender?.(value, record, index)}
+  <Tag color="green" className="m-0 flex-none">已加入</Tag>   {/* ← flex-none 缺一不可 */}
+</div>
+```
+
+**flex item 的 `min-width` 預設是 `auto`，不是 `0`** —— 它會拒絕收縮到小於內容寬度。
+少了 `min-w-0`，這層 flex 會被長名稱撐破，**內層所有 `min-w-0` 與 truncate 一起失效**
+（`ProductName` 自己內部雖有 `at-flex-1 at-min-w-0`，但那是相對於「已經被撐大的根」計算的）。
+
+通則：**要讓某個元素內的文字截斷，從它到「寬度被限制的祖先」之間的每一層 flex item
+都必須有 `min-w-0`**。斷一層就整條失效，而且不會有任何錯誤訊息 —— 只會看到版面被撐破。
+
+同理，不希望被壓縮的元素（Tag / 按鈕 / 圖示）要標 `flex-none`，否則它們會被
+`flex-shrink: 1`（預設值）壓扁變形。
+
+**驗證方式**：`min-w-0` / `flex-none` / arbitrary variant 都要確認 Tailwind 真的有產出（見 §10）：
+
+```bash
+pnpm build
+grep -c '\.min-w-0{\|\.flex-none{\|at-name' js/dist/assets/index-*.css   # 0 = 沒產出，class 白寫
+```
+
 ---
 
 ## 6.5 Profit Shop 系列前端架構（Phase 4-A）
@@ -602,11 +662,13 @@ isVariation(record.type)
 
 ```ts
 type TPriceOverride = { regular_price: string | null; sale_price: string | null; signup_fee: string | null }
+// Phase 9：變體層也有自己的 inflated_count，型別與商品層一致但各自獨立計數
+type TVariationOverride = { override: TPriceOverride; inflated_count: number }
 type TOverrideItem = {
   product_id: number
   inflated_count: number
   override: TPriceOverride
-  variations: Record<string, { override: TPriceOverride }>
+  variations: Record<string, TVariationOverride>
 }
 // UI 專用（不送後端，送出前 strip `_` 前綴欄位）：
 type TShopItemRow = TOverrideItem & {
@@ -616,7 +678,7 @@ type TShopItemRow = TOverrideItem & {
 }
 ```
 
-價格用 `string | null`、不是 `number | null`——後端 `PriceOverride` VO 是 nullable **string**，用 `bccomp` 走十進位字串比較避免浮點誤差。詳細契約與 BUG-A 修正始末見 `profit-shop.rule.md` §7「OverrideItem items 契約」。
+價格用 `string | null`、不是 `number | null`——後端 `PriceOverride` VO 是 nullable **string**，用 `bccomp` 走十進位字串比較避免浮點誤差。詳細契約與 BUG-A 修正始末見 `profit-shop.rule.md` §7「OverrideItem items 契約」；`variations[vid].inflated_count` 是 Phase 9 新增欄位，見同節「變體層覆寫」小節與下方「`ItemsEditor` 變體展開列」。
 
 後端 `OverrideItemOutput` **刻意不含** `name` / `sku`（避免顯示 stale 資料），前端用 `useShopItemProducts`（`pages/admin/ProfitShop/hooks.ts`）以 `wc-rest` `include=` 分 chunk 批次補齊：
 
@@ -691,6 +753,85 @@ const toWpRecord = (p: TProductRecord) => p as unknown as TWpDisplayRecord
 ids**（`hooks.ts`）——`map` 是「id → 商品」查表，結果與排列順序無關，排序後同一組 id
 的任意排列都對應同一個 queryKey，拖曳完全不會觸發重新查詢。少了這行，每拖一次就閃一次
 Skeleton。
+
+### `ItemsEditor` 變體展開列（Phase 9：`showExpandColumn: false` + 自刻展開鈕）
+
+`variable` / `variable-subscription` 商品在賣場商品表格的「**商品圖片左側**」（不是表格
+最左端）有一顆展開鈕，點開後可對每個變體覆寫價格與灌水購買人數（`VariationOverrideEditor`，
+展開列內容）。這條路徑牽涉 4 個 rc-table 內部行為，動手前先逐行讀過原始碼驗證，不是憑經驗
+猜的——這也是這幾條踩坑知識的價值所在：省下了試錯的時間。
+
+**1. `showExpandColumn: false` 關掉預設展開欄，改在商品名稱欄自刻按鈕**
+
+antd 預設的 `expandable` 會在表格**最左端**插入一顆獨立展開欄；但需求是「圖片左側」，圖片是
+`ProductName` 在「商品名稱」欄內畫出來的，是完全不同的位置。`showExpandColumn: false`
+（antd 5.7.0+，本專案 5.26.1）關掉那顆獨立欄位：
+
+- `rc-table/lib/utils/legacyUtil.js:28`：`showExpandColumn === false` → `expandIconColumnIndex = -1`
+- `rc-table/lib/hooks/useColumns/index.js:138-141`：`-1` 是 truthy，`if (expandColIndex >= 0 …)` 不成立 → `EXPAND_COLUMN` 不插入
+- 同檔 `:132` 的 deprecation warning 判斷式是 `>= 0`，所以 `-1` **不會噴 console warning**
+
+自刻的展開鈕**必須用受控 `expandedRowKeys`**（`ItemsEditor.tsx` 的 `expandedKeys` state +
+`toggleExpanded`）——非受控的話點了按鈕不會有任何反應，因為 antd 不知道要展開哪一列。
+
+**2. `expandable` 與既有 dnd-kit 拖曳排序（`components.body.row`）完全相容，零改動**
+
+`ItemsEditor` 既有的拖曳排序（見上方「商品拖曳排序」小節）靠 `BodyRow` 檢查
+`props['data-row-key']` 是否為 `undefined` 來決定要不要進 `useSortable`——這道守門原本是為
+了接住空資料時 antd 渲染的 `ant-table-placeholder` 那一列，沒想到剛好也接住了展開列：
+
+- `rc-table/lib/Body/ExpandedRow.js` 渲染展開列時**只傳 `className` 與 `style` 給自訂 row
+  component，不傳 `data-row-key`**
+- 展開列因此落進 `BodyRow` 既有的 `if (undefined === props['data-row-key']) return <tr {...props} />`
+  分支，不會被丟進 `useSortable({ id: undefined })` 而崩潰
+- `SortableContext` 的 `items` 只取 `pagedItems.map(it => it.product_id)`，展開列本來就
+  不在其中，也不會被誤算進拖曳序列
+
+`BodyRow` / `SortableRow` / `DndContext` / `SortableContext` 因此**一行都沒有為了展開列
+而修改**。這條規則具備一般性：任何自訂 `components.body.row` 元件，只要沿用「先判斷
+`data-row-key` 再決定要不要進特殊邏輯」這個 pattern，都能對 `expandable` 免疫，不限本專案。
+
+**3. `expandedRowRender` 天然 lazy，收合不 unmount——查詢可以直接寫在展開列的子元件裡**
+
+`rc-table/lib/Body/BodyRow.js` 的邏輯是 `expandedRef.current || (expandedRef.current = expanded)`
++ `if (rowSupportExpand && (expandedRef.current || expanded))`——沒展開過的列**根本不會
+render**，不會發查詢；收合是 `display:none`，**不會 unmount**，重新展開**不會重新查詢**。
+
+這代表 `useProductVariations`（變體查詢 hook）可以直接寫在 `VariationOverrideEditor`（展開
+列渲染出來的子元件）裡，不需要自己刻快取或 lazy-load 邏輯，也繞開了 `useShopItemProducts`
+因為 Rules of Hooks 而被迫寫死固定數量 `useList` 的限制（見上方「items 巢狀契約」小節）——
+每個展開的商品各自是獨立的元件實例，hook 數量不隨賣場商品數變動，展開 / 收合單純對應
+該元件的掛載 / 卸載。
+
+**4. 展開狀態的三個交會點**
+
+| 情境 | 處理 | 為什麼 |
+|------|------|--------|
+| 換頁 / 換每頁筆數 | `onChange` 內 `setExpandedKeys([])` | 分頁後畫面上是另一批商品，殘留展開狀態會讓「哪幾列展開」與使用者認知脫節 |
+| 移除商品（`handleRemove`） | 一併把該 `product_id` 從 `expandedKeys` 濾掉 | 否則 `expandedRowKeys` 會留著一個已不存在的 `product_id` |
+| 拖曳排序（`handleDragEnd`） | **不需處理**，`expandedKeys` 不受影響 | `expandedKeys` 存的是 `product_id` 本身、不是索引位置；重新排序後同一個商品的 `product_id` 不變，展開狀態自然跟著該商品走，不會跑到別列上 |
+
+**`wc-rest` 的 `per_page` 為何一定要當 filter 送——antd-toolkit 原始碼層級的成因**：`react.rule.md`
+§3 已經記過「`pagination.pageSize` 對 `wc-rest` 無效」這個坑，這裡補上從 `antd-toolkit`
+dataProvider 原始碼反編譯出的確切成因：
+
+```js
+// antd-toolkit dataProvider getList（反編譯自 bundle，變數名經最小化）
+C === "server" && (f.paged = s, f.posts_per_page = i)
+```
+
+6 個 dataProvider 共用同一份分頁序列化邏輯，`pagination` 一律被轉成 Powerhouse 風格的
+`paged` / `posts_per_page` query param；`filters` 走的是另一條 `arrayFormat: 'bracket'`
+序列化路徑，只有這條路徑送出去的參數才會是 WooCommerce 認得的 `per_page=100`。
+`useProductVariations`（`pages/admin/ProfitShop/hooks.ts`）查詢單一商品的變體清單時同樣
+必須把 `per_page` 當 filter 送，否則變體一多於 10 筆就看不到後面的（見 TD-16）。
+
+**截斷判斷用「實際回傳筆數」而非 `total`**：`VariationOverrideEditor` 判斷變體清單是否被
+WC REST `per_page` 硬上限（100）截斷時，用 `variations.length >= VARIATION_PAGE_LIMIT`，
+**不是** `total >= VARIATION_PAGE_LIMIT`——antd-toolkit 的 dataProvider 在回應缺
+`x-wp-total` header 時會把 `total` fallback 成 `1`，拿它當截斷判斷條件會讓「真的被截斷」
+的情況因為 `total` 是假的 `1` 而完全不觸發截斷提示，使用者會以為變體清單完整，其實只看到
+前 100 筆。
 
 ### 多 Tab 表單：驗證失敗**絕不能靜默 return**
 
