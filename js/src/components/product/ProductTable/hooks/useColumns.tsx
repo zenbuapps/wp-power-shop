@@ -39,9 +39,24 @@ export const useColumns = ({ showActions = true }: TUseColumnsOpts = {}) => {
 			dataIndex: 'name',
 			width: 300,
 			fixed: (width || 400) > 768 ? 'left' : undefined,
+
+			/*
+			 * `min-w-0 [&_.at-name]:truncate` 是長商品名稱不跑版的必要條件，勿刪。
+			 *
+			 * antd-toolkit 的 `NameId` 把截斷寫成 `[&_*]:at-truncate`（只作用在**後代元素**），
+			 * 但 `ProductName` 傳進去的 `name` 是 `record.name` 純字串、沒有後代元素，
+			 * 那條 truncate 因此從未生效 —— 名稱一長就會橫向溢出、蓋住右邊欄位。
+			 * 這裡直接對 `.at-name`（antd-toolkit 的穩定 class）補上 truncate。
+			 *
+			 * `min-w-0` 則是給「ProductName 被放進 flex 容器」的情境用的（例如
+			 * ProductPickerModal 為了外掛「已加入」Tag 而包了一層 flex）：flex item 的
+			 * `min-width` 預設是 `auto`，不加這個就會拒絕收縮到小於內容寬度，
+			 * 內層所有 `min-w-0` / truncate 都會一起失效。放在 `<td>` 裡則無副作用。
+			 */
 			render: (_, record) => (
 				<ProductName<TProductRecord>
 					record={record}
+					className="min-w-0 [&_.at-name]:truncate"
 					onClick={() => edit('products', record?.id)}
 				/>
 			),

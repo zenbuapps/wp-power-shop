@@ -311,18 +311,16 @@ const ListComponent = () => {
 								</span>
 							</Tooltip>
 						) : (
-							<Tooltip title={shopUrl}>
-								<Button
-									type="link"
-									size="small"
-									icon={<ExportOutlined />}
-									href={shopUrl}
-									target="_blank"
-									rel="noopener noreferrer"
-								>
-									開啟商店
-								</Button>
-							</Tooltip>
+							<Button
+								type="link"
+								size="small"
+								icon={<ExportOutlined />}
+								href={shopUrl}
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								開啟商店
+							</Button>
 						)}
 						<Button
 							type="link"

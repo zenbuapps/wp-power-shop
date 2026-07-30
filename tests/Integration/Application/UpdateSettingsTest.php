@@ -39,7 +39,6 @@ final class UpdateSettingsTest extends TestCase {
 			[
 				'rewrite_slug' => 'feed',
 				'report_slug'  => 'profit-report',
-				'default_rate' => 10,
 			]
 		);
 
@@ -60,7 +59,6 @@ final class UpdateSettingsTest extends TestCase {
 			[
 				'rewrite_slug' => 'shop',
 				'report_slug'  => 'profit-report',
-				'default_rate' => 10,
 			]
 		);
 
@@ -80,7 +78,6 @@ final class UpdateSettingsTest extends TestCase {
 			[
 				'rewrite_slug' => '$$$@@@',
 				'report_slug'  => 'profit-report',
-				'default_rate' => 10,
 			]
 		);
 
@@ -100,34 +97,38 @@ final class UpdateSettingsTest extends TestCase {
 			[
 				'rewrite_slug' => 'profit-shop-test',
 				'report_slug'  => 'profit-report-test',
-				'default_rate' => 25,
 			]
 		);
 
 		$this->assertSame( 200, $response->get_status() );
 		$body = $response->get_data();
 		$this->assertSame( 'profit-shop-test', $body['data']['rewrite_slug'] );
-		$this->assertSame( 25, $body['data']['default_rate'] );
+		$this->assertSame( 'profit-report-test', $body['data']['report_slug'] );
 	}
 
 	/**
-	 * M7：default_rate 超出 0-100 → 自動 clamp（admin friendly normalize）
+	 * 已移除的欄位（default_rate / page_template）送進來一律被忽略，不寫回 response
+	 *
+	 * 舊版前端 / 外部 script 若仍帶著這兩個欄位打 PUT，不應該噴錯，也不該讓它們
+	 * 復活到 wp_options 或 response body。
 	 *
 	 * @test
 	 * @group edge
 	 */
-	public function test_clamps_default_rate_when_out_of_range(): void {
+	public function test_ignores_removed_fields(): void {
 		$response = $this->put_settings(
 			[
-				'rewrite_slug' => 'profit-shop-clamp',
-				'report_slug'  => 'profit-report-clamp',
-				'default_rate' => 999,
+				'rewrite_slug'  => 'profit-shop-legacy',
+				'report_slug'   => 'profit-report-legacy',
+				'default_rate'  => 999,
+				'page_template' => 'banner-top',
 			]
 		);
 
 		$this->assertSame( 200, $response->get_status() );
 		$body = $response->get_data();
-		$this->assertSame( 100, $body['data']['default_rate'], 'default_rate 應被 clamp 至 100' );
+		$this->assertArrayNotHasKey( 'default_rate', $body['data'] );
+		$this->assertArrayNotHasKey( 'page_template', $body['data'] );
 	}
 
 	/**

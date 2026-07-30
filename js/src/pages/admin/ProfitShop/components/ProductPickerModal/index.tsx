@@ -64,15 +64,25 @@ const ProductPickerBodyComponent = ({
 				const originalRender = col.render
 				return {
 					...col,
+
+					/*
+					 * `min-w-0` + Tag 的 `flex-none` 缺一不可，勿刪：
+					 * 這層 flex 讓 ProductName 變成 flex item，而 flex item 的 `min-width`
+					 * 預設是 `auto`（拒絕收縮到小於內容寬度）—— 少了 `min-w-0`，長商品名稱
+					 * 會把這格撐破、橫向蓋住右邊的「商品類型 / 狀態 / 價格」等欄位。
+					 * 名稱本身的截斷由 `useColumns` 的 `[&_.at-name]:truncate` 負責。
+					 */
 					render: (
 						value: unknown,
 						record: TPickerRecord,
 						index: number
 					): ReactNode => (
-						<div className="flex items-center gap-2">
+						<div className="flex items-center gap-2 min-w-0">
 							{originalRender?.(value, record, index) as ReactNode}
 							{existingIds.has(Number(record?.id)) ? (
-								<Tag color="green">已加入</Tag>
+								<Tag color="green" className="m-0 flex-none">
+									已加入
+								</Tag>
 							) : null}
 						</div>
 					),

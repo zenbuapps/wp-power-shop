@@ -410,14 +410,54 @@ final class DtoRoundTripTest extends TestCase {
 	 */
 	public function test_settings_dto_round_trip(): void {
 		$arr = [
-			'rewrite_slug'  => 'shop',
-			'report_slug'   => 'report',
-			'default_rate'  => 10,
-			'page_template' => 'default',
+			'rewrite_slug' => 'powershop',
+			'report_slug'  => 'profit-report',
 		];
 
 		$dto = SettingsDto::from_array( $arr );
 
 		$this->assertSame( $arr, $dto->to_array() );
+	}
+
+	/**
+	 * SettingsDto：未知 key（含已移除的 default_rate / page_template）一律被忽略
+	 *
+	 * 鎖死「wp_options 內舊版殘留欄位不需要 migration」的契約 —— from_array 只認
+	 * 目前定義的欄位，to_array 的輸出也不會把它們帶回去。
+	 *
+	 * @group edge
+	 */
+	public function test_settings_dto_ignores_unknown_keys(): void {
+		$dto = SettingsDto::from_array(
+			[
+				'rewrite_slug'  => 'powershop',
+				'report_slug'   => 'profit-report',
+				'default_rate'  => 10,
+				'page_template' => 'default',
+			]
+		);
+
+		$this->assertSame(
+			[
+				'rewrite_slug' => 'powershop',
+				'report_slug'  => 'profit-report',
+			],
+			$dto->to_array()
+		);
+	}
+
+	/**
+	 * SettingsDto：預設值與 CptRegistrar / RewriteRules 的 fallback 一致
+	 *
+	 * 兩邊若不同步，reset 後設定頁顯示的值會與實際生效的 rewrite rule 不符，
+	 * 站長照畫面去開網址會吃 404。
+	 *
+	 * @group edge
+	 */
+	public function test_settings_dto_defaults_match_rewrite_fallbacks(): void {
+		$dto = SettingsDto::from_array( [] );
+
+		$this->assertSame( 'powershop', $dto->rewrite_slug, '應與 CptRegistrar::DEFAULT_REWRITE_SLUG 一致' );
+		$this->assertSame( 'profit-report', $dto->report_slug, '應與 RewriteRules::DEFAULT_REPORT_SLUG 一致' );
 	}
 }

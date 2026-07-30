@@ -38,9 +38,7 @@ final class ResetSettingsTest extends TestCase {
 		$repo->seed(
 			new SettingsDto(
 				rewrite_slug: 'custom-shop',
-				report_slug: 'custom-report',
-				default_rate: 50,
-				page_template: 'banner-bottom'
+				report_slug: 'custom-report'
 			)
 		);
 		$flusher = new SpyRewriteRulesFlusher();
@@ -50,10 +48,8 @@ final class ResetSettingsTest extends TestCase {
 		$useCase->execute();
 
 		$current = $repo->get();
-		$this->assertSame( 'shop', $current->rewrite_slug );
-		$this->assertSame( 'report', $current->report_slug );
-		$this->assertSame( 10, $current->default_rate, 'spec 預設 default_rate 為 10' );
-		$this->assertSame( 'default', $current->page_template );
+		$this->assertSame( 'powershop', $current->rewrite_slug, '應與 CptRegistrar::DEFAULT_REWRITE_SLUG 一致' );
+		$this->assertSame( 'profit-report', $current->report_slug, '應與 RewriteRules::DEFAULT_REPORT_SLUG 一致' );
 	}
 
 	/**
@@ -86,6 +82,6 @@ final class ResetSettingsTest extends TestCase {
 		$useCase->execute();
 		$useCase->execute();
 
-		$this->assertSame( 'shop', $repo->get()->rewrite_slug );
+		$this->assertSame( 'powershop', $repo->get()->rewrite_slug );
 	}
 }

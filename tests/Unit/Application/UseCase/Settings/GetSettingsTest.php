@@ -34,9 +34,7 @@ final class GetSettingsTest extends TestCase {
 		$repo->seed(
 			new SettingsDto(
 				rewrite_slug: 'shops',
-				report_slug: 'kpi',
-				default_rate: 12,
-				page_template: 'minimal'
+				report_slug: 'kpi'
 			)
 		);
 
@@ -46,8 +44,6 @@ final class GetSettingsTest extends TestCase {
 
 		$this->assertSame( 'shops', $dto->rewrite_slug );
 		$this->assertSame( 'kpi', $dto->report_slug );
-		$this->assertSame( 12, $dto->default_rate );
-		$this->assertSame( 'minimal', $dto->page_template );
 	}
 
 	/**
@@ -62,9 +58,7 @@ final class GetSettingsTest extends TestCase {
 
 		$dto = $useCase->execute();
 
-		$this->assertSame( 'shop', $dto->rewrite_slug );
-		$this->assertSame( 'report', $dto->report_slug );
-		$this->assertSame( 10, $dto->default_rate, 'spec 預設 default_rate 為 10' );
-		$this->assertSame( 'default', $dto->page_template );
+		$this->assertSame( 'powershop', $dto->rewrite_slug, '應與 CptRegistrar::DEFAULT_REWRITE_SLUG 一致' );
+		$this->assertSame( 'profit-report', $dto->report_slug, '應與 RewriteRules::DEFAULT_REPORT_SLUG 一致' );
 	}
 }

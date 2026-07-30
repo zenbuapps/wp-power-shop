@@ -47,10 +47,8 @@ final class FlushRewriteTest extends TestCase {
 		$request->set_body(
 			\wp_json_encode(
 				[
-					'rewrite_slug'  => 'profit-test-shop',
-					'report_slug'   => 'kpi-report',
-					'default_rate'  => 0,
-					'page_template' => 'default',
+					'rewrite_slug' => 'profit-test-shop',
+					'report_slug'  => 'kpi-report',
 				]
 			)
 		);
@@ -84,10 +82,8 @@ final class FlushRewriteTest extends TestCase {
 		$request->set_body(
 			\wp_json_encode(
 				[
-					'rewrite_slug'  => 'profit-shop-same',
-					'report_slug'   => 'profit-report-same',
-					'default_rate'  => 0,
-					'page_template' => 'default',
+					'rewrite_slug' => 'profit-shop-same',
+					'report_slug'  => 'profit-report-same',
 				]
 			)
 		);

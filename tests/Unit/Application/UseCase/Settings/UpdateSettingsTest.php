@@ -50,9 +50,7 @@ final class UpdateSettingsTest extends TestCase {
 
 		$dto = new SettingsDto(
 			rewrite_slug: 'profit-shops',
-			report_slug: 'profit-report',
-			default_rate: 20,
-			page_template: 'banner-top'
+			report_slug: 'profit-report'
 		);
 
 		$useCase->execute( $dto );
@@ -60,8 +58,6 @@ final class UpdateSettingsTest extends TestCase {
 		$current = $repo->get();
 		$this->assertSame( 'profit-shops', $current->rewrite_slug );
 		$this->assertSame( 'profit-report', $current->report_slug );
-		$this->assertSame( 20, $current->default_rate );
-		$this->assertSame( 'banner-top', $current->page_template );
 	}
 
 	/**
@@ -82,9 +78,7 @@ final class UpdateSettingsTest extends TestCase {
 
 		$dto = new SettingsDto(
 			rewrite_slug: 'kol-shop',
-			report_slug: 'profit-report',
-			default_rate: 5,
-			page_template: 'default'
+			report_slug: 'profit-report'
 		);
 
 		$useCase->execute( $dto );
@@ -94,33 +88,6 @@ final class UpdateSettingsTest extends TestCase {
 			$flusher->call_count(),
 			'spec §4.8：UpdateSettings 後應呼叫 flush_rules_if_needed 一次'
 		);
-	}
-
-	/**
-	 * edge：default_rate 邊界值 0 與 100 可寫入
-	 *
-	 * @group edge
-	 */
-	public function test_accepts_default_rate_at_boundaries(): void {
-		$repo     = new InMemorySettingsRepository();
-		$flusher  = new SpyRewriteRulesFlusher();
-		$detector = $this->makeNoopDetector();
-
-		$useCase = new UpdateSettings(
-			settingsRepo: $repo,
-			flusher: $flusher,
-			slugDetector: $detector
-		);
-
-		$useCase->execute(
-			new SettingsDto( 'shop', 'report', 0, 'default' )
-		);
-		$this->assertSame( 0, $repo->get()->default_rate );
-
-		$useCase->execute(
-			new SettingsDto( 'shop', 'report', 100, 'default' )
-		);
-		$this->assertSame( 100, $repo->get()->default_rate );
 	}
 
 	/**
@@ -142,9 +109,7 @@ final class UpdateSettingsTest extends TestCase {
 
 		$dto = new SettingsDto(
 			rewrite_slug: 'wp-admin',
-			report_slug: 'safe-report',
-			default_rate: 10,
-			page_template: 'default'
+			report_slug: 'safe-report'
 		);
 
 		$thrown = false;

@@ -13,6 +13,11 @@ namespace J7\PowerShop\Domains\ProfitShop\Application\DTO;
  * 對應規格：specs/2026-05-06-profit-shop-design.md §6.5
  *
  * 提供 Admin 設定頁面的讀寫資料載體。
+ *
+ * ⚠️ 只放**真的有消費點**的設定。曾經存在的 `default_rate`（預設分潤比例）與
+ * `page_template`（頁面模板）已移除 —— 兩者從 Phase 3-B 起就沒有任何一處讀取
+ * （新賣場不吃 default_rate、賣場前台固定 require `templates/profit-shop-front.php`），
+ * 留著只會讓後續維護者誤以為調整它們會改變行為。新增欄位前請先確定「誰會讀它」。
  */
 final class SettingsDto {
 
@@ -22,28 +27,16 @@ final class SettingsDto {
 	private const SLUG_REGEX = '/^[a-z0-9][a-z0-9\-]{0,29}$/';
 
 	/**
-	 * Default_rate 下限
-	 */
-	private const RATE_MIN = 0;
-
-	/**
-	 * Default_rate 上限
-	 */
-	private const RATE_MAX = 100;
-
-	/**
 	 * 建構子
 	 *
-	 * @param string $rewrite_slug  賣場頁面的 rewrite slug（例如 'shop'）
-	 * @param string $report_slug   報表頁面的 rewrite slug（例如 'report'）
-	 * @param int    $default_rate  預設分潤比例（0-100）
-	 * @param string $page_template 預設賣場頁面模板代號
+	 * @param string $rewrite_slug powershop CPT 的 rewrite slug（例如 'powershop'）。
+	 *                             ⚠️ 這條**不是**賣場前台網址 —— 前台走
+	 *                             `RewriteRules::SHOP_REWRITE_PREFIX`（固定 'profit-shop'）。
+	 * @param string $report_slug  Partner 報表頁面的 rewrite slug（例如 'profit-report'）
 	 */
 	public function __construct(
 		public readonly string $rewrite_slug,
-		public readonly string $report_slug,
-		public readonly int $default_rate,
-		public readonly string $page_template
+		public readonly string $report_slug
 	) {}
 
 	/**
@@ -55,7 +48,12 @@ final class SettingsDto {
 	 *  - 白名單正則 ^[a-z0-9][a-z0-9\-]{0,29}$
 	 *  - 不符合 → 拋 \DomainException( 'invalid_slug_format' )（會被 ExceptionMapper 對映為 400 validation_failed）
 	 *
-	 * default_rate 若超出 0~100 範圍會被 clamp（容錯處理，不擋使用者）。
+	 * 預設值刻意與 `CptRegistrar::DEFAULT_REWRITE_SLUG` / `RewriteRules::DEFAULT_REPORT_SLUG`
+	 * 保持一致 —— 兩邊若不同步，reset 後設定頁顯示的值會與實際生效的 rewrite rule 不符，
+	 * 站長照畫面去開網址會吃 404。
+	 *
+	 * 未知的 key（例如舊版殘留在 wp_options 的 default_rate / page_template）一律忽略，
+	 * 下次 save 時會被 to_array() 的輸出自然覆蓋掉，不需要 migration。
 	 *
 	 * @param array<string, mixed> $data 原始輸入陣列
 	 *
@@ -64,20 +62,12 @@ final class SettingsDto {
 	 * @return self
 	 */
 	public static function from_array( array $data ): self {
-		$rewrite_slug_raw = (string) ( $data['rewrite_slug'] ?? 'shop' );
-		$report_slug_raw  = (string) ( $data['report_slug'] ?? 'report' );
-
-		$rewrite_slug = self::normalize_slug( $rewrite_slug_raw, 'rewrite_slug' );
-		$report_slug  = self::normalize_slug( $report_slug_raw, 'report_slug' );
-
-		$default_rate_raw = (int) ( $data['default_rate'] ?? 10 );
-		$default_rate     = max( self::RATE_MIN, min( self::RATE_MAX, $default_rate_raw ) );
+		$rewrite_slug_raw = (string) ( $data['rewrite_slug'] ?? 'powershop' );
+		$report_slug_raw  = (string) ( $data['report_slug'] ?? 'profit-report' );
 
 		return new self(
-			rewrite_slug: $rewrite_slug,
-			report_slug: $report_slug,
-			default_rate: $default_rate,
-			page_template: (string) ( $data['page_template'] ?? 'default' ),
+			rewrite_slug: self::normalize_slug( $rewrite_slug_raw, 'rewrite_slug' ),
+			report_slug: self::normalize_slug( $report_slug_raw, 'report_slug' ),
 		);
 	}
 
@@ -86,17 +76,13 @@ final class SettingsDto {
 	 *
 	 * @return array{
 	 *   rewrite_slug: string,
-	 *   report_slug: string,
-	 *   default_rate: int,
-	 *   page_template: string
+	 *   report_slug: string
 	 * }
 	 */
 	public function to_array(): array {
 		return [
-			'rewrite_slug'  => $this->rewrite_slug,
-			'report_slug'   => $this->report_slug,
-			'default_rate'  => $this->default_rate,
-			'page_template' => $this->page_template,
+			'rewrite_slug' => $this->rewrite_slug,
+			'report_slug'  => $this->report_slug,
 		];
 	}
 

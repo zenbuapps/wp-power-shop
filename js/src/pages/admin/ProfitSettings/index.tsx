@@ -5,7 +5,7 @@ import {
 	useCustomMutation,
 	useInvalidate,
 } from '@refinedev/core'
-import { App, Form, Input, InputNumber, Skeleton } from 'antd'
+import { App, Form, Input, Skeleton } from 'antd'
 import { memo, useEffect, useRef } from 'react'
 
 import { ResetButton } from '@/pages/admin/ProfitSettings/ResetButton'
@@ -18,14 +18,15 @@ const { Item } = Form
  * Profit Shop 全域設定 DTO（對齊 specs/api/api.yml SettingsDto）
  *
  * - rewrite_slug / report_slug 須符合 ^[a-z0-9][a-z0-9-]{0,29}$（後端 sanitize_title 正規化）
- * - default_rate 範圍 0-100，超出時後端 clamp
- * - page_template 為 string（'default' / 'fullwidth' / 'sidebar' 等，由主題提供）
+ *
+ * ⚠️ 曾經存在的 `default_rate`（預設分潤比例）與 `page_template`（頁面模板）已移除 ——
+ * 兩者全專案零消費點（新賣場不吃 default_rate、賣場前台固定 require
+ * `templates/profit-shop-front.php`），留在設定頁只會讓站長誤以為調整它們會改變行為。
+ * 新增欄位前請先確定「誰會讀它」。
  */
 type TProfitSettings = {
 	rewrite_slug: string
 	report_slug: string
-	default_rate: number
-	page_template: string
 }
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,29}$/
@@ -87,9 +88,7 @@ const ProfitSettingsComponent = () => {
 		const contentChanged =
 			!!last &&
 			(last.rewrite_slug !== settings.rewrite_slug ||
-				last.report_slug !== settings.report_slug ||
-				last.default_rate !== settings.default_rate ||
-				last.page_template !== settings.page_template)
+				last.report_slug !== settings.report_slug)
 		if (isFirstFill || contentChanged) {
 			lastFilledSettingsRef.current = settings
 			if (!isFirstFill) {
@@ -166,10 +165,16 @@ const ProfitSettingsComponent = () => {
 					layout="vertical"
 					disabled={updater.isLoading}
 				>
+					{/*
+					 * ⚠️ 這欄改的是 powershop CPT 的永久連結（/{rewrite_slug}/{文章網址}/），
+					 * **不是**賣場前台網址 —— 前台走 `RewriteRules::SHOP_REWRITE_PREFIX`
+					 * （固定 'profit-shop'，見 RewriteRules.php:36），與本設定無關。
+					 * 說明文字曾誤寫為「影響賣場前台網址」，會讓站長改了以為網址會跟著變。
+					 */}
 					<Item
 						name="rewrite_slug"
-						label="Rewrite slug"
-						extra="影響賣場前台網址；變更後需重新整理 rewrite rules"
+						label="賣場 CPT 永久連結 slug"
+						extra="影響 powershop 文章型態的永久連結（/{slug}/{文章網址}/）；賣場前台網址固定為 /profit-shop/，不受此設定影響"
 						rules={[
 							{ required: true, message: '請輸入 rewrite slug' },
 							{
@@ -179,13 +184,13 @@ const ProfitSettingsComponent = () => {
 							},
 						]}
 					>
-						<Input placeholder="shop" autoComplete="off" />
+						<Input placeholder="powershop" autoComplete="off" />
 					</Item>
 
 					<Item
 						name="report_slug"
 						label="Partner 報表 slug"
-						extra="影響 partner 報表前台網址（/profit-report/{slug}/）"
+						extra="影響 partner 報表前台網址（/{slug}/{夥伴代稱}/）；變更後會自動重新整理 rewrite rules"
 						rules={[
 							{ required: true, message: '請輸入 report slug' },
 							{
@@ -195,33 +200,7 @@ const ProfitSettingsComponent = () => {
 							},
 						]}
 					>
-						<Input placeholder="report" autoComplete="off" />
-					</Item>
-
-					<Item
-						name="default_rate"
-						label="預設分潤比例（%）"
-						extra="新建立的賣場預設使用此比例；範圍 0-100，超出時後端會自動 clamp"
-						rules={[
-							{ required: true, message: '請輸入預設分潤比例' },
-							{
-								type: 'number',
-								min: 0,
-								max: 100,
-								message: '範圍須在 0-100 之間',
-							},
-						]}
-					>
-						<InputNumber min={0} max={100} className="w-full" />
-					</Item>
-
-					<Item
-						name="page_template"
-						label="頁面模板"
-						extra="由當前主題提供的可用模板（如 default / fullwidth）"
-						rules={[{ required: true, message: '請輸入頁面模板' }]}
-					>
-						<Input placeholder="default" autoComplete="off" />
+						<Input placeholder="profit-report" autoComplete="off" />
 					</Item>
 				</Form>
 			)}
