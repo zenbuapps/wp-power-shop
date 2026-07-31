@@ -214,9 +214,9 @@ applyTo: "**/*.{php,ts,tsx}"
 | Query var | `profit_shop_slug` | `profit_partner_report` |
 | 對象 | 終端買家（unauthenticated） | partner 本人（cookie auth） |
 | 渲染 | PHP page template + `get_header` / `get_footer`（**走 theme**） | 獨立 HTML 骨架（**不走 theme**） |
-| 框架 | **混合式**：PHP 印商品 grid（SEO 內容）+ React/antd 掛互動層（Modal / 購物車） | React SPA + axios + react-query |
+| 框架 | **混合式**：PHP 印商品 grid（SEO 內容）+ React/antd 掛互動層（Phase 12 起只剩商品 Modal） | React SPA + axios + react-query |
 | SEO | `<title>` / canonical 注入（防 plugin 衝突）+ 商品名稱／價格留在 HTML | 無 SEO 需求（partner-only） |
-| 加購流程 | Modal → 自訂 REST（`FrontCartApi`）→ WC hook 串聯（JS 停用時降級為 query string） | 無加購（純報表） |
+| 加購流程 | Modal → **WooCommerce 原生表單 POST** → WC hook 串聯（JS 停用時降級為 query string） | 無加購（純報表） |
 | 為何分流 | customer-facing + SEO + 不破壞 WC cart 流程 | partner-only + 完整 SPA 體驗 + 隔離 admin bar / theme CSS |
 
 ### 賣場前台的混合式架構（Phase 10，照搬 legacy）
@@ -249,17 +249,20 @@ PHP（ProfitShopRenderer + template）                React（profit-shop-front 
 | 通道 | 三閘門 | 說明 |
 |------|--------|------|
 | GET `?add-to-cart=X&profit_shop_id=Y` | ✅ | Phase 4-C1 原路徑，`<noscript>` 降級也走這條 |
-| POST form（hidden input） | ✅ | — |
+| **POST form（hidden input）** | ✅ | **Phase 12 起商品 Modal 走這條**：React 動態建隱藏 `<form method="post">` POST 回本頁，交給 `WC_Form_Handler::add_to_cart_action()`。PHP 正常填 `$_POST`，**不需要任何橋接** |
 | ~~admin-ajax（`FrontAjax`，Phase 10 採用）~~ | ✅ | **Phase 11 已移除**。原本 `$_POST` 分支天然帶 `profit_shop_id`，handler 只呼叫 `WC()->cart->add_to_cart()`、不自帶 `cart_item_data` |
 | `fetch` / axios + `Content-Type: application/json`（不橋接） | ❌ | PHP 不填 `$_POST` → shop_id 取不到 → 靜默走原價 |
-| **自訂 REST（`FrontCartApi`，Phase 11 採用）** | ✅ | 本身送的是 JSON body（PHP 不會填 `$_POST`），但 `FrontCartApi::add_to_cart_with_shop_context()` 在呼叫 `add_to_cart()` **前**主動把 `profit_shop_id` 橋接進 `$_POST`、呼叫後（`finally`）還原，因此仍能通過三道閘門 |
+| ~~自訂 REST（`FrontCartApi`，Phase 11 採用）~~ | ✅ | **Phase 12 已刪檔**。它送 JSON body（PHP 不會填 `$_POST`），靠 `add_to_cart_with_shop_context()` 在呼叫 `add_to_cart()` **前**主動橋接 `$_POST`、呼叫後（`finally`）還原，才通得過三道閘門 |
 | WC Store API `cart/add-item` | ❌ | payload 在 JSON body，且未橋接 `$_POST`（Phase 11 起已無消費者） |
 
-⚠ Phase 11 起前台購物車讀寫全收斂到 `FrontCartApi`（`/wp-json/power-shop/profit-shop-cart*`），
-不再是「寫入走 admin-ajax + `URLSearchParams`、讀取與運費走 WC Store API」的雙通道。
-REST 本身送 JSON body 之所以仍能通過三道閘門，關鍵在於 `FrontCartApi` 主動做了 `$_POST` 橋接
-（見上表），**不是**改動了 `AddToCartHook` 的讀取邏輯。任何新 endpoint 想沿用這條加購路徑，
-都必須自己做同樣的橋接，或走既有的 GET / POST form 通道。
+⚠ **Phase 12 起前台完全沒有購物車 API**：加購一律走 WooCommerce 原生表單 / query string，
+購物車與結帳交給 WooCommerce 自己的頁面。這也讓「JSON body 不會填 `$_POST`」這個坑
+自然消失——退回原生表單後不需要任何補償手段。
+
+若未來又要為前台補上非同步加購，記住三閘門只認 `$_GET` / `$_POST`：新 endpoint 必須**自己**
+在呼叫 `add_to_cart()` 前把 `profit_shop_id` 橋接進 `$_POST`（Phase 11 的做法），或走既有的
+GET / POST form 通道。**絕不能**改用 `add_to_cart()` 第 5 個參數 `$cart_item_data` 傳值——
+`AddToCartHook` 開頭的 short-circuit 會讓三道閘門全部被跳過。
 
 ### Profit Shop Domain（4-layer DDD，詳見 `profit-shop.rule.md`）
 
@@ -341,7 +344,7 @@ plugin.php
                       ├→ Infrastructure/WordPress/ProfitShopRenderer::instance(...) # Phase 4-C1，賣場前台 PHP renderer，DI ProfitShopRepositoryInterface；Phase 5-A.1 起注入 rate-limit + ip provider
                       ├→ Infrastructure/WordPress/ProfitShopShortcode::instance(...) # TD-13（前半），[power_shop_profit_shop id="..."]，與 ProfitShopRenderer 共用同一份 template（外層改 <div>、不注入 SEO meta）
                       ├→ Infrastructure/Rest/V2Api::instance() # 27+ 個 endpoint（Phase 6-A1 +partner-auth/change-password）
-                      ├→ Infrastructure/Rest/FrontCartApi::instance()             # Phase 11，賣場前台購物車自訂 REST（nonce / 讀取 / add-item / update-item / remove-item / select-shipping-rate），取代 Phase 10 的 FrontAjax（admin-ajax）
+                      │  （Phase 11 的 FrontCartApi 已於 Phase 12 刪檔——前台改走 WooCommerce 原生表單加購，不再有自訂購物車 REST）
                       ├→ Infrastructure/WooCommerce/AddToCartHook::instance(...)   # Phase 4-C2，priority 5（早於 CartPriceOverrideHook 的 10），DI ProfitShopRepositoryInterface
                       ├→ Infrastructure/WooCommerce/CartPriceOverrideHook::instance() # Phase 3-D，priority 10 / 999，admin context guard
                       ├→ Infrastructure/WooCommerce/CartItemMetaDisplay::instance(...) # Phase 4-C2，woocommerce_get_item_data filter，涵蓋 mini-cart / cart / checkout
@@ -437,45 +440,45 @@ HTTP request: /profit-shop/{slug}/
                   └→ get_footer()                                        # wp_footer 印出 bundle
 ```
 
-### 賣場前台 React 互動層載入流程（Phase 10 + Phase 11）
+### 賣場前台 React 互動層載入流程（Phase 10 → 11 → 12）
 
 ```
 wp_footer → profit-shop-front/main.tsx
   └→ readyState 判斷 → init()
       └→ document.getElementById('profit_shop_front_app')（找不到就靜默 return）
           └→ createRoot().render(
-               QueryClientProvider（refetchOnWindowFocus:false / retry:0）
-                 → ConfigProvider（token.colorPrimary ← settings）
-                   → AntdApp component={false}   ← 必須有，否則 App.useApp() 拿不到 notification
-                     → StyleProvider hashPriority="high"   ← 提高 antd CSS 權重，防 theme 蓋掉
-                       → <App />
+               ConfigProvider（token.colorPrimary ← settings）
+                 → AntdApp component={false}   ← 目前無消費者，但保留：缺了它 App.useApp()
+                 │                                回空物件、未來加 notification 會直接 throw
+                   → StyleProvider hashPriority="high"   ← 提高 antd CSS 權重，防 theme 蓋掉
+                     → <App />
              )
+             ⚠ Phase 12 移除 QueryClientProvider —— 本 bundle 已無任何非同步查詢
               └→ App.tsx useEffect：
                   ├→ querySelectorAll('div[data-ps-product-id]')
                   ├→ classList.remove('ps-not-ready')      # 解鎖灰階
                   ├→ addEventListener('click', 開 Modal)    # 整張卡片都是熱區
                   └→ cleanup：統一 removeEventListener（修正 legacy 在 forEach 內 return 的無效 cleanup）
-              └→ 渲染 <ProductModal>（modalProductId 命中才渲染）+ <Cart>
+              └→ 渲染 <ProductModal>（modalProductId 命中才渲染）
 
 資料來源：window.power_shop_front_data（PHP localize，未加密）
-  ├→ env      : siteUrl / checkoutUrl / cartApiUrl / shopId / shopSlug / nonce
-  │              （Phase 11：nonce 改為 wp_rest nonce；cartApiUrl 取代原本的 ajaxUrl / restUrl）
+  ├→ env      : siteUrl / shopId / shopSlug
+  │              （Phase 12 移除 cartApiUrl / nonce / checkoutUrl；ajaxUrl / restUrl 更早就沒了）
   ├→ settings : colorPrimary / showConfetti / showStock / showBuyerCount / startTime / endTime / shopStatus
+  │              （showConfetti 目前無消費者：頁面會 reload，彩帶來不及被看到）
   └→ products : TFrontProduct[]（含 description / images / stock / total_sales / extraBuyerCount / variations）
 
-購物車讀寫（Phase 11 起單一通道）：
-  └→ 讀取／加購／移除／改量／選運費 → 自訂 REST `FrontCartApi`（/wp-json/power-shop/profit-shop-cart*）
-       ├→ 一律送 X-WP-Nonce + withCredentials（cookie）
-       ├→ FrontCartApi::add_to_cart_with_shop_context() 把 profit_shop_id 橋接進 $_POST，
-       │    讓 AddToCartHook 的三道閘門讀得到（見上方「加購通道相容性」）
-       ├→ 每個 callback 開頭 ensure_cart_ready()：wc_load_cart() + WC_Cart::get_cart()
-       │    （REST context 錯過 wp_loaded，需主動觸發 session 還原）
-       └→ nonce 過期（403 rest_cookie_invalid_nonce）→ 自動打 GET .../nonce 換新 nonce 重試一次
-            （nonce endpoint 先從 logged_in cookie 還原身分再簽發，避免「換 nonce 得先有有效 nonce」死結）
-            （讓 publish 頁面仍可被 CDN 快取，不推翻 Phase 5-B）
+加入購物車（Phase 12 起，前台已無任何購物車 API）：
+  └→ ProductModal 的「加入購物車」→ 動態建隱藏 <form method="post"> POST 回本頁
+       ├→ 欄位：add-to-cart（父商品 ID）/ quantity / variation_id / attribute_* / profit_shop_id
+       │    （attribute_* 的鍵取自選中變體的 attributes 物件，不可自行加前綴組出來）
+       ├→ WC_Form_Handler::add_to_cart_action()（掛 wp_loaded）處理
+       │    → $_POST 天然帶 profit_shop_id → AddToCartHook 三道閘門照常驗證
+       ├→ 結果寫進 WC session notices → redirect 回本頁（或購物車頁，看站台 WC 設定）
+       └→ template 自印的 wc_print_notices() 呈現結果
 
-Phase 10 原本「寫入走 admin-ajax、讀取與運費走 WC Store API」的雙通道已整條移除，
-FrontAjax 與 WC Store API 皆不再有任何消費者。
+Phase 10 的 admin-ajax（FrontAjax）+ WC Store API 雙通道、Phase 11 的自訂 REST（FrontCartApi）
+皆已整條移除且刪檔，前台不再有任何購物車 API。
 ```
 
 ### Add-to-Cart 端到端流程（Phase 4-C2 串聯 Phase 3-D）

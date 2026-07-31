@@ -50,7 +50,7 @@ pnpm release:major
 9. **Don't** remove the Enqueue Guard (`General::in_url(['page=power-shop'])`)
 10. **Don't** 在 ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings 用 `useTable` / `useForm`（後端 `{code, data}` 與 antd-toolkit dataProvider shape 不相容）—— 用 `useCustom` / `useCustomMutation` 並明確指定 `dataProviderName: 'power-shop'`
 11. **Partner self-service portal** 是**獨立 SPA bundle**（mount 點 `#profit_partner_portal`，URL `/profit-report/{slug}/`），與 admin SPA 完全隔離。Auth 走 cookie + sessionStorage metadata（永不存 token）；不用 Refine / dataProvider，直接 axios + `useCustom`/`useCustomMutation`；不打包 admin（grep `App1` / `Refine` 0 命中為驗收）。
-12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**，商品 grid 一律由 PHP 印出（SEO 內容必須留在 HTML）。Phase 10 起是**混合式**：PHP 負責內容，另有第三個 React bundle（`js/src/profit-shop-front/`，antd）只掛「商品 Modal」與「購物車表格」互動層——這是 legacy 一頁商店的原始架構，照搬它同時滿足 SEO / 不破壞 WC cart / customer-facing。**Don't** 把商品名稱、價格搬離 PHP 輸出。AddToCart 用 **`profit_shop_id`** + WC `woocommerce_add_cart_item_data` filter 注入分潤標記，再交給 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。**Shortcode 呈現模式**另有 `[power_shop_profit_shop id="{post_id}"]`（`ProfitShopShortcode`，與上述 template 共用同一份，靠 `$is_shortcode_context` 旗標把外層 `<main>` 換成 `<div>`）；⚠️ 但 shortcode 模式的賣場**公開網址仍然開得起來**（`ProfitShopRenderer` 不檢查 `mode`），`BasicTab.tsx` 的據實告知警語不可移除。詳見 `profit-shop.rule.md` §7 / §12.8、`react.rule.md` §6.7 與 `specs/tech-debt.md` TD-13。
+12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**，商品 grid 一律由 PHP 印出（SEO 內容必須留在 HTML）。Phase 10 起是**混合式**：PHP 負責內容，另有第三個 React bundle（`js/src/profit-shop-front/`，antd）掛互動層——Phase 12 起這一層**只剩「商品 Modal」**（購物車表格已移除，購物車與結帳一律走 WooCommerce 自己的頁面）。**Don't** 把商品名稱、價格搬離 PHP 輸出。AddToCart 走 **WooCommerce 原生表單送出**（帶 `profit_shop_id`），由 WC `woocommerce_add_cart_item_data` filter 注入分潤標記，再交給 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價；加購結果由 template 自印的 `wc_print_notices()` 呈現（賣場頁不是 WC template，佈景主題的 `woocommerce_output_all_notices` 不會被觸發）。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。**Shortcode 呈現模式**另有 `[power_shop_profit_shop id="{post_id}"]`（`ProfitShopShortcode`，與上述 template 共用同一份，靠 `$is_shortcode_context` 旗標把外層 `<main>` 換成 `<div>`）；⚠️ 但 shortcode 模式的賣場**公開網址仍然開得起來**（`ProfitShopRenderer` 不檢查 `mode`），`BasicTab.tsx` 的據實告知警語不可移除。詳見 `profit-shop.rule.md` §7 / §12.8、`react.rule.md` §6.7 與 `specs/tech-debt.md` TD-13。
 13. **Always** 讓 admin 列表頁遵循 `.claude/rules/admin-list-ui.rule.md` 的「篩選卡片 + 實體列表 & 新增按鈕」標準版型（基準範本 `#/products`）：兩張 `antd-toolkit` 的 `Card`、新增按鈕在列表卡片內 Table 之上、Table 鋪 `defaultTableProps` + `getDefaultPaginationProps({label})`。**Don't** 用 Refine `<List>` 當列表頁外框、**Don't** 用 `antd` 的 `Card`。
 14. **Don't** 假設 `pnpm lint` 存在——實際腳本是 `pnpm lint:ts`（含 `--fix`）與 `pnpm lint:php`（含 `phpcbf`，會改檔案）；CI / agent 唯讀檢查用 `npx eslint "js/src/**/*.{ts,tsx}"`（不加 `--fix`）與 `composer lint`。
 15. **Don't** 把 antd `<Form>`（尤其 `type="submit"` 按鈕）直接放進 `antd-toolkit` 的 `SimpleModal` 而不處理事件冒泡——遮罩對所有冒泡 click 呼叫 `preventDefault()`，會連帶取消表單送出且無任何錯誤訊息。修法與清單見 `react.rule.md` §6.4 與 `admin-list-ui.rule.md` §7。
@@ -60,7 +60,7 @@ pnpm release:major
 19. **Don't** 寫帶 `tw-` prefix 的 Tailwind class——`tailwind.config.js` **沒有設 `prefix`**，class 一律無前綴（`mb-2` / `flex`）。唯一的例外是 config `plugins` 手寫的 6 個（`tw-hidden` / `tw-block` / `tw-inline` / `tw-fixed` / `tw-columns-1` / `tw-columns-2`，因為無前綴版與 WP 衝突被 `blocklist` 擋掉）。寫錯不會有 build 錯誤，樣式只是安靜地不生效。另：**新增 SPA bundle 時不可只 import 共用的 `js/src/assets/styles/tailwind.css`**——它被 admin 與 partner portal 共同 import，Vite 會把它提取成掛在 admin chunk 上的共用 CSS chunk，新 bundle 的 entry `css` 陣列裡根本沒有 Tailwind，所有 utility **靜默失效且 build 無警告**（Phase 10 實測）。正確做法是在該 bundle 自己的 CSS 檔寫 `@tailwind base; @tailwind utilities;`。驗收方式與完整說明詳見 `react.rule.md` §10。
 20. **Don't** 假設 `<Tooltip>` 包 disabled `<Button>` 會顯示提示——antd v5 拿掉了 v4 的 disabled 相容包裝，瀏覽器又不對 disabled `<button>` 派發滑鼠事件，提示因此永遠不會出現，且沒有任何錯誤訊息。也**不要**只靠 antd 目前會在 `disabled` 時抽掉 `<Button href>` 的 `href` 就假設安全——外開連結按鈕該拆成停用 / 可用兩條 render 分支，別把 `href` 和 `disabled` 一起塞給同一顆 `<Button>`。詳見 `react.rule.md` §2。
 21. **Don't** 想把 antd `<Table>` 的展開圖示放進「某個欄位內」（而非表格最左端）時，還去改 `components.body.row` 或另外處理展開列——用 `showExpandColumn: false` 關掉預設最左展開欄，改在目標欄位自刻按鈕 + 受控 `expandedRowKeys`（非受控點了沒反應）即可；`expandable` 與自訂 `components.body.row`（例如 dnd-kit 拖曳排序）**零衝突**，因為 rc-table 渲染展開列時只傳 `className` / `style` 給自訂 row component、**不傳 `data-row-key`**，會自動落進「先判斷 `data-row-key` 是否存在」這種既有守門的 fallback 分支。`expandedRowRender` 也天然 lazy（沒展開過的列不 render，收合是 `display:none` 不 unmount），查詢可以直接寫在展開列渲染的子元件裡，不需要自己刻快取。詳見 `react.rule.md` §6.5「`ItemsEditor` 變體展開列」。
-22. **Don't** 在賣場前台的加購路徑上繞過 `$_POST['profit_shop_id']`——後端 `AddToCartHook`（priority 5）**只**從 `$_GET` / `$_POST` 讀 `profit_shop_id`，讀不到就**靜默走商品原價、分潤失效，且沒有任何錯誤訊息**。Phase 11 起前台購物車全部收斂到自訂 REST（`/wp-json/power-shop/profit-shop-cart*`，`Infrastructure/Rest/FrontCartApi`），送的是 **JSON body**，PHP 因此**不會**填 `$_POST` —— 能運作是因為 `FrontCartApi::add_to_cart_with_shop_context()` 在呼叫 `WC()->cart->add_to_cart()` 前把 REST param **橋接進 `$_POST`**，並以 `finally` 還原。動這段程式碼（包含「順手改用 `add_to_cart()` 的第 5 個參數 `$cart_item_data` 傳 `profit_shop_id`」）會**跳過 `AddToCartHook` 的全部三道閘門**，變成任何人都能對任意商品套任意賣場的分潤價。也**不要**在 `FrontCartApi` 內複製三閘門邏輯。詳見 `react.rule.md` §6.7。（Phase 10 的「寫入走 admin-ajax + `URLSearchParams`、讀取與運費走 WC Store API」雙通道已**整條移除**，`FrontAjax` 與 Store API 皆不再有任何消費者。）
+22. **Don't** 在賣場前台的加購路徑上漏掉 `profit_shop_id`——後端 `AddToCartHook`（priority 5）**只**從 `$_GET` / `$_POST` 讀它，讀不到就**靜默走商品原價、分潤失效，且沒有任何錯誤訊息**。Phase 12 起前台加購一律走 **WooCommerce 原生表單**：React Modal 的「加入購物車」動態建一張隱藏 `<form method="post">` POST 回本頁（欄位 `add-to-cart` / `quantity` / `variation_id` / `attribute_*` / `profit_shop_id`），`<noscript>` 降級路徑則是 GET query string；兩者都會正常填 `$_GET` / `$_POST`，三道閘門照常驗證。**Don't** 為了「不重新載入頁面」改用 `fetch` / axios 送 JSON body——PHP 不會填 `$_POST`，分潤會靜默失效；真要走 REST 就必須自己在呼叫 `add_to_cart()` 前把值橋接進 `$_POST`。也**不要**改用 `add_to_cart()` 的第 5 個參數 `$cart_item_data` 傳 `profit_shop_id`（`AddToCartHook` 開頭有 short-circuit，那會**跳過全部三道閘門**，變成任何人都能對任意商品套任意賣場的分潤價）。詳見 `react.rule.md` §6.7。（Phase 10 的 admin-ajax `FrontAjax` + WC Store API 雙通道、Phase 11 的自訂 REST `FrontCartApi` 皆已**整條移除**，前台不再有任何購物車 API。）
 23. **Don't** 改動賣場前台的 PHP↔React DOM 契約（`data-ps-product-id` / `.ps-btn` / `.ps-not-ready` / `#profit_shop_front_app`）——改了會讓商品 Modal 開不起來、卡片永久灰階，而且**不會有任何錯誤訊息**。
 
 ## Profit Shop Domain（v1 開發中）
@@ -69,7 +69,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）+ 10（賣場前台 UI 照搬 legacy）+ 11（賣場前台購物車改自訂 REST）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台混合式 UI + Modal 加購端到端（單一 REST 通道）+ Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式可實際嵌入頁面）。Phase 7 / 8 / 9 已 commit（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）；Phase 10 / 11 由 `issue/L3` 分支的 `ff81dbb` 帶入，經本次 merge 併進 `refactor/one-page`。⚠️ Phase 9 與 Phase 10 / 11 是**兩條平行開發的分支**（各自從 Phase 8 之後接續編號、各自都叫 Phase 9），合併時以 `refactor/one-page` 保號、`issue/L3` 順延一位收斂；讀舊 commit message 時請注意 `ff81dbb` 內文的「Phase 9 / 10」即本文件的 Phase 10 / 11。已知問題與技術債見 `specs/tech-debt.md`。
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）+ 10（賣場前台 UI 照搬 legacy）+ 11（賣場前台購物車改自訂 REST）+ 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台混合式 UI + Modal 加購端到端（WooCommerce 原生表單）+ Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式可實際嵌入頁面）。Phase 7 / 8 / 9 已 commit（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）；Phase 10 / 11 由 `issue/L3` 分支的 `ff81dbb` 帶入，經本次 merge 併進 `refactor/one-page`。⚠️ Phase 9 與 Phase 10 / 11 是**兩條平行開發的分支**（各自從 Phase 8 之後接續編號、各自都叫 Phase 9），合併時以 `refactor/one-page` 保號、`issue/L3` 順延一位收斂；讀舊 commit message 時請注意 `ff81dbb` 內文的「Phase 9 / 10」即本文件的 Phase 10 / 11。已知問題與技術債見 `specs/tech-debt.md`。
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -405,7 +405,7 @@ Partner 可設定夥伴圖片，顯示於分潤夥伴列表、編輯頁與賣場
 | 測試 | `ProfitShopFrontDataSettingsTest`（12 method / 47 assertion，純 PHP）：settings 正規化 + CSS injection 白名單 + 壞時間戳不誤關店 | `tests/Unit/Infrastructure/WordPress/` |
 
 **Phase 10 完工要點**：
-- **架構是混合式而非二選一**：PHP 印商品 grid（SEO 內容留在 HTML）+ React 只掛 Modal / 購物車互動層。這是 legacy 的原始架構，同時滿足 Pitfall #12 的三個理由與「UI 完全一致」。Pitfall #12 因此**精確化**而非推翻
+- **架構是混合式而非二選一**：PHP 印商品 grid（SEO 內容留在 HTML）+ React 只掛 Modal / 購物車互動層（購物車那半已於 Phase 12 移除）。這是 legacy 的原始架構，同時滿足 Pitfall #12 的三個理由與「UI 完全一致」。Pitfall #12 因此**精確化**而非推翻
 - **hook 鏈零修改**：`AddToCartHook`(5) 三閘門 + `CartPriceOverrideHook`(10/999) HMAC 簽章完全沒動。三個 cart hook 的 admin guard 都是 `is_admin() && ! wp_doing_ajax()`，在 admin-ajax context 仍會掛載，所以 AJAX 加購自動繼承全部安全機制
 - **`ProfitShop::$settings` 通道啟用**：settings 端到端本來就通（Repository / Hydrator / DTO / V2Api），只是沒人讀。前台現在讀 legacy 相同的 key，缺值 fallback 預設 → 後台補上設定 UI 後前台零修改即生效（後台 UI 缺口見 TD-22）
 - **順手修掉 6 個 legacy 真實缺陷**（不是照搬 bug）：`useEffect` 無效 cleanup（`return` 寫在 `forEach` callback 內）/ `Gallery` hooks 順序違規 / 加購失敗 rollback 對變體漏刪 / 樂觀項目短描述欄位名錯 / variable 卡片價格 `(int)` 截斷小數 / `shopStatus` 改由伺服器時間計算
@@ -463,6 +463,50 @@ Phase 10 的前台購物車是「寫入走 admin-ajax（`FrontAjax`）、讀取�
 | profit-shop-front entry | JS 39.7 kB + CSS 19.1 kB（CSS 含 Tailwind 與新補的 `.ant-notification`） |
 | bundle 隔離 | `App1` / `@refinedev` / `dataProviderName` / `wc-rest` / `wc/store` / `admin-ajax` → **全部 0 命中**；`X-WP-Nonce` 1 命中（新 API 預期使用） |
 | 端到端執行期驗證 | **32 項全通過**（用 `rest_do_request()` 在真實 WP+WC 環境內部呼叫）：6 個 route 註冊成功／`wc_load_cart()` 在 REST context 生效／`cart_item_data['profit_shop_id']` 注入後三閘門確實跑到／4 筆 `_profit_*` meta 全部寫入／結帳前套用價格正確（商品原價 18 → 賣場覆寫特價 240，priority 999 驗章通過並 `set_price`）／3 則攻擊情境全擋（偽造不存在 shop_id、正版賣場套未授權商品、非法 `cart_item_key` 400）／nonce endpoint 回傳的 nonce 可通過 `wp_verify_nonce(..., 'wp_rest')` |
+
+### Phase 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車）已完工
+
+站長要求賣場前台「移除底下的購物車等資訊」，且商品 Modal 的「加入購物車」改用**原本 WordPress 的方式**加入購物車。Phase 10 / 11 為了「不離開頁面完成購物」而建的整條自訂購物車通道（前台購物車表格 + 樂觀更新 + 自訂 REST）因此失去存在理由，整條移除。
+
+| 層 | 變更 | 路徑 |
+|----|------|------|
+| 前端加購 | `AddToCartButton` 從 `useMutation` + `api.addToCart()` 改為**動態建立隱藏 `<form method="post">` POST 回本頁**，欄位 `add-to-cart`（父商品 ID）/ `quantity` / `variation_id` / `attribute_*` / `profit_shop_id`，交給 `WC_Form_Handler::add_to_cart_action()` 處理 | `js/src/profit-shop-front/ProductModal/AddToCartButton.tsx` |
+| 前端刪除 | `Cart/`（3 檔）、`hooks/useCart.ts`、`api.ts`、`components/LoadingText.tsx` 整批刪除；`atoms.ts` 移除 `cartDataAtom` / `defaultCartData`；`types.ts` 移除全部購物車 REST 型別（只留 `TProductVariationAttribute`）；`utils.tsx` 移除 `getPrice()`；`styles.css` 移除 `.ps-cart-table` 全區段；`main.tsx` 移除 `QueryClientProvider` | `js/src/profit-shop-front/` |
+| 前端連帶 | `StockInfo` 拿掉「，已加入購物車 N 件」（無資料來源）；`useProductModalProps` 的數量上限不再扣購物車既有數量（超買改由 WooCommerce 自己擋） | 同上 |
+| PHP 刪除 | `Infrastructure/Rest/FrontCartApi.php`（1590 行 / 6 endpoint）整檔刪除 + `Loader` 移除註冊；`ProfitShopFrontData::build_env()` 移除 `cartApiUrl` / `nonce` / `checkoutUrl` | `inc/classes/Domains/ProfitShop/` |
+| PHP 新增 | template 自印 `wc_print_notices()`（賣場頁不是 WC template，佈景主題掛在 `woocommerce_before_main_content` 的 `woocommerce_output_all_notices` 不會被觸發；少了它使用者按下加購後畫面**除了重新載入之外毫無變化**） | `Infrastructure/WordPress/templates/profit-shop-front.php` |
+
+**Phase 12 完工要點**：
+- **分潤鏈路完全沒動**：`AddToCartHook`(5) 三閘門 + `CartPriceOverrideHook`(10/999) HMAC 簽章 + `CartItemMetaDisplay` + `SingleProductPriceHook` 五個檔案一行未改。原生表單是 `method="post"`，`profit_shop_id` 正常進 `$_POST`，`AddToCartHook::extract_shop_id_from_request()` 讀得到——這正是 Phase 11 得靠 `$_POST` 橋接才能達成的事，退回原生表單後不再需要任何橋接
+- **`attribute_*` 的鍵取自選中變體的 `attributes` 物件**（WC `get_available_variations()` 的原始輸出，形如 `attribute_pa_color`），**不是**從 `selectedAttributesAtom` 的 `name` 自行加前綴組出來——自訂（非 taxonomy）屬性經 WC `sanitize_title()` 後可能與原始名稱不同（中文屬性會變成 percent-encoded），自行組鍵會在那些商品上安靜地對不上而被判為「缺少屬性」。順帶讓 TD-30 在這條新路徑上不再成立
+- **保留 `<AntdApp>` provider 與 `.ant-notification` z-index 規則**（目前無消費者）：缺了 provider 時 `App.useApp()` 回空物件、呼叫當下直接 throw 並中斷後續程式碼且無清楚錯誤訊息（`react.rule.md` §2），留 3 行 CSS + 一層零 DOM provider 的成本遠低於下一個人重踩。反之 `QueryClientProvider` 移除——本 bundle 已無任何非同步查詢，留著會誤導後人以為還有資料流
+- **UX 取捨（已知且刻意）**：原生加購會**重新載入整頁**，因此樂觀更新、彩帶（`showConfetti`）、「加入購物車成功」通知全部移除——它們在頁面 reload 前來不及被看到。加購結果改由 WC notice 呈現，若站台 WooCommerce 設定「加入購物車後轉跳購物車頁面」則會直接跳轉，這是 WooCommerce 原生行為
+
+**驗證數據**（實測，2026-07-31）：
+
+| 項目 | 結果 |
+|---|---|
+| `npx tsc --noEmit` | 127（baseline 127），`js/src/profit-shop-front/` 貢獻 **0** |
+| `vendor/bin/phpcs inc/` | **140/140 全綠**（Phase 11 為 156，差額是刪掉 `FrontCartApi.php` 後的檔案數變化） |
+| `php -l` × 3 檔 | 全過 |
+| `pnpm build` | 成功 45.01s，三個 entry 齊全 |
+| profit-shop-front entry | JS **16.7 kB**（Phase 11 為 39.7 kB，−58%）+ CSS **16.2 kB**（Phase 11 為 19.1 kB）；Tailwind 有產出、`ps-cart-table` 已不在 CSS 內 |
+| bundle 隔離 | `App1` / `@refinedev` / `Refine` / `dataProviderName` / `wc-rest` / `wc/store` / `admin-ajax` / `profit-shop-cart` / `axios` / **`X-WP-Nonce`** → **全部 0 命中**（`X-WP-Nonce` 從 Phase 11 的 1 命中回到 0，本 bundle 已不打任何 API） |
+| `npx eslint` | ⚠ **無法執行**：`eslint-import-resolver-typescript` 的 native binding 在本機載入失敗（`unrs-resolver`），對**未改動**的 `js/src/partner-portal/**` 跑同一指令也報同樣的 112 errors，確認是 pre-existing 環境問題、非本次改動造成。已登記 `specs/tech-debt.md` TD-31 |
+
+**真實站台端到端驗證**（實測，2026-07-31，對 `local-turbo.powerhouse.tw` 的 `test-shop-alpha` 賣場、商品 #65 T-Shirt，賣場覆寫價 300/240、商品原始價 18）：
+
+| 項目 | 結果 |
+|---|---|
+| 賣場頁 HTML 購物車殘留 | `ps-cart-table` / `profit-shop-cart` / `cartApiUrl` / `前往結帳` → **全部 0 命中** |
+| localize `env` 欄位 | 只剩 `{siteUrl, shopId, shopSlug}`，`cartApiUrl` / `nonce` / `checkoutUrl` 已消失 |
+| **A. POST 表單 + 合法 `profit_shop_id=1932`** | 加入購物車成功；分潤標記「來自賣場: 測試賣場 Alpha」顯示；**小計 NT$240（賣場覆寫特價）** |
+| **B. POST 表單但不送 `profit_shop_id`** | 加入成功；**無分潤標記**；小計 NT$18（商品原價） |
+| **C. POST 表單 + 偽造 `profit_shop_id=999999`** | 加入成功；**無分潤標記**；小計 NT$18（商品原價）—— 三道閘門正確拒絕 |
+
+A/B/C 三組對照同時證明：`$_POST['profit_shop_id']` 確實被 `AddToCartHook`（priority 5）讀到、三道閘門對偽造 shop_id 有效、`CartPriceOverrideHook`（priority 999）驗章後 `set_price` 正確、`CartItemMetaDisplay` 分潤標記正常。**退回原生表單後不需要任何 `$_POST` 橋接**這個推論在真實環境成立。
+
+⚠ 驗證過程踩到兩個**與本次改動無關**的環境陷阱，記錄下來避免重踩：(1) 站台裝了 **WP Rocket**，`/cart/` 頁與賣場頁的 GET 都會拿到快取版本，直接用 HTTP client 讀 `/cart/` 會看到「購物車是空的」的假象——要查真實購物車狀態必須走 `POST /?wc-ajax=get_refreshed_fragments`（見 TD-32）；(2) 系統 PATH 上的 `php` 不是 Local by Flywheel 的 PHP，`require wp-load.php` 會 Database Error，CLI 診斷腳本必須用 Local 自己的 PHP。
 
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 

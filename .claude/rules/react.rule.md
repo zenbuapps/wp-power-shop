@@ -1014,7 +1014,7 @@ grep -E 'App1|Refine|@refinedev|dataProviderName|wc-rest|wp-rest|X-WP-Nonce' par
 
 ---
 
-## 6.7 賣場前台 profit-shop-front 前端架構（Phase 10 + Phase 11，第三個 bundle）
+## 6.7 賣場前台 profit-shop-front 前端架構（Phase 10 → 11 → 12，第三個 bundle）
 
 customer-facing 的分潤賣場前台（`/profit-shop/{slug}/`）。**UI 與行為 1:1 照搬 legacy 一頁商店**
 （舊版 `/power-shop/{slug}/`）——原始 TSX 已從 `legacy/js/dist/assets/*.js.map` 的
@@ -1026,29 +1026,38 @@ customer-facing 的分潤賣場前台（`/profit-shop/{slug}/`）。**UI 與行�
 
 ```
 PHP（template）                          React（本 bundle）
-├─ 商品 grid（名稱/價格/圖 → SEO）      ├─ ProductModal（點卡片開啟）
-├─ div[data-ps-product-id]  ←─ 契約 ───┤   Gallery / 變體 / 庫存 / 購買人數 / 數量 / 加購
-├─ .ps-btn / .ps-not-ready  ←─ 契約 ───┤
-├─ #profit_shop_front_app   ←─ mount ──┤
-├─ window.power_shop_front_data ────────┤ 前端唯一資料來源（env / settings / products）
-└─ <noscript> 降級：query string 加購   └─ Cart（#ps-cart-table + 前往結帳）
+├─ 商品 grid（名稱/價格/圖 → SEO）      └─ ProductModal（點卡片開啟）
+├─ div[data-ps-product-id]  ←─ 契約 ───┐     Gallery / 變體 / 庫存 / 購買人數 / 數量
+├─ .ps-btn / .ps-not-ready  ←─ 契約 ───┤     加入購物車 → 動態建隱藏 form POST 回本頁
+├─ #profit_shop_front_app   ←─ mount ──┘     （WooCommerce 原生流程，整頁重新載入）
+├─ window.power_shop_front_data ────────→ 前端唯一資料來源（env / settings / products）
+├─ wc_print_notices()                     加購結果（成功 / 庫存不足 / 缺屬性）
+└─ <noscript> 降級：query string 加購
 ```
 
 **不要把商品資訊搬離 HTML**——那是這個頁面的 SEO 全部價值。React 呈現的是同一份資料的互動版本。
+
+**Phase 12 起本 bundle 不再有購物車**：購物車表格、樂觀更新、購物車 API 全部移除，
+購物車與結帳一律走 WooCommerce 自己的頁面。演進脈絡見下方「加入購物車」一節。
 
 ### 目錄結構
 
 ```
 js/src/profit-shop-front/
-├── main.tsx                    # entry：QueryClientProvider → ConfigProvider → AntdApp → StyleProvider
+├── main.tsx                    # entry：ConfigProvider → AntdApp → StyleProvider（無 QueryClientProvider）
 ├── App.tsx                     # 掃 div[data-ps-product-id]、移除 ps-not-ready、綁 click 開 Modal
-├── types.ts / atoms.ts / env.ts / api.ts / utils.tsx / styles.css / defaultImage.ts
+├── types.ts / atoms.ts / env.ts / utils.tsx / styles.css / defaultImage.ts
 ├── components/                 # Gallery / Price / PlusMinusInput / StockInfo / BuyerCount
-│                               #   ProductVariationsSelect / ToggleContent / LoadingText
-├── hooks/                      # usePlusMinusInput / useProductModalProps / useCart
-├── ProductModal/               # index.tsx + AddToCartButton.tsx
-└── Cart/                       # index.tsx + UpdateCartInputNumber.tsx + ShippingField.tsx
+│                               #   ProductVariationsSelect / ToggleContent
+├── hooks/                      # usePlusMinusInput / useProductModalProps
+└── ProductModal/               # index.tsx + AddToCartButton.tsx
 ```
+
+⚠ **本 bundle 沒有 `api.ts`，也不應該有**——所有資料來自 PHP `wp_localize_script`，
+唯一的「寫入」是 WooCommerce 原生表單送出。`main.tsx` 因此也**沒有** `QueryClientProvider`
+（留一個沒有任何 query 的 provider 會誤導後人以為這裡還有非同步資料流）；但
+`<AntdApp component={false}>` **刻意保留**，即使目前沒有任何 notification 呼叫——缺了它
+`App.useApp()` 會回空物件、呼叫當下直接 throw 並中斷後續程式碼且沒有清楚的錯誤訊息（見 §2）。
 
 ### 與 admin SPA / partner portal 的三處關鍵差異
 
@@ -1058,71 +1067,62 @@ js/src/profit-shop-front/
 | env 讀不到時 | **降級不 throw** | customer-facing，任何 env 缺失都不可白屏（對比 partner portal 的 `readPartnerEnv` 會 throw 給 ErrorBoundary） |
 | `StrictMode` | **不用** | 本 bundle 對 PHP 印出的**外部 DOM** 綁 listener，dev 下雙跑 effect 會多一輪解綁/重綁噪音 |
 
-### 購物車 API：單一自訂 REST（Phase 11，取代 Phase 10 的 admin-ajax + Store API 雙通道）
+### 加入購物車：WooCommerce 原生表單送出（Phase 12，取代 Phase 11 的自訂 REST）
 
-Phase 10 曾是「寫入走 admin-ajax、讀取與選運費走 WC Store API」的雙通道，代價是兩套回應形狀、
-兩套錯誤碼、兩套 nonce 機制，前端得各寫一份處理。Phase 11 把兩邊合而為一，`api.ts` 改成**單一**
-axios instance，全部打 `env.cartApiUrl`（`/wp-json/power-shop/profit-shop-cart*`）：
+演進脈絡（三個 Phase、三種做法，**現在是第三種**）：
 
-```ts
-export const cartClient = axios.create({
-  baseURL: cartApiUrl,
-  withCredentials: true,        // guest 購物車靠 WooCommerce session cookie 識別
-  headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-})
-```
+| Phase | 做法 | 為何換掉 |
+|-------|------|----------|
+| 10 | 寫入走 admin-ajax（`FrontAjax`）、讀取與運費走 WC Store API | 同一台購物車兩套回應形狀、兩套錯誤碼、兩套 nonce 機制，前端各寫一份 |
+| 11 | 全部收斂到自訂 REST `FrontCartApi`（`/wp-json/power-shop/profit-shop-cart*`） | 站長要求移除前台購物車 UI、加購改用「原本 WordPress 的方式」，整條通道失去存在理由 |
+| **12** | **WooCommerce 原生表單送出**，前台不再有任何購物車 API | — |
 
-| 動作 | Method | 路徑 |
-|------|--------|------|
-| 取新 nonce | GET | `/nonce` |
-| 讀購物車 | GET | ``（根路徑）|
-| 加購 | POST | `/add-item` |
-| 改量 | POST | `/update-item` |
-| 移除 | POST | `/remove-item` |
-| 選運費 | POST | `/select-shipping-rate` |
+`AddToCartButton` 的 `handleClick` 動態建一張隱藏 `<form method="post">`、`action` 設為
+`window.location.href`，append 完隱藏欄位後 `form.submit()`：
 
-**兩條紀律**：
+| 欄位 | 值 |
+|------|----|
+| `add-to-cart` | **父商品** ID（變體商品也是父 ID，對齊 WC `single-product/add-to-cart/variable.php`） |
+| `quantity` | 數量選擇器的值 |
+| `variation_id` | 已選變體 ID（只有 variable 商品才送） |
+| `attribute_*` | 變體屬性值（只有 variable 商品才送，鍵取自 WC 自己回的 `attributes`，見下方） |
+| `profit_shop_id` | 賣場 post ID（`env.shopId`，`> 0` 才送） |
 
-1. **一律送 `X-WP-Nonce`**：WordPress 的 `rest_cookie_check_errors()` 在「沒送 nonce」時會把請求
-   降級成 guest（`wp_set_current_user(0)`），已登入使用者會操作到另一份購物車。
-2. **後端統一回 `{ code, message, data }`**，`api.ts` 一律**剝掉外殼只回 `data`**，呼叫端拿到的
-   永遠是 payload 本身。
+送出後由 `WC_Form_Handler::add_to_cart_action()`（掛 `wp_loaded`）處理，結果寫進 WC session
+的 notices，再 redirect 回本頁（或購物車頁，看站台的 `woocommerce_cart_redirect_after_add` 設定）。
+notices 由 template 自印的 `wc_print_notices()` 呈現。
 
-⚠ **後端能讀到 shop_id，靠的是 PHP 端主動橋接，不是前端做了什麼特殊處理**。`AddToCartHook`
-（priority 5）從 **`$_GET` / `$_POST`** 讀 `profit_shop_id`，而本 bundle 送的是 JSON body，PHP
-**不會**自動填 `$_POST`。加購因此能運作，是因為後端 `FrontCartApi::add_to_cart_with_shop_context()`
-在呼叫 `WC()->cart->add_to_cart()` **之前**把 `profit_shop_id` 橋接進 `$_POST`、呼叫後以 `finally`
-還原——前端 `addToCart()` 只需要照常把 `profit_shop_id` 放進 JSON body 送出即可，**不需要**（也
-不應該）改用 `URLSearchParams` 或任何 form-urlencoded 技巧。詳細機制見 `profit-shop.rule.md` §12.8
-「Phase 11：前台購物車改自訂 REST」與 `Infrastructure/Rest/FrontCartApi.php` 的檔頭 docblock。
+**三條紀律：**
 
-### nonce 過期自動修復（讓頁面仍可被 CDN 快取）
+1. **`profit_shop_id` 一定要送**：`AddToCartHook`（priority 5）只從 `$_GET` / `$_POST` 讀它，
+   漏送就**靜默走商品原價、分潤失效，且沒有任何錯誤訊息**。表單是 `method="post"`，PHP 會正常
+   填 `$_POST`，三道閘門（賣場存在 / `status=publish` / 商品屬於該賣場）照常驗證——這條路徑與
+   template 的 `<noscript>` 降級加購、Phase 4-C1 的 query string 加購完全同源。
+2. **`attribute_*` 的鍵取自選中變體的 `attributes` 物件**（WC `get_available_variations()`
+   回的原始鍵，形如 `attribute_pa_color`），**不要**從 `selectedAttributesAtom` 的 `name`
+   自行加 `attribute_` 前綴組出來。`selectedAttributes` 的 `name` 沒有前綴（例：`pa_color`），
+   而自訂（非 taxonomy）屬性的名稱經 WC `sanitize_title()` 後可能與原始名稱不同（中文屬性會
+   變成 percent-encoded），自行組鍵會在那些商品上安靜地對不上、被 WC 判為「缺少屬性」。
+   變體本身帶的鍵才是 WC 認得的權威值；只有變體該欄位是空字串（"任意" 變體）時才退回使用者
+   實際選的值。
+3. **不要為了「不重新載入頁面」改回 `fetch` / axios**：送 JSON body 時 PHP **不會**填 `$_POST`，
+   分潤會靜默失效。真要走 REST，就必須在呼叫 `add_to_cart()` **前**自己把 `profit_shop_id`
+   橋接進 `$_POST`（Phase 11 的 `FrontCartApi::add_to_cart_with_shop_context()` 就是這麼做的），
+   而且**絕不能**改用 `add_to_cart()` 第 5 個參數 `$cart_item_data` 傳值——`AddToCartHook` 開頭
+   有 short-circuit（`isset($cart_item_data['profit_shop_id'])` 就 return），那會**跳過全部三道
+   閘門**，變成任何人都能對任意商品套任意賣場的分潤價。
 
-`ProfitShopRenderer` 對 `status=publish` 的頁面**刻意不送 nocache**（Phase 5-B 的 CDN 優化），
-所以 HTML 內的 nonce 可能是幾小時前快取的。`api.ts` 的 `request()` 因此在收到
-**403 且 body `code === 'rest_cookie_invalid_nonce'`** 時自動打 `GET /nonce` 取新 nonce 並**重試一次**：
-
-```ts
-try {
-  const response = await send(currentNonce)
-  return response.data.data
-} catch (error) {
-  if (!isInvalidNonceError(error)) throw error
-  currentNonce = await refreshNonce()
-  const retried = await send(currentNonce)
-  return retried.data.data
-}
-```
-
-判斷條件是 WordPress REST cookie 認證的錯誤碼 `rest_cookie_invalid_nonce`（**不是**舊
-admin-ajax 時代自訂的 `invalid_nonce`——沿用舊條件會讓這個重試機制永遠不觸發）。`refreshNonce()`
-刻意**不帶** `X-WP-Nonce`：帶了過期 nonce 反而會被 403 擋下，變成「要換 nonce 得先有有效
-nonce」的死結。後端的 `GET /nonce` 會先從登入 cookie 還原使用者身分再簽發，所以不帶 nonce 也
-拿得到正確的值（見 `profit-shop.rule.md` §12.8）。
-
-**不要**為了 nonce 新鮮度改成「頁面一律送 nocache」——那會退回 Phase 5-B 之前的效能。
+**連帶移除的 UX（已知且刻意）**：整頁會重新載入，所以樂觀更新、彩帶（`showConfetti`）、
+「加入購物車成功」通知在 reload 前都來不及被看到，一併移除。`StockInfo` 的「，已加入購物車
+N 件」與 `useProductModalProps` 的「數量上限扣掉購物車既有數量」同樣失去資料來源——超買改由
+WooCommerce 自己在 `add_to_cart()` 時擋下並顯示 notice，那本來就是庫存判斷的唯一真相，
+前端那層只是體驗優化。**不要**為了補回這些細節就把購物車讀取通道重新接回來。
 
 ### 照搬時修掉的 legacy 缺陷（不要「還原」回去）
+
+⚠ 第 3、4、7 條所修正的程式碼（樂觀更新 rollback、樂觀項目欄位、加購成功通知）已隨
+Phase 12 移除購物車而**不再存在於本 bundle**。條目刻意保留：它們記錄的是 legacy 原始碼裡
+真實存在的缺陷，任何人日後再從 `legacy/js/dist/assets/*.js.map` 照搬同一批元件時仍會踩到。
 
 | # | legacy 的問題 | 本 bundle 的處理 |
 |---|---------------|------------------|
@@ -1145,7 +1145,7 @@ nonce」的死結。後端的 `GET /nonce` 會先從登入 cookie 還原使用�
 
 | 元件 | 原本的寫法 | 為什麼會踩雷 |
 |------|-----------|--------------|
-| `ProductModal/AddToCartButton.tsx` | 成功通知裡「前往購物車」的可點文字，legacy 用 `<p onClick>` | antd 通知是 **portal 到 `document.body`**，會吃到佈景主題的 CSS；`jsx-a11y` 也不允許 non-interactive element 帶 interactive role，故不能直接用 `<p onClick>` |
+| ~~`ProductModal/AddToCartButton.tsx`~~（Phase 12 已無此程式碼） | 成功通知裡「前往購物車」的可點文字，legacy 用 `<p onClick>` | antd 通知是 **portal 到 `document.body`**，會吃到佈景主題的 CSS；`jsx-a11y` 也不允許 non-interactive element 帶 interactive role，故不能直接用 `<p onClick>` |
 | `components/ToggleContent.tsx` | 展開／收合的漸層遮罩 | 遮罩是 grid/flex 版面裡的一個互動熱區，換成 `<button>` 會被主題的 `padding` / `display` 污染，遮罩形狀跑掉 |
 | `components/Gallery.tsx` | 縮圖（`<img>` 外層的點擊熱區） | 縮圖是 `grid-cols-4` 的**直接子元素**，若外層是帶主題樣式的 `<button>`，`aspect-square` 正方形排列會被主題的 `min-height` / `min-width` 撐歪，focus 時還會多一圈瀏覽器預設 outline |
 
@@ -1157,25 +1157,27 @@ onKeyDown={...}>`，不要為了「語意正確」硬套原生 `<button>`。
 
 | Bundle | size | 備註 |
 |--------|------|------|
-| profit-shop-front entry | 39.7 kB | 自家程式碼（Phase 11：`api.ts` 收斂為單一 REST 通道後略減） |
-| profit-shop-front CSS | 19.1 kB | `styles.css`（`ps-btn` / `ps-cart-table` / `ps-addon` + Tailwind + Phase 11 新補的 `.ant-notification` z-index 修正） |
+| profit-shop-front entry | **16.7 kB** | 自家程式碼（Phase 11 為 39.7 kB；Phase 12 刪掉 Cart / api.ts / useCart / 樂觀更新後 −58%） |
+| profit-shop-front CSS | **16.2 kB** | `styles.css`（`ps-btn` / `ps-addon` + Tailwind + `.ant-notification` z-index；Phase 12 移除 `ps-cart-table` 全區段後從 19.1 kB 降下來） |
 | 共用 chunk | clsx 610 kB + react 91.2 kB + AntdIcon 15.7 kB | 與 admin / partner portal 共用（Vite 自動 dedup） |
 
 ### 隔離驗收（新增或改動本 bundle 時必跑）
 
 ```bash
 pnpm build
-# 對 manifest 中 js/src/profit-shop-front/main.tsx 的 entry chunk grep
-grep -E 'App1|@refinedev|Refine|dataProviderName|wc-rest|wc/store|admin-ajax' js/dist/assets/main-*.js
-# → 應全部 0 命中
+# 先從 manifest 取出本 bundle 的 entry chunk 檔名（別直接 glob main-*.js —— admin entry 也叫這個）
+F=$(node -e "console.log(JSON.parse(require('fs').readFileSync('js/dist/manifest.json','utf8'))['js/src/profit-shop-front/main.tsx'].file)")
 
-grep -c 'X-WP-Nonce' js/dist/assets/main-*.js
-# → Phase 11 起應為 1（FrontCartApi 認證用），這是預期使用，不是隔離破口
+for p in App1 @refinedev Refine dataProviderName wc-rest wc/store admin-ajax X-WP-Nonce profit-shop-cart axios; do
+  printf "%-18s %s\n" "$p" "$(grep -o "$p" "js/dist/$F" | wc -l)"
+done
+# → Phase 12 起應**全部 0 命中**（本 bundle 已不打任何 API）
 ```
 
-⚠ Phase 10 的驗收指令曾把 `X-WP-Nonce` 也列進「應 0 命中」清單——那是雙通道時代的產物（本 bundle
-當時完全不打任何帶 nonce 的自家 endpoint）。Phase 11 起本 bundle 改走自訂 REST，`X-WP-Nonce` 是
-`FrontCartApi` 認證的必要 header，**預期會命中 1 次**，不要照舊清單誤判為隔離失敗。
+⚠ 這份清單的期望值隨 Phase 變過兩次，照舊清單會誤判：Phase 10 要求 `X-WP-Nonce` 0 命中（當時
+不打任何自家 endpoint）→ Phase 11 改成預期命中 1 次（走自訂 REST `FrontCartApi`，nonce 是必要
+header）→ **Phase 12 回到 0 命中**（加購改走 WooCommerce 原生表單，前台不再有任何 API 呼叫，
+連 `axios` 都不再進 bundle）。
 
 ---
 

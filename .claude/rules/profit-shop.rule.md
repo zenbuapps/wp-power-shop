@@ -1096,7 +1096,8 @@ $raw = $_GET['profit_shop_id'] ?? $_POST['profit_shop_id'] ?? null;
 #### Phase 10：前台 UI 照搬 legacy（混合式 PHP + React）
 
 Phase 4-C 的「純 PHP、無 React」在 Phase 10 演進為**混合式**：PHP 仍負責印出商品 grid
-（SEO 內容留在 HTML），React/antd 只掛「商品 Modal」與「購物車表格」互動層。這**不是推翻**
+（SEO 內容留在 HTML），React/antd 只掛「商品 Modal」與「購物車表格」互動層（後者已於 Phase 12
+移除，見下方 Phase 12 小節）。這**不是推翻**
 Pitfall #12——legacy 一頁商店本身就是這個架構，照搬它同時滿足「SEO / 不破壞 WC cart /
 customer-facing」三個理由與「UI 與舊版完全一致」的要求。前端細節見 `react.rule.md` §6.7。
 
@@ -1154,7 +1155,7 @@ post meta / Hydrator / DTO / V2Api）。`ProfitShopFrontData::settings()` 讀 le
 47 assertion，純 PHP 不啟 WP）。`build_products()` 與（Phase 11 起）`FrontCartApi` 仍待補 IT，見
 `specs/tech-debt.md` TD-29。
 
-#### Phase 11：前台購物車改自訂 REST
+#### Phase 11：前台購物車改自訂 REST（**已於 Phase 12 整條移除**，保留供日後參考）
 
 Phase 10 的前台購物車是「寫入走 admin-ajax（`FrontAjax`）、讀取與選運費走 WC Store API」的雙通道，
 本 Phase 收斂為單一自訂 REST：`Infrastructure/Rest/FrontCartApi.php`（`namespace = 'power-shop'`，
@@ -1162,6 +1163,9 @@ Phase 10 的前台購物車是「寫入走 admin-ajax（`FrontAjax`）、讀取�
 `select-shipping-rate`，`permission_callback` 全部 `__return_true`）。回應統一 `{ code, message, data }`，
 `data` 一律是完整購物車物件（沿用 WC Store API 的欄位命名慣例：金額為「最小單位整數字串」+
 `currency_minor_unit`）。
+
+⚠ **`FrontCartApi` 已於 Phase 12 刪檔**（見下一節）。以下三條知識**不因刪檔而失效**——任何人
+日後要再為前台補上非同步購物車 API，都會重新踩到同一批坑，所以整節保留而非刪除。
 
 **最關鍵的實作細節：`$_POST` 橋接**。`AddToCartHook::extract_shop_id_from_request()` 只讀
 `$_GET` / `$_POST`，而 REST 的 JSON body 不會填 `$_POST`。`FrontCartApi::add_to_cart_with_shop_context()`
@@ -1197,8 +1201,46 @@ nonce，與 WordPress 自己的 `wp_refresh_nonces()` 同一手法。前端判�
 測試：**端到端執行期驗證 32 項全通過**（用 `rest_do_request()` 在真實 WP + WC 環境內部呼叫，
 涵蓋 6 個 route 註冊、`wc_load_cart()` 在 REST context 生效、三閘門確實跑到、4 筆 `_profit_*`
 meta 全部寫入、結帳前套用價格正確、3 則攻擊情境全擋、nonce 可通過 `wp_verify_nonce`）。單元 /
-整合測試仍待補，見 `specs/tech-debt.md` TD-29。前端細節（`api.ts` 單一 axios instance、nonce
-retry、通知按鈕的 `<div role="button">` 通則）見 `react.rule.md` §6.7。
+整合測試未補就已隨 Phase 12 一併移除。
+
+#### Phase 12：前台退回 WooCommerce 原生加購，移除自訂購物車
+
+站長要求：賣場前台「移除底下的購物車等資訊」，商品 Modal 的「加入購物車」改用**原本 WordPress
+的方式**加入購物車。Phase 10 / 11 為了「不離開頁面完成購物」而建的整條自訂購物車通道（前台購物車
+表格 + 樂觀更新 + 自訂 REST）因此失去存在理由，整條移除。
+
+| 動作 | 內容 |
+|------|------|
+| 刪除（PHP） | `Infrastructure/Rest/FrontCartApi.php`（6 endpoint）+ `Loader` 註冊 |
+| 刪除（前端） | `Cart/`（3 檔）、`hooks/useCart.ts`、`api.ts`、`components/LoadingText.tsx`、`cartDataAtom`、全部購物車型別、`.ps-cart-table` CSS、`QueryClientProvider` |
+| 改寫 | `AddToCartButton` 改為動態建隱藏 `<form method="post">` POST 回本頁，交給 `WC_Form_Handler::add_to_cart_action()` |
+| 新增 | template 自印 `wc_print_notices()` |
+| 收窄 | `ProfitShopFrontData::build_env()` 只剩 `siteUrl` / `shopId` / `shopSlug`（移除 `cartApiUrl` / `nonce` / `checkoutUrl`） |
+
+**分潤鏈路一行未改**：`AddToCartHook`(5) / `CartPriceOverrideHook`(10/999) / `CartItemMetaDisplay` /
+`SingleProductPriceHook` 四個 hook 檔案完全沒動。原生表單是 `method="post"`，`profit_shop_id`
+正常進 `$_POST`，三道閘門照常驗證——這正是 Phase 11 得靠 `$_POST` 橋接才能達成的事，退回原生
+表單後不再需要任何補償手段。
+
+**為何 template 必須自印 `wc_print_notices()`**：賣場頁不是 WooCommerce 的 template
+（`is_woocommerce()` 為 false），佈景主題掛在 `woocommerce_before_main_content` 上的
+`woocommerce_output_all_notices` 不會被觸發。少了它，使用者按下「加入購物車」之後畫面**除了
+重新載入之外沒有任何變化**，功能看起來像是壞掉的。`wc_print_notices()` 印完會清空 notices，
+所以就算佈景主題在別處也印了一份也不會重複，只是先後順序不同。
+
+**`attribute_*` 的鍵必須取自選中變體的 `attributes` 物件**（WC `get_available_variations()` 的原始
+輸出，形如 `attribute_pa_color`），**不可**從前端 `selectedAttributesAtom` 的 `name` 自行加前綴
+組出來：那個 `name` 沒有前綴（例：`pa_color`），而自訂（非 taxonomy）屬性的名稱經 WC
+`sanitize_title()` 後可能與原始名稱不同（中文屬性會變成 percent-encoded），自行組鍵會在那些商品
+上安靜地對不上、被 WC 判為「缺少屬性」。這順帶讓 TD-30 在這條新路徑上不再成立。
+
+**連帶移除的 UX（已知且刻意）**：原生加購會重新載入整頁，樂觀更新、彩帶（`showConfetti`）、
+「加入購物車成功」通知在 reload 前都來不及被看到，一併移除；`StockInfo` 的「，已加入購物車 N 件」
+與「數量上限扣掉購物車既有數量」同樣失去資料來源，超買改由 WooCommerce 自己在 `add_to_cart()`
+時擋下並顯示 notice——那本來就是庫存判斷的唯一真相。**不要**為了補回這些細節就把購物車讀取通道
+重新接回來。
+
+前端細節（表單欄位表、三條紀律、bundle 隔離驗收期望值的三次變動）見 `react.rule.md` §6.7。
 
 #### DRY：URL prefix 統一用 `RewriteRules::SHOP_REWRITE_PREFIX`
 
