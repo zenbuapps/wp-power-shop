@@ -10,7 +10,6 @@ namespace J7\PowerShop\Domains\ProfitShop;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\CartPriceSignatureService;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PageRateLimitService;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
-use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\FrontCartApi;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\AddToCartHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\CartItemMetaDisplay;
@@ -42,6 +41,11 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
  * Phase 9：加上 SingleProductPriceHook（WC 單品頁套用賣場覆寫價，含變體）。
  * TD-13（前半）：加上 ProfitShopShortcode（[power_shop_profit_shop id="..."]，把賣場嵌入任意頁面）。
  * Phase 11：加上 FrontCartApi（前台購物車自訂 REST），移除 FrontAjax（admin-ajax）。
+ * Phase 12：移除 FrontCartApi——賣場前台不再自行管理購物車，加購改走 WooCommerce
+ *           原生表單（`WC_Form_Handler::add_to_cart_action()`），購物車與結帳一律由
+ *           WooCommerce 自己的頁面負責。下方 AddToCartHook(5) →
+ *           CartPriceOverrideHook(10/999) 的分潤定價鏈路完全不受影響：原生表單是
+ *           `method="post"`，`profit_shop_id` 會正常進 `$_POST`，三道閘門照常驗證。
  */
 final class Loader {
 
@@ -81,12 +85,6 @@ final class Loader {
 		);
 
 		V2Api::instance();
-
-		// Phase 11：賣場前台購物車 REST API（nonce / 讀取 / 加購 / 改量 / 移除 / 選運費）。
-		// 取代 Phase 10 的 admin-ajax（FrontAjax）與 WC Store API 雙通道；加購只呼叫
-		// WC()->cart->add_to_cart()，價格與分潤 meta 全交由下面
-		// AddToCartHook(5) → CartPriceOverrideHook(10/999) 的既有鏈路處理。
-		FrontCartApi::instance();
 
 		// Phase 4-C2：add-to-cart 注入 profit_shop_id（priority 5，必須早於下方 CartPriceOverrideHook 的 priority 10）
 		AddToCartHook::instance(

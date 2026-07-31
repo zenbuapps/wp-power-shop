@@ -11,15 +11,10 @@
 import { atom } from 'jotai'
 
 import { shopStatus } from './env'
-import type {
-	TCartData,
-	TCartItem,
-	TProductVariationAttribute,
-	TShopStatus,
-} from './types'
+import type { TProductVariationAttribute, TShopStatus } from './types'
 
 /* ------------------------------------------------------------------ *
- * 購物車 / 商品 Modal 狀態（原 PowerShopProducts/atom.tsx）
+ * 商品 Modal 狀態（原 PowerShopProducts/atom.tsx）
  * ------------------------------------------------------------------ */
 
 /** 商品 Modal 是否開啟 */
@@ -47,47 +42,6 @@ export const selectedAttributesAtom = atom<TProductVariationAttribute[]>([])
  */
 export const shopStatusAtom = atom<TShopStatus>(shopStatus)
 
-/**
- * 購物車預設值
- *
- * 照搬舊版 `defaultCart`：先給滿一份完整結構，讓下游元件不必到處 optional chaining，
- * 也避免第一次 render 時 `totals` 為 undefined 造成的 NaN。
- */
-export const defaultCartData: TCartData = {
-	isMutating: false,
-	coupons: [],
-	shipping_rates: [],
-	items: [],
-	items_count: 0,
-	items_weight: 0,
-	needs_shipping: false,
-	has_calculated_shipping: false,
-	fees: [],
-	totals: {
-		total_items: '0',
-		total_items_tax: '0',
-		total_fees: '0',
-		total_fees_tax: '0',
-		total_discount: '0',
-		total_discount_tax: '0',
-		total_shipping: '0',
-		total_shipping_tax: '0',
-		total_price: '0',
-		total_tax: '0',
-		currency_code: 'TWD',
-		currency_symbol: 'NT$',
-		currency_minor_unit: 0,
-		currency_decimal_separator: '.',
-		currency_thousand_separator: ',',
-		currency_prefix: 'NT$',
-		currency_suffix: '',
-	},
-	errors: [],
-}
-
-/** 前端購物車狀態（樂觀更新的單一真相來源） */
-export const cartDataAtom = atom<TCartData>(defaultCartData)
-
 /* ------------------------------------------------------------------ *
  * 商品內容展開 / 收合（原 ProductModal/atom.tsx）
  * ------------------------------------------------------------------ */
@@ -98,5 +52,5 @@ export const isExpandAtom = atom<boolean>(false)
 /** 商品描述是否高過門檻、需要顯示「展開全部內容」按鈕 */
 export const showReadMoreAtom = atom<boolean>(false)
 
-/** re-export 讓 Phase 2 只需 import 這一支就拿到型別（DX 便利，非必要） */
-export type { TCartData, TCartItem, TProductVariationAttribute, TShopStatus }
+/** re-export 讓下游只需 import 這一支就拿到型別（DX 便利，非必要） */
+export type { TProductVariationAttribute, TShopStatus }

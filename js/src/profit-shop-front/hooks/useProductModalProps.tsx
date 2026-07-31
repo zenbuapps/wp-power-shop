@@ -4,9 +4,15 @@
  * 照搬舊版 `pages/PowerShopProducts/ProductModal/useProductModalProps.tsx`：
  * - `modalProps`：置中、無 footer、寬度 lg:1/2 且最大 960px、zIndex 1000000（壓過 theme header）
  * - `name` / `description`：渲染 HTML（description = 短描述 + 完整描述，並把 YouTube 連結轉 iframe）
- * - `plusMinusInputProps`：數量上限 = 庫存 - 購物車既有數量
+ * - `plusMinusInputProps`：數量上限 = 庫存
  * - Modal 開啟時把數量重設為 1、內容收合
  * - `price`：simple 看商品層價格、variable 看選定變體價格，皆已套用賣場覆寫
+ *
+ * ⚠ 數量上限**不再扣掉購物車既有數量**：加購改走 WooCommerce 原生表單後，前台不再
+ * 持有購物車狀態（沒有 `cartDataAtom`，也不打任何購物車 API）。超買由 WooCommerce
+ * 自己在 `add_to_cart` 時擋下並顯示 notice——那本來就是庫存判斷的唯一真相，前端這層
+ * 只是體驗優化。硬要在前端重建購物車狀態，等於為了一個 WooCommerce 已經做對的檢查，
+ * 把整條購物車讀取通道重新接回來。
  */
 
 import { type InputNumberProps, type ModalProps } from 'antd'
@@ -14,7 +20,6 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { useEffect } from 'react'
 
 import {
-	cartDataAtom,
 	isExpandAtom,
 	isProductModalOpenAtom,
 	selectedVariationIdAtom,
@@ -51,12 +56,7 @@ export const useProductModalProps = (product: TFrontProduct) => {
 		`${product?.shortDescription || ''}${product?.description || ''}`
 	)
 	const images = product?.images ?? []
-	const stockQty = getStockQty(product, selectedVariationId)
-	const cartData = useAtomValue(cartDataAtom)
-	const cartItems = cartData?.items ?? []
-	const qtyInCart =
-		cartItems.find((item) => item.id === product?.id)?.quantity ?? 0
-	const max = Number(stockQty) - Number(qtyInCart)
+	const max = getStockQty(product, selectedVariationId)
 	const { plusMinusInputProps, setPlusMinusInputProps } = usePlusMinusInput(max)
 
 	const setIsExpand = useSetAtom(isExpandAtom)

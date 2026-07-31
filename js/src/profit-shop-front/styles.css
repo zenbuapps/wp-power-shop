@@ -7,7 +7,9 @@
  * - `.ps-btn` 系列：PHP 印出的商品卡片按鈕（`--ps-primary` 由 PHP inline <style> 注入）
  * - `.ps-not-ready`：React 尚未接手前的 loading 態，App.tsx mount 後移除
  * - `.ps-addon`：數量選擇器的 `-` / `+` 熱區（antd InputNumber addon）
- * - `.ps-cart-table`：購物車表格，<=810px 改用 grid-template-areas 轉為卡片式排版
+ *
+ * 舊版的 `.ps-cart-table`（購物車表格含 <=810px 的 grid-template-areas 卡片版型）
+ * 已整段移除——前台不再渲染購物車，購物車與結帳一律走 WooCommerce 自己的頁面。
  *
  * ⚠ Tailwind directive 刻意寫在本檔，而**不是** import 共用的
  * `@/assets/styles/tailwind.css`：那個檔案同時被 `App1.tsx`（admin）與
@@ -106,164 +108,17 @@ div[data-ps-product-id] {
  *
  * antd 的 message / notification 是 portal 到 `document.body`，脫離本 bundle 的
  * mount 點，因此會與**佈景主題**的 sticky header / 浮動購物車按鈕搶疊層。
- * antd v5 的預設 zIndex 只有 1010，主題常見的 9999 會直接蓋掉「加入購物車成功」
- * 的提示，使用者按了會以為沒反應。
+ * antd v5 的預設 zIndex 只有 1010，主題常見的 9999 會直接蓋掉提示，
+ * 使用者按了會以為沒反應。
  *
- * 與商品 Modal 的 `zIndex: 1000000` 不衝突：加購時 `AddToCartButton` 的 `onMutate`
- * 會先 `setIsProductModalOpen(false)`，通知出現時 Modal 已經關閉。
+ * ⚠ 目前本 bundle **沒有任何** notification / message 呼叫（加購改走 WooCommerce
+ * 原生表單，結果由 WC notice 呈現）。這三行與 `main.tsx` 的 `<AntdApp>` provider
+ * 一起刻意保留：兩者都是「未來要加 antd 通知」的前提，且缺了 provider 時
+ * `App.useApp()` 會回空物件、呼叫當下直接 throw 並中斷後續程式碼，還沒有清楚的
+ * 錯誤訊息（見 .claude/rules/react.rule.md §2）。留下 3 行 CSS 與一層零 DOM 輸出的
+ * provider，成本遠低於下一個人重踩那個坑。
  */
 .ant-message,
 .ant-notification {
 	z-index: 999999 !important;
-}
-
-/* 購物車表格（desktop） */
-#profit_shop_front_app table.ps-cart-table {
-	border: none;
-	width: 100%;
-	table-layout: fixed;
-}
-
-#profit_shop_front_app table.ps-cart-table tr {
-	border: none;
-}
-
-#profit_shop_front_app table.ps-cart-table tr th {
-	background-color: #fff;
-}
-
-#profit_shop_front_app table.ps-cart-table tr th[data-key='product'] {
-	width: 47%;
-}
-
-#profit_shop_front_app table.ps-cart-table tr th[data-key='qty'],
-#profit_shop_front_app table.ps-cart-table tr th[data-key='unit_price'],
-#profit_shop_front_app table.ps-cart-table tr th[data-key='total'] {
-	width: 15%;
-}
-
-#profit_shop_front_app table.ps-cart-table tr th[data-key='action'] {
-	width: 8%;
-}
-
-#profit_shop_front_app table.ps-cart-table th {
-	padding-top: 0.5rem;
-	padding-bottom: 0.5rem;
-	border: none;
-	width: 100%;
-	font-size: 1rem;
-	font-weight: 600;
-	text-align: center;
-	color: #333;
-}
-
-#profit_shop_front_app table.ps-cart-table th:nth-child(4) {
-	text-align: right;
-}
-
-#profit_shop_front_app table.ps-cart-table td {
-	padding-top: 0.5rem;
-	padding-bottom: 0.5rem;
-	border: none;
-	background-color: #fff;
-	font-size: 1rem;
-	font-weight: 400;
-	text-align: center;
-	color: #333;
-}
-
-#profit_shop_front_app table.ps-cart-table td:nth-child(4) {
-	text-align: right;
-}
-
-#profit_shop_front_app table.ps-cart-table thead tr th {
-	background-color: #eee;
-}
-
-/* 購物車表格（mobile，<=810px 轉 grid-template-areas） */
-@media (max-width: 810px) {
-	#profit_shop_front_app table.ps-cart-table thead {
-		display: none;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody {
-		display: block;
-		background: #fff;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody tr {
-		width: 100%;
-		display: grid;
-		grid-template-columns: 2rem 1fr 1fr;
-		grid-template-rows: auto auto auto;
-		grid-gap: 0rem 0.5rem;
-		grid-template-areas:
-			'delete product product'
-			'delete qty unit_price'
-			'delete total_price total_price';
-		border-bottom: 1px solid #ddd;
-		padding: 1rem 0.5rem;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody th,
-	#profit_shop_front_app table.ps-cart-table tbody td {
-		display: block;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(1) {
-		grid-area: product;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(2) {
-		grid-area: qty;
-		align-self: center;
-		padding-left: 0rem;
-		padding-right: 0rem;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(3) {
-		grid-area: unit_price;
-		align-self: center;
-		justify-self: end;
-		text-align: right;
-		position: relative;
-		width: 100%;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(3):before {
-		content: '×';
-		position: absolute;
-		left: 0;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(4) {
-		grid-area: total_price;
-		justify-self: end;
-		font-weight: 700;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tbody td:nth-child(5) {
-		grid-area: delete;
-		justify-self: center;
-		align-self: center;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tfoot tr {
-		display: flex;
-		justify-content: space-between;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tfoot th:last-child {
-		display: none;
-	}
-
-	#profit_shop_front_app table.ps-cart-table tfoot {
-		display: block;
-		background-color: #fff;
-		padding: 1rem 0.5rem;
-	}
-
-	#profit_shop_front_app table.ps-cart-table {
-		display: block;
-	}
 }

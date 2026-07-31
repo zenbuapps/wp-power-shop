@@ -176,12 +176,14 @@ final class ProfitShopFrontData {
 	/**
 	 * 環境資訊
 	 *
-	 * Phase 11：前台購物車改走本外掛自訂 REST（`FrontCartApi`），因此
-	 *   - `nonce` 是 WordPress 的 `wp_rest` nonce（前端以 `X-WP-Nonce` 送出），
-	 *     不再是 admin-ajax 的自訂 action nonce
-	 *   - 新增 `cartApiUrl`（購物車 endpoint base，已去尾斜線）
-	 *   - 移除 `ajaxUrl`（admin-ajax 已無任何消費者）
-	 *   - 移除 `restUrl`（WC Store API 已無任何消費者；購物車一律走 `cartApiUrl`）
+	 * Phase 12：賣場前台不再自行管理購物車，加購改走 WooCommerce 原生表單送出
+	 * （`WC_Form_Handler::add_to_cart_action()`），因此
+	 *   - 移除 `cartApiUrl` / `nonce`（自訂購物車 REST `FrontCartApi` 已整個刪除）
+	 *   - 移除 `checkoutUrl`（結帳一律走 WooCommerce 自己的頁面，前台不需要這個連結）
+	 *   - 之前 Phase 11 就已移除的 `ajaxUrl`（admin-ajax）與 `restUrl`（WC Store API）維持不存在
+	 *
+	 * `shopId` 是唯一**必須**送到前端的欄位：加購表單要以 `profit_shop_id` 送回後端，
+	 * `AddToCartHook` 只從 `$_GET` / `$_POST` 讀它，漏送就靜默走商品原價、分潤失效。
 	 *
 	 * ⚠ 本陣列的欄位必須與前端 `js/src/profit-shop-front/types.ts` 的 `TFrontEnv`
 	 * **完全一致**。多送的欄位在 TypeScript 端不會有任何編譯錯誤，只會變成沒人讀的
@@ -189,18 +191,13 @@ final class ProfitShopFrontData {
 	 *
 	 * @param ProfitShop $shop 賣場聚合根。
 	 *
-	 * @return array{siteUrl: string, checkoutUrl: string, cartApiUrl: string, shopId: int, shopSlug: string, nonce: string}
+	 * @return array{siteUrl: string, shopId: int, shopSlug: string}
 	 */
 	private static function build_env( ProfitShop $shop ): array {
-		$checkout_url = \function_exists( 'wc_get_checkout_url' ) ? (string) \wc_get_checkout_url() : '';
-
 		return [
-			'siteUrl'     => \untrailingslashit( (string) \site_url() ),
-			'checkoutUrl' => $checkout_url,
-			'cartApiUrl'  => \untrailingslashit( \esc_url_raw( \rest_url( 'power-shop/profit-shop-cart' ) ) ),
-			'shopId'      => $shop->id,
-			'shopSlug'    => $shop->slug,
-			'nonce'       => \wp_create_nonce( 'wp_rest' ),
+			'siteUrl'  => \untrailingslashit( (string) \site_url() ),
+			'shopId'   => $shop->id,
+			'shopSlug' => $shop->slug,
 		];
 	}
 

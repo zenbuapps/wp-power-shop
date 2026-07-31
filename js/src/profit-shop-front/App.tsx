@@ -5,7 +5,7 @@
  * PHP 已印出整個商品 grid，React 只負責掛上互動層——
  * 掃描 `div[data-ps-product-id]`、移除 `ps-not-ready`、綁 click 開商品 Modal。
  *
- * 與舊版的三處差異（皆為刻意修正）：
+ * 與舊版的四處差異（皆為刻意修正）：
  *
  * 1. **cleanup 真的會執行**：舊版把 `return () => el.removeEventListener(...)` 寫在
  *    `els.forEach()` 的 callback 裡——那是 forEach callback 的回傳值，`useEffect`
@@ -14,13 +14,15 @@
  * 2. **不需要 loading 態**：舊版靠 AJAX 取回 settings 成功後才移除 `ps-not-ready`；
  *    新版 settings 由 PHP `wp_localize_script` 直接帶入，mount 當下即可解鎖。
  * 3. **不渲染 Empty**：商品 grid 與空狀態都由 PHP 負責，React 再畫一份會重複。
+ * 4. **不渲染購物車**：賣場前台只做「展示 + 商品 Modal」，加購一律交給
+ *    WooCommerce 原生表單流程（見 `ProductModal/AddToCartButton.tsx`），
+ *    購物車與結帳走 WooCommerce 自己的頁面。
  */
 
 import { useAtom, useSetAtom } from 'jotai'
 import { memo, useEffect } from 'react'
 
 import { isProductModalOpenAtom, modalProductIdAtom } from './atoms'
-import Cart from './Cart'
 import { products } from './env'
 import ProductModal from './ProductModal'
 
@@ -72,7 +74,6 @@ const AppComponent = () => {
 	return (
 		<div className="power-shop-products">
 			{!!modalProduct && <ProductModal product={modalProduct} />}
-			<Cart />
 		</div>
 	)
 }

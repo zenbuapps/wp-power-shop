@@ -8,10 +8,14 @@
  * Phase 10：版型照搬 legacy 一頁商店（legacy/inc/classes/ShortCode.php +
  * legacy/inc/templates/single-product/{simple,variable}.php）。
  *
- * 架構：PHP 印出商品 grid（SEO 內容留在 HTML 內），React bundle 只掛
- * 「商品 Modal」與「購物車表格」互動層——與 legacy 完全相同的混合式做法。
- * 卡片上的 data-ps-product-id / ps-btn / ps-not-ready 是 React 的 DOM 契約，
- * 改動 class 或 attribute 會讓 Modal 開不起來（見 .claude/rules/profit-shop.rule.md）。
+ * 架構：PHP 印出商品 grid（SEO 內容留在 HTML 內），React bundle 只掛「商品 Modal」
+ * 這一層互動。卡片上的 data-ps-product-id / ps-btn / ps-not-ready 是 React 的
+ * DOM 契約，改動 class 或 attribute 會讓 Modal 開不起來（見 .claude/rules/profit-shop.rule.md）。
+ *
+ * Phase 12：移除前台購物車表格。Modal 的「加入購物車」改為建立一張隱藏表單 POST
+ * 回本頁，交給 WooCommerce 原生的 `WC_Form_Handler::add_to_cart_action()` 處理；
+ * 購物車與結帳一律由 WooCommerce 自己的頁面負責。加購結果由下方的
+ * `wc_print_notices()` 呈現。
  *
  * $front_bundle_ready 為 false 時（Vite manifest 缺 entry）會退回不依賴 JS 的
  * 表單加購版本，避免整頁只剩無法點擊的灰色卡片。
@@ -158,6 +162,32 @@ $ps_image_url = static function ( \WC_Product $product ): string {
 		<?php echo \esc_html__( '：此賣場尚未發佈，僅有編輯權限的使用者可見。', 'power_shop' ); ?>
 		</div>
 	<?php endif; ?>
+
+	<?php
+	/*
+	* WooCommerce 通知（「XXX 已加入購物車」/ 庫存不足 / 請選擇商品屬性…）。
+	*
+	* 加入購物車走 WooCommerce 原生表單送出（React Modal 內的按鈕會建一張隱藏
+	* form POST 回本頁，`<noscript>` 降級路徑則是 GET query string），由
+	* `WC_Form_Handler::add_to_cart_action()` 處理後把結果寫進 WC session 的
+	* notices，再 redirect 回來。
+	*
+	* 這一段**必須**由本 template 自己印：賣場頁不是 WooCommerce 的 template
+	* （`is_woocommerce()` 為 false），佈景主題掛在 `woocommerce_before_main_content`
+	* 上的 `woocommerce_output_all_notices` 不會被觸發。少了它，使用者按下加入
+	* 購物車之後畫面除了重新載入之外**沒有任何變化**，功能看起來像是壞掉的。
+	*
+	* `wc_print_notices()` 印完會清空 notices，所以就算佈景主題在別處也印了一份，
+	* 也不會重複顯示，只是先後順序不同。
+	*/
+	if ( \function_exists( 'wc_print_notices' ) && \function_exists( 'WC' ) && null !== \WC()->session ) :
+		?>
+		<div class="woocommerce ps-shop-notices">
+		<?php \wc_print_notices(); ?>
+		</div>
+		<?php
+	endif;
+	?>
 
 	<header style="margin-bottom:32px;">
 		<h1 style="font-size:2em;margin-bottom:8px;"><?php echo \esc_html( $shop->title ); ?></h1>
@@ -440,7 +470,7 @@ $ps_image_url = static function ( \WC_Product $product ): string {
 		</div>
 
 		<?php if ( $bundle_ready ) : ?>
-			<?php // React mount 點：商品 Modal 與購物車表格都掛在這裡（對應 legacy RENDER_ID_3）。 ?>
+			<?php // React mount 點：商品 Modal 掛在這裡（對應 legacy RENDER_ID_3）。 ?>
 			<div id="profit_shop_front_app"></div>
 		<?php endif; ?>
 		<?php

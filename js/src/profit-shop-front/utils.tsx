@@ -2,7 +2,10 @@
  * 分潤賣場前台工具函式
  *
  * 照搬舊版一頁商店 `utils/functions/common.tsx`（renderHTML / getCurrencyString /
- * getPrice / formatYoutubeLinkToIframe）與 `utils/custom/index.tsx`（getStockQty）。
+ * formatYoutubeLinkToIframe）與 `utils/custom/index.tsx`（getStockQty）。
+ *
+ * 舊版的 `getPrice()`（把 Store API 的「最小單位整數」金額還原為顯示金額）已移除——
+ * 前台不再讀取任何購物車 API，沒有最小單位金額需要還原。
  */
 
 import { createElement } from 'react'
@@ -41,19 +44,6 @@ export const getCurrencyString = ({
 	if (typeof price === 'string') return `${symbol} ${price}`
 	return `${symbol} ${price.toString()}`
 }
-
-/**
- * 將 Store API 的「最小單位整數」金額還原為顯示金額
- *
- * WC Store API 的 totals 一律是最小單位整數字串（例如 currency_minor_unit=2 時
- * `'120000'` 代表 1200.00），必須除以 10^minor_unit 才是給人看的數字。
- *
- * @param  cartPrice           Store API 金額（已轉 number）
- * @param  currency_minor_unit 幣別小數位數，預設 0（TWD）
- * @return {number} 顯示用金額
- */
-export const getPrice = (cartPrice: number, currency_minor_unit = 0): number =>
-	cartPrice / Math.pow(10, currency_minor_unit)
 
 /**
  * 把內容中的 YouTube 連結換成 iframe 嵌入

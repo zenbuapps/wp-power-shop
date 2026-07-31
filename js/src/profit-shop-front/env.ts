@@ -26,11 +26,8 @@ declare global {
 /** env 預設值：任一欄位缺失都以此退回，確保頁面不會 crash */
 const DEFAULT_ENV: TFrontEnv = {
 	siteUrl: '/',
-	checkoutUrl: '/checkout',
-	cartApiUrl: '/wp-json/power-shop/profit-shop-cart',
 	shopId: 0,
 	shopSlug: '',
-	nonce: '',
 }
 
 /** settings 預設值：對齊舊版 `defaultSettings` 的顯示行為（全部開啟） */
@@ -54,53 +51,24 @@ const frontData = readFrontData()
 const rawEnv = frontData?.env
 const rawSettings = frontData?.settings
 
-/** 移除結尾斜線，避免組出 `//wp-json` 這種網址 */
-const untrailingslashit = (value: string): string => value.replace(/\/+$/, '')
-
 /** 站台網址 */
 export const siteUrl: string = rawEnv?.siteUrl || DEFAULT_ENV.siteUrl
 
-/** 結帳頁網址 */
-export const checkoutUrl: string =
-	rawEnv?.checkoutUrl || DEFAULT_ENV.checkoutUrl
-
 /**
- * 自訂購物車 REST 根網址（已保證無結尾斜線）
+ * 當前分潤賣場 post ID
  *
- * 所有購物車讀寫都掛在這底下（`/nonce`、`/add-item`、`/update-item`、
- * `/remove-item`、`/select-shipping-rate`），不再有 admin-ajax 與 WC Store API
- * 兩條通道。
+ * **加入購物車時必須以 `profit_shop_id` 送出**（見 `ProductModal/AddToCartButton.tsx`）：
+ * 後端 `AddToCartHook` 只從 `$_GET` / `$_POST` 讀這個值，漏送就靜默走商品原價、
+ * 分潤失效，且沒有任何錯誤訊息。
  */
-export const cartApiUrl: string = untrailingslashit(
-	rawEnv?.cartApiUrl || DEFAULT_ENV.cartApiUrl
-)
-
-/** 當前分潤賣場 post ID（**每次加購都必須送給後端**） */
 export const shopId: number = Number(rawEnv?.shopId ?? 0) || 0
 
 /** 當前分潤賣場 slug */
 export const shopSlug: string = rawEnv?.shopSlug || DEFAULT_ENV.shopSlug
 
-/**
- * wp_create_nonce('wp_rest')，所有購物車請求以 `X-WP-Nonce` header 帶出
- *
- * 已登入使用者**必須**送對這個 nonce，否則 WordPress 的
- * `rest_cookie_check_errors()` 會回 403 `rest_cookie_invalid_nonce`；
- * 完全不送則會被當成 guest，購物車就變成別人的了。
- *
- * 賣場頁在 `status=publish` 時刻意不送 nocache header（Phase 5-B 的 CDN 快取優化），
- * 這裡拿到的 nonce 有可能是數小時前被快取的失效值——`api.ts` 因此內建
- * 「403 `rest_cookie_invalid_nonce` → 換新 nonce 重試一次」的自我修復。
- */
-export const frontNonce: string = rawEnv?.nonce || DEFAULT_ENV.nonce
-
 /** 主色（同時餵給 antd ConfigProvider 與 CSS 變數 --ps-primary） */
 export const colorPrimary: string =
 	rawSettings?.colorPrimary || DEFAULT_SETTINGS.colorPrimary
-
-/** 加入購物車是否撒彩帶 */
-export const showConfetti: boolean =
-	rawSettings?.showConfetti ?? DEFAULT_SETTINGS.showConfetti
 
 /** 是否顯示庫存資訊 */
 export const showStock: boolean =
