@@ -145,6 +145,40 @@ public function __construct(
 - email 失敗 try/catch `\Throwable` + `error_log`，**不阻擋登入**
 - 失敗回應對未知 slug **不** record_failure（避免 timing oracle 暴露 slug 存在性）
 
+### 四條密碼路徑的分工（改動任一條前先對照這張表）
+
+Partner 密碼可以被四個地方寫入，**規則刻意不同**，改動前先確認自己在哪一條：
+
+| 路徑 | 端點 / UseCase | 誰操作 | 密碼來源 | 過 `PartnerPassword` VO？ | 回傳明文？ |
+|------|---------------|--------|----------|--------------------------|-----------|
+| 建立夥伴 | `POST /profit-partners` → `CreatePartner` | 站長 | 站長輸入 | ❌ **沒有**（見 `specs/tech-debt.md` TD-33） | 否 |
+| 站長指定 | `POST /profit-partners/{id}/set-password` → `SetPartnerPasswordUseCase` | 站長 | 站長輸入（Edit 頁「聯絡 Email」下方的 `PasswordSection`） | ✅ | ❌ **不回傳** |
+| 重新產生 | `POST /profit-partners/{id}/regenerate-password` → `RegeneratePartnerPasswordUseCase` | 站長 | `wp_generate_password(12)` | 不需要（系統保證強度） | ✅ 一次性顯示 |
+| 夥伴自助 | `POST /partner-auth/change-password` → `ChangePasswordUseCase` | partner 本人 | partner 輸入 | ✅ | 否 |
+
+**三條容易搞錯的紀律：**
+
+1. **`set-password` 與 `regenerate-password` 是互補而非重複**，不要「順手合併」：
+   前者是「站長要主動交一組自己知道的密碼給夥伴」，後者是「夥伴忘記密碼 / 疑似外洩，
+   一鍵重設成系統強密碼」。合併掉任一個都會讓其中一種情境變得很難操作
+   （regenerate 的密碼只顯示一次，站長沒抄下來就得再產生一次）。
+
+2. **`set-password` 刻意不回傳密碼明文**，這是它與 `regenerate-password` 的關鍵差異：
+   站長自己輸入的密碼他本來就知道，回傳只會多一個洩漏面（response 進 log / proxy cache）。
+   regenerate 必須回傳是因為系統產生的，不回傳就沒人知道。
+
+3. **body 讀取必須用 `read_json_body_for_partner()`，不是 `read_json_body()`**：
+   後者會對所有欄位跑 `WP::sanitize_text_field_deep()`，把密碼裡的 `<` / `>` / 連續空白
+   靜默改寫。症狀是「站長設的密碼夥伴登不進去」，而且兩邊看到的字串**完全一樣**，
+   極難排查。`PARTNER_RAW_FIELDS = ['password']` 這個常數就是為此存在的。
+   實作 `set-password` 時第一版就寫錯了（docblock 寫「不過 sanitize」但實際呼叫了會
+   sanitize 的函式），靠 `SetPartnerPasswordEndpointTest::test_password_literal_is_preserved`
+   （密碼用 `'a1 <b>  c&d'`）當場抓到——**這條測試不要刪**。
+
+⚠️ 表格第一列的 `CreatePartner` 沒過 VO 是**已知的不一致**（TD-33）：站長可在建立頁設出
+`12345678`，但那位夥伴之後想自己改密碼時會被 VO 以「需包含英文字母」擋下——他現在用的
+密碼反而是系統不允許他設定的。要補需連同一批既有測試 fixture 一起改。
+
 ### Partner 自助修密碼（Phase 6-A1）
 
 `POST /partner-auth/change-password`（permission `partner_token`）對應 `ChangePasswordUseCase`，與 admin `regenerate-password` 互不相通：

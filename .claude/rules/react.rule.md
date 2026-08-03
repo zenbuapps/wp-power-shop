@@ -546,6 +546,7 @@ js/src/pages/admin/
 
 | 元件 | 風險面 | 紀律 |
 |------|--------|------|
+| `PasswordSection` | 站長指定密碼（明文進 Form） | **不是 Modal，是表單內嵌區塊**（位於 Edit 頁「聯絡 Email」下方）。兩個密碼欄掛在**主表單的 `Form`** 上（取得一般欄位的 label / 對齊 / 驗證），但**送出獨立**——自帶「更新密碼」按鈕走 `set-password` 端點，絕不隨主表單「儲存」一起送。三條連帶紀律見下方說明 |
 | `RegeneratePasswordButton` | 明文新密碼僅展示一次 | 僅 `useState`（不進 cache / storage / log / Jotai / Context）+ 5 min auto-clear timer + unmount cleanup + Modal `closable=false` / `maskClosable=false` / `keyboard=false`（強制走確認按鈕）+ `navigator.clipboard.writeText`（不 fallback execCommand）+ Input.Password 預設 mask（`visibilityToggle.visible` 由 state 控制）|
 | `ImportModal` | legacy 一頁商店 → profit shop 不可逆 | 4 道閘門：row Import 按鈕 disabled / Modal 開啟後 canSubmit 雙檢 importable / PartnerSelector 必選 / IMPORT 二次確認 |
 
@@ -571,6 +572,29 @@ const { data } = useCustom({
 ```
 
 （曾經有個 ProfitSettings 變體用 `lastFilledSettingsRef` 做 content-diff，處理「單例資源、沒有 id 可比對」的情況；該頁已移除，但那個 pattern 對日後同類頁面仍然適用——見 `profit-shop.rule.md` §12.6。）
+
+### 「欄位長得像表單、送出卻獨立」的區塊：`PasswordSection`
+
+夥伴報表密碼設定放在 Edit 頁「聯絡 Email」下方，視覺上就是一般表單欄位，
+但**動作獨立於主表單**（Phase 4-A2 起的安全紀律：站長改名稱 / Email 時不該有任何
+機會動到密碼）。這個「同一個 Form、不同送出路徑」的組合有三個必須成套的細節，
+少任何一個都會壞：
+
+| # | 做法 | 少了會怎樣 |
+|---|------|-----------|
+| 1 | 密碼欄的 rules **不可加 `required`** | 主表單存檔會跑 `validateFields()` 驗全部欄位 → 變成「不改密碼就存不了名稱」 |
+| 2 | 主表單 submit 用 **`validateFields(['name','slug','contact_email','images'])` 明確列舉**，不可用無參數版 | 站長密碼打到一半（填了新密碼、還沒填確認）就存不了其他欄位——被一個不相干的欄位擋住 |
+| 3 | 主表單 payload 維持**明確列舉欄位**（不可改成 `...values` 展開） | 密碼會跟著漏進 `PUT /profit-partners/{id}`，繞過 `set-password` 的強度驗證，也違反「主表單不含 password」的紀律 |
+
+第 2、3 點是同一組的兩端——`Edit/index.tsx` 裡那份欄位清單與 payload 欄位要一起維護，
+新增欄位時兩處都要加。
+
+**為什麼不用 Modal**：站長是在編輯這位夥伴的資料，密碼就是其中一個欄位；
+先前做成右上角按鈕 + Modal，等於把一個欄位放到頁面另一端還多一層彈窗。
+`headerButtons={() => null}` 是刻意蓋掉 Refine 預設 header buttons，不是漏寫。
+
+其餘安全紀律（明文只在 Form state、`resetFields` 與 `mutation.reset()` 並用、
+送出鈕三重守門、兩欄確認、失敗時不要判 `mapped.code`）見元件本身的 docblock 與 §3。
 
 ### Partner 夥伴圖片（直接複用商品 `Gallery` 元件）
 

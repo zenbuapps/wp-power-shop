@@ -3344,6 +3344,101 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProfitShopExceptionError'
 
+  /power-shop/profit-partners/{id}/set-password:
+    post:
+      tags:
+        - ProfitShop
+      summary: 站長指定 Partner 密碼（admin_only）
+      description: |
+        Permission: `manage_options` + 額外 `X-WP-Nonce` 驗證（防 CSRF，與 regenerate-password 同一條紀律）。
+
+        與 `regenerate-password` **並存**，用途不同：
+          - `regenerate-password`：夥伴忘記密碼 / 疑似外洩，一鍵重設成系統產生的強密碼
+          - 本端點：站長要主動把一組自己知道的密碼交給夥伴
+
+        密碼強度由 `PartnerPassword` VO 驗證（≥ 8 codepoint + ≥ 1 英文 + ≥ 1 數字），
+        不合格回 422 `weak_password` + `data.reasons[]`。
+
+        ⚠️ body 的 `password` **不過** `sanitize_text_field`（走 `read_json_body_for_partner()`
+        的 `PARTNER_RAW_FIELDS`）——否則密碼裡的 `<` / `>` / 連續空白會被靜默改寫，
+        症狀是「站長設的密碼夥伴登不進去」且毫無錯誤訊息。
+
+        ⚠️ Response **不回傳密碼明文**（這是與 regenerate-password 的關鍵差異）：
+        站長自己輸入的密碼他本來就知道，回傳只會多一個洩漏面。
+
+        Response header **強制**：
+          - `Cache-Control: no-store, no-cache, must-revalidate`
+          - `Pragma: no-cache`
+
+        副作用：bump partner 的 `password_changed_at`，該夥伴所有先前已發出的 token 立即失效。
+      operationId: setProfitPartnerPassword
+      security:
+        - WPNonce: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - password
+              properties:
+                password:
+                  type: string
+                  minLength: 8
+                  description: 站長指定的明文密碼（≥ 8 codepoint + ≥ 1 英文 + ≥ 1 數字）
+      responses:
+        '200':
+          description: 設定成功（裸 payload，**不含**密碼）
+          headers:
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+                example: 'no-store, no-cache, must-revalidate'
+            Pragma:
+              required: true
+              schema:
+                type: string
+                example: 'no-cache'
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - partner_id
+                  - password_changed_at
+                properties:
+                  partner_id:
+                    type: integer
+                  password_changed_at:
+                    type: integer
+                    description: 密碼變更時間（unix timestamp）；舊 token 撤銷的依據
+        '403':
+          description: 無權限 / nonce 失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '422':
+          description: weak_password（含 data.reasons[]）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
   # ────────────────────────────
   # Profit Shop — Migration（§4.7）
   # ────────────────────────────

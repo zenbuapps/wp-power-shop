@@ -84,6 +84,20 @@ export type TProfitPartnerInput = {
  */
 export type TPartnerFormValues = Omit<TProfitPartnerInput, 'image_id'> & {
 	images?: TImage[]
+
+	/**
+	 * Edit 模式「設定新密碼」區塊的兩個欄位（Create 模式不存在）
+	 *
+	 * ⚠️ 這兩欄雖然住在主表單的 `Form` 裡（為了取得一般欄位的 label / 對齊 / 驗證），
+	 * 但**絕不隨主表單的「儲存」送出** —— 由 `PasswordSection` 自己的「更新密碼」
+	 * 按鈕走 `POST /profit-partners/{id}/set-password`。`Edit/index.tsx` 的 payload
+	 * 是明確列舉欄位（不是 `...values` 展開），所以不會誤送；改那段時務必維持列舉寫法。
+	 *
+	 * 也因此兩欄的 rules **不可加 `required`** —— 主表單 submit 會跑
+	 * `form.validateFields()` 驗全部欄位，加了會導致「不改密碼就存不了其他欄位」。
+	 */
+	new_password?: string
+	new_password_confirm?: string
 }
 
 /**
@@ -96,4 +110,16 @@ export type TPartnerFormValues = Omit<TProfitPartnerInput, 'image_id'> & {
 export type TRegeneratePasswordOutput = {
 	partner_id: number
 	password: string
+}
+
+/**
+ * `POST /profit-partners/{id}/set-password` 的裸 payload
+ *
+ * ⚠️ 刻意**不含** `password` —— 站長自己輸入的密碼他本來就知道，回傳只會多一個
+ * 沒必要的洩漏面（response 進 log / proxy cache）。這是與
+ * `TRegeneratePasswordOutput` 的關鍵差異：後者是系統產生的，不回傳就沒人知道。
+ */
+export type TSetPasswordOutput = {
+	partner_id: number
+	password_changed_at: number
 }

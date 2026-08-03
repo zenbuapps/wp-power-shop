@@ -23,6 +23,7 @@ use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\GetCurrentP
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\LoginPartnerUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\LogoutPartnerUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\RegeneratePartnerPasswordUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Auth\SetPartnerPasswordUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\CreatePartner;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\DeletePartner;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\GetPartner;
@@ -228,6 +229,12 @@ final class V2Api extends ApiBase {
 			// §4.2 regenerate-password（admin only；補 Phase 3-B observation 1）
 			[
 				'endpoint' => 'profit-partners/(?P<id>\d+)/regenerate-password',
+				'method' => 'post',
+				'permission_callback' => $admin_only,
+			],
+			// §4.2 set-password（admin only；站長指定密碼，與 regenerate 並存）
+			[
+				'endpoint' => 'profit-partners/(?P<id>\d+)/set-password',
 				'method' => 'post',
 				'permission_callback' => $admin_only,
 			],
@@ -819,6 +826,71 @@ final class V2Api extends ApiBase {
 
 			// 強制不快取（reviewer follow-up T-4.2）：
 			// 防範密碼明文被 proxy / browser 快取造成洩漏.
+			$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate' );
+			$response->header( 'Pragma', 'no-cache' );
+
+			return $response;
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * POST /profit-partners/{id}/set-password
+	 *
+	 * 站長指定一組密碼給 partner（與 regenerate-password 並存，用途不同：
+	 * regenerate 是「夥伴忘記密碼、一鍵重設強密碼」，本端點是「站長要主動
+	 * 交一組自己知道的密碼給夥伴」）。
+	 *
+	 * ⚠️ body 的 `password` **不過** `WP::sanitize_text_field_deep()`——
+	 * 那會吃掉密碼裡的合法字元（`<` / `>` / 連續空白等），造成「設定的密碼與
+	 * 實際存進去的不同」，而且完全無聲。同 partner-auth 的 login / change-password。
+	 *
+	 * response **不回傳密碼明文**：站長自己輸入的，本來就知道；回傳只會多一個
+	 * 沒必要的洩漏面。這是與 regenerate-password 的關鍵差異（後者系統產生，
+	 * 不回傳就沒人知道）。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_profit_partners_with_id_set_password_callback( $request ): \WP_REST_Response {
+		try {
+			// admin nonce 檢查：與 regenerate-password 同一條紀律——除 manage_options
+			// capability 外額外要求 X-WP-Nonce，防 admin 被誘騙在不知情下改掉 partner 密碼。
+			$nonce = (string) $request->get_header( 'x_wp_nonce' );
+			if ( ! \wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+				return new \WP_REST_Response(
+					[
+						'code'    => 'rest_forbidden',
+						'message' => '缺少有效的 admin nonce',
+					],
+					403
+				);
+			}
+
+			$id = (int) $request->get_param( 'id' );
+
+			// ⚠️ 必須用 read_json_body_for_partner()，**不是** read_json_body()——
+			// 後者會對所有欄位跑 WP::sanitize_text_field_deep()，把密碼裡的 `<` / `>` /
+			// 連續空白靜默改寫，症狀是「站長設的密碼夥伴登不進去」，而且兩邊看到的
+			// 字串完全一樣、毫無錯誤訊息。`PARTNER_RAW_FIELDS` 就是為此存在的。
+			$body     = self::read_json_body_for_partner( $request );
+			$password = isset( $body['password'] ) ? (string) $body['password'] : '';
+
+			$useCase    = new SetPartnerPasswordUseCase( partnerRepo: PartnerTermRepository::instance() );
+			$changed_at = $useCase->execute( partner_term_id: $id, plain_password: $password );
+
+			// 與 regenerate-password 一致的裸 payload 形狀（partner 系列慣例）。
+			$response = new \WP_REST_Response(
+				[
+					'partner_id'          => $id,
+					'password_changed_at' => $changed_at,
+				],
+				200
+			);
+
+			// 強制不快取：request body 帶過明文密碼，避免中間層留下任何殘影。
 			$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate' );
 			$response->header( 'Pragma', 'no-cache' );
 

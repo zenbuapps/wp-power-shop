@@ -4,7 +4,6 @@ import { App, Form, Skeleton, Tag } from 'antd'
 import { memo, useEffect, useRef } from 'react'
 
 import { PartnerForm } from '@/pages/admin/ProfitPartner/components/PartnerForm'
-import { RegeneratePasswordButton } from '@/pages/admin/ProfitPartner/Edit/RegeneratePasswordButton'
 import {
 	useProfitPartnerOne,
 	useProfitPartnerUpdate,
@@ -56,9 +55,20 @@ const EditComponent = () => {
 	const handleSubmit = async () => {
 		if (!record) return
 		try {
-			const values = await form.validateFields()
+			// ⚠️ 明確列舉要驗的欄位，**不可**用無參數的 form.validateFields()——
+			// 那會連帶驗 PasswordSection 的 new_password / new_password_confirm，
+			// 造成「密碼打到一半（只填了新密碼、還沒填確認）就存不了名稱」這種
+			// 不相干的阻擋。密碼有自己的「更新密碼」按鈕負責驗證與送出。
+			//
+			// 這份清單與下面的 payload 欄位是一組的，新增欄位時兩處要一起改。
+			const values = await form.validateFields([
+				'name',
+				'slug',
+				'contact_email',
+				'images',
+			])
 
-			// Edit 模式絕不送 password 欄位（要改密碼請走 RegeneratePasswordButton）
+			// Edit 模式絕不送 password 欄位（密碼一律走 PasswordSection 的獨立端點）
 			const payload: TProfitPartnerInput = {
 				name: values.name,
 				slug: values.slug,
@@ -113,14 +123,13 @@ const EditComponent = () => {
 				onClick: handleSubmit,
 				disabled: !record,
 			}}
-			headerButtons={() =>
-				record ? (
-					<RegeneratePasswordButton
-						partnerId={record.id}
-						partnerName={record.name}
-					/>
-				) : null
-			}
+			headerButtons={() => {
+				// 密碼相關操作**不放右上角**，一律在表單內「聯絡 Email」下方的
+				// PasswordSection（設定新密碼 + 重新產生）——站長是在編輯這位夥伴的
+				// 資料，密碼就是其中一個欄位，不該散落到頁面另一端。
+				// 這裡回 null 是為了蓋掉 Refine 的預設 header buttons，不是漏寫。
+				return null
+			}}
 			goBack={undefined}
 			footerButtonProps={{}}
 			recordItemId={record?.id}
@@ -130,7 +139,13 @@ const EditComponent = () => {
 			{isLoading || isFetching || !record ? (
 				<Skeleton active paragraph={{ rows: 6 }} />
 			) : (
-				<PartnerForm form={form} mode="edit" submitting={updater.isLoading} />
+				<PartnerForm
+					form={form}
+					mode="edit"
+					submitting={updater.isLoading}
+					partnerId={record.id}
+					partnerName={record.name}
+				/>
 			)}
 		</Edit>
 	)

@@ -164,7 +164,8 @@ pnpm release:major
 **Phase 4-A 完工要點**：
 - 3 個 resource：ProfitShop / ProfitPartner / ProfitMigration（全部掛在 marketing parent）。⚠️ 原有的第 4 個 `ProfitSettings` 全域設定頁**已整組移除**（含 3 個 REST endpoint、SettingsDto、3 個 UseCase、SettingsRepository、RewriteRulesFlusher）——4 個欄位不是零消費點（`default_rate` / `page_template`），就是「有消費點但站長改了只會弄壞東西」（`report_slug` 改了讓已發出的報表網址全失效；`rewrite_slug` 控制的 `/powershop/{post-name}/` 是條沒有任何程式碼連過去、打開只有 `post_content` 的半殘網址）。rewrite flush 改為 `RewriteRules::REWRITE_VERSION` 版本比對 + `init` 自動觸發，順帶修掉「全專案無 `register_activation_hook`、新站不 flush 就 404」的既有缺陷。詳見 `profit-shop.rule.md` §7
 - 共用工具：`utils/profitShopExceptionMapper.ts`（12 種 ErrorCode → 友善繁中訊息）
-- HIGH-RISK 元件 2 個：RegeneratePasswordButton（明文密碼）/ ImportModal（不可逆 import）。（原有的 ResetButton 已隨設定頁移除）
+- HIGH-RISK 元件 3 個：RegeneratePasswordButton（明文密碼，系統產生）/ **PasswordSection（明文密碼，站長指定；表單內嵌區塊，位於 Edit 頁「聯絡 Email」下方，**不是** Modal）** / ImportModal（不可逆 import）。（原有的 ResetButton 已隨設定頁移除）
+- **Partner 密碼共四條寫入路徑**（建立 / 站長指定 / 重新產生 / 夥伴自助），規則刻意不同，改動前先對照 `profit-shop.rule.md` §6「四條密碼路徑的分工」表；⚠️ partner endpoint 的 body 一律走 `read_json_body_for_partner()`（`PARTNER_RAW_FIELDS`），用錯成 `read_json_body()` 會靜默改寫密碼字面值
 - 防 refetch 覆寫 pattern：`filledIdRef` + `queryOptions.refetchOnWindowFocus: false`（4-A1 起沿用）
 - （ProfitSettings 的 `filledRef` + `lastFilledSettingsRef` 雙保險 pattern 隨該頁移除，但「單例資源、無 id 可比對」時仍應用 content-diff，見 `react.rule.md`）
 - npx tsc --noEmit baseline 不變，pnpm lint 全綠，既有 SPA（Product / Order / Users）零 regression

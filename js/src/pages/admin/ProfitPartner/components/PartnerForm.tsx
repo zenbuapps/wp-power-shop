@@ -2,6 +2,7 @@ import { Form, Input, type FormInstance, type FormRule } from 'antd'
 import { memo } from 'react'
 
 import { Gallery } from '@/components/product/fields'
+import { PasswordSection } from '@/pages/admin/ProfitPartner/components/PasswordSection'
 import type { TPartnerFormValues } from '@/pages/admin/ProfitPartner/types'
 
 const { Item } = Form
@@ -13,6 +14,12 @@ type TPartnerFormProps = {
 	form: FormInstance<TPartnerFormValues>
 	mode: 'create' | 'edit'
 	submitting?: boolean
+
+	/** edit 模式必傳：密碼區塊要用它打 set-password / regenerate-password */
+	partnerId?: number
+
+	/** edit 模式選傳：只用於密碼變更成功訊息的顯示 */
+	partnerName?: string
 }
 
 /**
@@ -21,13 +28,17 @@ type TPartnerFormProps = {
  * Edit / Create 兩頁共用；不負責 submit，由父層處理。
  *
  * 安全紀律：
- *   - mode === 'edit' 時**不渲染** password 欄位（要改密碼請走 RegeneratePasswordButton）
- *   - mode === 'create' 時 password 為必填（admin_only endpoint 仍保留 validation）
+ *   - mode === 'create'：`password` 為必填，隨主表單一起送（建立時才有這個欄位）
+ *   - mode === 'edit'：**不渲染** `password`，改渲染 `PasswordSection`——它的兩個欄位
+ *     雖然掛在同一個 `Form` 上，但由自己的「更新密碼」按鈕獨立送出，
+ *     **絕不隨主表單的「儲存」一起送**（站長改名稱時不該有機會動到密碼）
  */
 const PartnerFormComponent = ({
 	form,
 	mode,
 	submitting,
+	partnerId,
+	partnerName,
 }: TPartnerFormProps) => {
 	const slugRules: FormRule[] = [
 		{ required: true, message: '請輸入 slug' },
@@ -105,13 +116,27 @@ const PartnerFormComponent = ({
 					name="password"
 					label="初始密碼"
 					rules={passwordRules}
-					extra="建立後可在編輯頁透過「重新產生密碼」更換"
+					extra="建立後可在編輯頁隨時變更"
 				>
 					<Input.Password
 						placeholder="至少 8 字元"
 						autoComplete="new-password"
 					/>
 				</Item>
+			)}
+
+			{/*
+			 * 密碼設定放在「聯絡 Email」下方，與其他欄位視覺一致。
+			 * ⚠️ 但它的送出是**獨立**的（自帶「更新密碼」按鈕走 set-password 端點），
+			 * 不隨主表單的「儲存」一起送——見 PasswordSection 的 docblock。
+			 */}
+			{mode === 'edit' && undefined !== partnerId && (
+				<PasswordSection
+					form={form}
+					partnerId={partnerId}
+					partnerName={partnerName}
+					disabled={submitting}
+				/>
 			)}
 		</Form>
 	)

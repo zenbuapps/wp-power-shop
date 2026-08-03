@@ -85,6 +85,7 @@ Phase 3-C（Partner Auth + Reports，7 個）：
 | Method | 端點 | Permission | 說明 |
 |--------|------|------------|------|
 | POST | `profit-partners/{id}/regenerate-password` | **admin_only** | 重新產生密碼（12 字元 wp_generate_password；Phase 3-D T-4：加 admin nonce 驗證 + `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`，response token 永不被 cache） |
+| POST | `profit-partners/{id}/set-password` | **admin_only** | **站長指定**密碼（與上一條並存，用途不同：regenerate 是「夥伴忘記密碼、一鍵重設強密碼」，本端點是「站長要主動交一組自己知道的密碼給夥伴」）。body `{password}` 走 `read_json_body_for_partner()`（`PARTNER_RAW_FIELDS`，**不過 sanitize**）；強度由 `PartnerPassword` VO 驗（→ 422 weak_password + `data.reasons[]`）；⚠️ response **不回傳密碼**（站長自己輸入的，回傳只是多一個洩漏面）；同樣要 admin nonce + no-store |
 | POST | `partner-auth/login` | **public** | Partner 登入；Set-Cookie HttpOnly/Secure/SameSite=Lax/Path=/wp-json/power-shop/ |
 | POST | `partner-auth/logout` | **public** | 登出（idempotent，Cookie Max-Age=0） |
 | GET | `partner-auth/me` | **partner_token** | 取得當前 partner 資訊 |
