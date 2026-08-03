@@ -38,7 +38,6 @@ import {
 	ProfitPartnerEdit,
 	ProfitPartnerCreate,
 	ProfitMigrationList,
-	ProfitSettings,
 } from '@/pages/admin'
 import { resources } from '@/resources'
 
@@ -144,10 +143,6 @@ function App() {
 
 						<Route path="profit-migration">
 							<Route index element={<ProfitMigrationList />} />
-						</Route>
-
-						<Route path="profit-settings">
-							<Route index element={<ProfitSettings />} />
 						</Route>
 
 						<Route path="analytics" element={<Analytics />} />

@@ -18,7 +18,7 @@
  *   - PartnerLoginInput / PartnerLoginOutput
  *   - KpiReport / TrendReport
  *   - SlugConflict
- *   - SettingsDto
+ *   （SettingsDto 已隨 #/profit-settings 設定頁整組移除，見檔尾註解）
  *
  * 預期紅燈：Class J7\PowerShop\Domains\ProfitShop\Application\DTO\<Name> not found
  */
@@ -35,7 +35,6 @@ use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerLoginOutput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerOutput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\ProfitShopInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\ProfitShopOutput;
-use J7\PowerShop\Domains\ProfitShop\Application\DTO\SettingsDto;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\SettlementListOutput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\SettlementSummaryOutput;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\SlugConflict;
@@ -175,6 +174,7 @@ final class DtoRoundTripTest extends TestCase {
 			'created_at'    => '2026-04-01 09:00:00',
 			'image_id'      => 321,
 			'image_url'     => 'https://example.test/wp-content/uploads/alice-150x150.jpg',
+			'report_url'    => 'https://example.test/profit-report/alice/',
 		];
 
 		$dto = PartnerOutput::from_array( $arr );
@@ -204,6 +204,30 @@ final class DtoRoundTripTest extends TestCase {
 		$this->assertNull( $dto->image_url );
 		$this->assertArrayHasKey( 'image_id', $dto->to_array() );
 		$this->assertArrayHasKey( 'image_url', $dto->to_array() );
+	}
+
+	/**
+	 * PartnerOutput：report_url 缺席時為 null，且 key 仍存在於 to_array()
+	 *
+	 * `report_url` 與 `image_url` 同屬唯讀衍生欄位，由 Infrastructure 層在 hydrate 時
+	 * 組出；DTO 本身不推導，缺席就是 null。key 必須恆存在，前端才能用
+	 * `report_url ?? null` 直接判斷要不要停用「查看報表」按鈕，
+	 * 而不必區分「欄位不存在」與「值為 null」兩種狀態。
+	 *
+	 * @group edge
+	 */
+	public function test_partner_output_without_report_url_is_null(): void {
+		$dto = PartnerOutput::from_array(
+			[
+				'id'         => 7,
+				'name'       => 'Alice',
+				'slug'       => 'alice',
+				'created_at' => '2026-04-01 09:00:00',
+			]
+		);
+
+		$this->assertNull( $dto->report_url );
+		$this->assertArrayHasKey( 'report_url', $dto->to_array() );
 	}
 
 	// ────────────────────────────────────────────────
@@ -400,64 +424,16 @@ final class DtoRoundTripTest extends TestCase {
 	}
 
 	// ────────────────────────────────────────────────
-	// SettingsDto
+	// SettingsDto —— 已整組移除（連同 #/profit-settings 設定頁）
+	//
+	// 它剩下的兩個欄位都是「有消費點，但不該讓站長改」：
+	//  - `report_slug`：一改就讓所有已發給 partner 的報表網址失效
+	//  - `rewrite_slug`：控制的 /{slug}/{post-name}/ 沒有任何程式碼連過去，
+	//    打開只有佈景主題 single + post_content（商品 grid 只在 ProfitShopRenderer
+	//    走 profit_shop_slug query var 時才渲染）
+	//
+	// 兩者現為 CptRegistrar::DEFAULT_REWRITE_SLUG / RewriteRules::DEFAULT_REPORT_SLUG
+	// 固定常數。wp_options 殘留的 power_shop_profit_settings 成孤兒，無人讀寫，
+	// 不需要 migration。route 層的回歸鎖見 V2ApiRoutingTest::test_profit_settings_routes_are_removed。
 	// ────────────────────────────────────────────────
-
-	/**
-	 * SettingsDto round-trip
-	 *
-	 * @group happy
-	 */
-	public function test_settings_dto_round_trip(): void {
-		$arr = [
-			'rewrite_slug' => 'powershop',
-			'report_slug'  => 'profit-report',
-		];
-
-		$dto = SettingsDto::from_array( $arr );
-
-		$this->assertSame( $arr, $dto->to_array() );
-	}
-
-	/**
-	 * SettingsDto：未知 key（含已移除的 default_rate / page_template）一律被忽略
-	 *
-	 * 鎖死「wp_options 內舊版殘留欄位不需要 migration」的契約 —— from_array 只認
-	 * 目前定義的欄位，to_array 的輸出也不會把它們帶回去。
-	 *
-	 * @group edge
-	 */
-	public function test_settings_dto_ignores_unknown_keys(): void {
-		$dto = SettingsDto::from_array(
-			[
-				'rewrite_slug'  => 'powershop',
-				'report_slug'   => 'profit-report',
-				'default_rate'  => 10,
-				'page_template' => 'default',
-			]
-		);
-
-		$this->assertSame(
-			[
-				'rewrite_slug' => 'powershop',
-				'report_slug'  => 'profit-report',
-			],
-			$dto->to_array()
-		);
-	}
-
-	/**
-	 * SettingsDto：預設值與 CptRegistrar / RewriteRules 的 fallback 一致
-	 *
-	 * 兩邊若不同步，reset 後設定頁顯示的值會與實際生效的 rewrite rule 不符，
-	 * 站長照畫面去開網址會吃 404。
-	 *
-	 * @group edge
-	 */
-	public function test_settings_dto_defaults_match_rewrite_fallbacks(): void {
-		$dto = SettingsDto::from_array( [] );
-
-		$this->assertSame( 'powershop', $dto->rewrite_slug, '應與 CptRegistrar::DEFAULT_REWRITE_SLUG 一致' );
-		$this->assertSame( 'profit-report', $dto->report_slug, '應與 RewriteRules::DEFAULT_REPORT_SLUG 一致' );
-	}
 }

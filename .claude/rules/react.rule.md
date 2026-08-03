@@ -48,7 +48,7 @@ export const MyPage = memo(MyPageComponent)
 
 Ant Design v5 的 `App.useApp()` 要拿到可用的 `notification` / `message` / `modal` instance，**前提是元件樹被 antd 的 `<App>` context provider 包住**。`main.tsx` 若沒有這層 provider，`App.useApp()` 會回傳空物件 `{}`——`notification.success(...)` 這類呼叫在執行期才會發現 `notification` 是 `undefined`，呼叫當下直接 `throw`，**中斷該處後續所有程式碼**（例如成功訊息呼叫後面接的 `onClose()` / `refetch()` 都不會執行），而且通常沒有清楚的錯誤訊息可看，很難排查。
 
-這個問題曾經影響全專案 10 個檔案，包含三個 HIGH-RISK 元件：`RegeneratePasswordButton`（明文密碼展示）/ `ImportModal`（不可逆匯入）/ `ResetButton`（不可逆重設）——站長按下去之後，不管成功或失敗都看不到任何回饋；`ProfitShop/Edit` 的「已更新賣場」/「更新失敗」提示也從未真正出現過。
+這個問題曾經影響全專案 10 個檔案，包含當時的三個 HIGH-RISK 元件：`RegeneratePasswordButton`（明文密碼展示）/ `ImportModal`（不可逆匯入）/ `ResetButton`（不可逆重設，已隨設定頁移除）——站長按下去之後，不管成功或失敗都看不到任何回饋；`ProfitShop/Edit` 的「已更新賣場」/「更新失敗」提示也從未真正出現過。
 
 **已修**：`main.tsx` 用 `<AntdApp component={false}>` 包住整棵樹（`component={false}` 讓它零 DOM 輸出，純粹提供 context，不影響版面）。
 
@@ -153,7 +153,7 @@ description: mapped.code ? mapped.toastMessage : rawMessage || mapped.toastMessa
 
 ### Profit Shop 系列特例（Phase 4-A）
 
-Profit Shop 4 個 resource（ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings）的後端 V2Api 統一回 `{code, message, data}` 包裹形狀，與 antd-toolkit 預設 dataProvider 預期的 WordPress REST API 形狀（讀 `x-wp-total` header、payload 直接是 array / object）**不相容**。
+Profit Shop 3 個 resource（ProfitShop / ProfitPartner / ProfitMigration）的後端 V2Api 統一回 `{code, message, data}` 包裹形狀，與 antd-toolkit 預設 dataProvider 預期的 WordPress REST API 形狀（讀 `x-wp-total` header、payload 直接是 array / object）**不相容**。
 
 **規範：**
 - **不**使用 `useTable` / `useForm`（會把物件當 array 渲染，或 form initialValues 全空）
@@ -289,7 +289,6 @@ const isEditing = useIsEditing()
 | `/profit-partner/create` | `ProfitPartner/Create` | `power-shop` |
 | `/profit-partner/edit/:id` | `ProfitPartner/Edit` | `power-shop`（含 RegeneratePasswordButton）|
 | `/profit-migration` | `ProfitMigration/List` | `power-shop`（含 ImportModal）|
-| `/profit-settings` | `ProfitSettings` | `power-shop`（含 ResetButton）|
 | `/analytics` | `Analytics` | `power-shop` |
 | `/wp-media-library` | `WPMediaLibraryPage` | `default` |
 
@@ -524,7 +523,7 @@ js/src/pages/admin/
 ├── ProfitShop/         # 賣場 CRUD（含 ItemsEditor、ShopActionsButtons、ProductPickerModal[Phase 7]）
 ├── ProfitPartner/      # 分潤夥伴 CRUD（含 RegeneratePasswordButton ⚠ HIGH-RISK、PartnerSelector）
 ├── ProfitMigration/    # legacy 一頁商店匯入（含 ImportModal ⚠ HIGH-RISK）
-└── ProfitSettings/     # 全域設定（含 ResetButton ⚠ HIGH-RISK）
+                        # （ProfitSettings 全域設定頁已整組移除，見 profit-shop.rule.md §7）
 ```
 
 ### 共用工具
@@ -549,7 +548,6 @@ js/src/pages/admin/
 |------|--------|------|
 | `RegeneratePasswordButton` | 明文新密碼僅展示一次 | 僅 `useState`（不進 cache / storage / log / Jotai / Context）+ 5 min auto-clear timer + unmount cleanup + Modal `closable=false` / `maskClosable=false` / `keyboard=false`（強制走確認按鈕）+ `navigator.clipboard.writeText`（不 fallback execCommand）+ Input.Password 預設 mask（`visibilityToggle.visible` 由 state 控制）|
 | `ImportModal` | legacy 一頁商店 → profit shop 不可逆 | 4 道閘門：row Import 按鈕 disabled / Modal 開啟後 canSubmit 雙檢 importable / PartnerSelector 必選 / IMPORT 二次確認 |
-| `ResetButton` | profit-settings 還原預設 | 自包 mutation（不外洩通用 reset hook）+ RESET 二次確認 + `maskClosable=false` / `keyboard=false` |
 
 ### 防 refetch 覆寫使用者編輯 Pattern（Edit 頁面共用）
 
@@ -572,7 +570,7 @@ const { data } = useCustom({
 })
 ```
 
-ProfitSettings 額外加 `lastFilledSettingsRef`（content-diff 比對）：reset 後 server 內容變動時自動重填；單純 refetch 同內容時不覆寫使用者編輯。
+（曾經有個 ProfitSettings 變體用 `lastFilledSettingsRef` 做 content-diff，處理「單例資源、沒有 id 可比對」的情況；該頁已移除，但那個 pattern 對日後同類頁面仍然適用——見 `profit-shop.rule.md` §12.6。）
 
 ### Partner 夥伴圖片（直接複用商品 `Gallery` 元件）
 
@@ -1369,7 +1367,7 @@ js/src/
 │                                #   Phase 7：+ components/ProductPickerModal（商品選擇器 Modal，消費 §6.4 ProductTableBody）
 ├── pages/admin/ProfitPartner/   # Phase 4-A2：夥伴 CRUD + RegeneratePasswordButton（HIGH-RISK）+ PartnerSelector
 ├── pages/admin/ProfitMigration/ # Phase 4-A3：legacy 一頁商店匯入 + ImportModal（HIGH-RISK）
-├── pages/admin/ProfitSettings/  # Phase 4-A3：全域設定 + ResetButton（HIGH-RISK）
+│                             # （Phase 4-A3 的 ProfitSettings 全域設定頁已整組移除）
 ├── partner-portal/             # Phase 4-B + 6-A2：獨立 SPA bundle（mount 點 #profit_partner_portal，與 admin 完全隔離）
 │   ├── pages/                  #   Login / Dashboard / TrendChart / SettlementsTable / ChangePassword（6-A2 HIGH-RISK）
 │   ├── hooks/                  #   useKpi / useTrend / useSettlements / useChangePassword（6-A2）

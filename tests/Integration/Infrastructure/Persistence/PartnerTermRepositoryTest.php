@@ -24,6 +24,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\PartnerSnapshot;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PartnerSlug;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\PartnerTermRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRules;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
 use Tests\Integration\TestCase;
 
@@ -302,6 +303,113 @@ final class PartnerTermRepositoryTest extends TestCase {
 			$attachment_id,
 			(int) \get_term_meta( $term_id, '_partner_image_id', true ),
 			'讀取不可產生清除 termmeta 的副作用'
+		);
+	}
+
+	// ========== 報表網址（report_url 唯讀衍生欄位）==========
+
+	/**
+	 * report_url 必須與實際註冊 rewrite rule 的 report 前綴同源
+	 *
+	 * 斷言值刻意寫成 `RewriteRules::get_report_slug()` 而非字面值 `'profit-report'`——
+	 * 這樣它鎖的是「report_url 與 rewrite rule 同源」這個契約，而不是當下那個字串。
+	 * 前綴日後若改動，rewrite rule 與本測試會一起跟著變；反之若有人把
+	 * `resolve_report_url()` 改成 hardcode，兩者就會分家、本測試立刻紅燈。
+	 *
+	 * 沒有這道鎖時，分家的症狀是前台按鈕安靜地連到 404（頁面正常載入、只是找不到
+	 * 報表），沒有任何錯誤訊息可循。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_report_url_matches_registered_report_prefix(): void {
+		$term_id = $this->create_partner( 'ken-report-url', 'Ken', 'plain-Pa55word!' );
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertSame(
+			\home_url( '/' . RewriteRules::get_report_slug() . '/ken-report-url/' ),
+			$persisted->report_url,
+			'report_url 的前綴必須與 RewriteRules 註冊 rewrite rule 時所用的來源一致'
+		);
+	}
+
+	/**
+	 * wp_options 內殘留的舊 `report_slug` 必須被忽略（report 前綴已改為固定常數）
+	 *
+	 * report_slug 曾經是 `#/profit-settings` 的設定項，後來移除（改動它會讓所有已發給
+	 * partner 的報表網址一次失效）。既有站台的 wp_options 仍可能留著那個 key 且**不做
+	 * migration**，所以「殘留值不得復活」必須有測試守住——否則舊站台升級後，
+	 * report_url 會指向一個 rewrite rule 根本沒註冊的前綴，一樣是靜默 404。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_report_url_ignores_stale_report_slug_option(): void {
+		$term_id = $this->create_partner( 'ken-stale-slug', 'Ken', 'plain-Pa55word!' );
+
+		// ⚠️ 刻意寫字面值而非引用常數——`RewriteRules::OPTIONS_KEY` 已隨全域設定頁移除，
+		// production 端不該再有它。測試需要這個 key 只是為了塞進殘留值、驗證它被忽略。
+		$legacy_option_key = 'power_shop_profit_settings';
+
+		$original = \get_option( $legacy_option_key, [] );
+		\update_option(
+			$legacy_option_key,
+			[ 'report_slug' => 'stale-legacy-report' ],
+			false
+		);
+
+		try {
+			$persisted = $this->repo->find_by_id( $term_id );
+			$this->assertNotNull( $persisted );
+			$this->assertStringNotContainsString(
+				'stale-legacy-report',
+				(string) $persisted->report_url,
+				'wp_options 殘留的舊 report_slug 不可影響 report_url'
+			);
+			$this->assertSame(
+				\home_url( '/' . RewriteRules::DEFAULT_REPORT_SLUG . '/ken-stale-slug/' ),
+				$persisted->report_url,
+				'report 前綴應恆為 DEFAULT_REPORT_SLUG 常數'
+			);
+		} finally {
+			\update_option( $legacy_option_key, $original, false );
+		}
+	}
+
+	/**
+	 * save() 必須忽略傳入的 report_url（與 image_url 同屬唯讀衍生欄位）
+	 *
+	 * @test
+	 * @group happy
+	 * @group security
+	 */
+	public function test_save_ignores_supplied_report_url(): void {
+		$term_id = $this->repo->save(
+			new PartnerSnapshot(
+				term_id: 0,
+				name: 'Leo',
+				slug: new PartnerSlug( 'leo-report-url' ),
+				contact_email: null,
+				image_id: null,
+				image_url: null,
+				// 刻意傳入假的 report_url——save() 必須忽略它，讀取時重新組出。
+				report_url: 'https://evil.example/should-be-ignored/'
+			),
+			'plain-Pa55word!'
+		);
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertStringNotContainsString(
+			'evil.example',
+			(string) $persisted->report_url,
+			'save() 傳入的 report_url 不可被持久化'
+		);
+		$this->assertSame(
+			\home_url( '/' . RewriteRules::DEFAULT_REPORT_SLUG . '/leo-report-url/' ),
+			$persisted->report_url,
+			'report_url 應於讀取時由 slug + report slug 重新組出'
 		);
 	}
 

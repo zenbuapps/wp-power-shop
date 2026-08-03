@@ -101,7 +101,7 @@ public function __construct(
 
 目前 Port interface 清單：
 - `ProductLookupInterface` / `SlugConflictLookupInterface` / `LegacyShopRepositoryInterface`
-- `RewriteRulesFlusherInterface` / `SettingsRepositoryInterface`
+- ~~`RewriteRulesFlusherInterface` / `SettingsRepositoryInterface`~~（已隨全域設定頁移除，見 §7）
 - `ItemValidatorInterface` / `SlugConflictDetectorInterface`
 - `TransientStoreInterface` / `ClockInterface` / `EmailNotifierInterface`
 - `SettlementSummaryProviderInterface`
@@ -576,48 +576,88 @@ Partner 夥伴圖片存於 termmeta `_partner_image_id`（attachment ID），**�
 
 前端對應元件（複用商品 `Gallery` / `PartnerSelector` 頭像 / 列表夥伴圖片欄）見 `react.rule.md` §6.5。
 
-### `SettingsDto` 只放有消費點的欄位，且預設值必須與 rewrite fallback 同步
+### 全域設定頁已整組移除——「有消費點」不等於「該讓站長改」
 
-`SettingsDto`（`Application/DTO/SettingsDto.php`）對應 `#/profit-settings` 設定頁，目前**只有兩個欄位**：
+`#/profit-settings` 設定頁、`SettingsDto`、三個 Settings UseCase、`SettingsRepository`、
+`RewriteRulesFlusher` 與 `GET/PUT/POST /power-shop/profit-settings` 三個 endpoint **全部刪除**。
+這頁存在期間一共放過四個欄位，四個都被移除，理由分兩類：
 
-| 欄位 | 消費點 | 實際影響 |
-|------|--------|----------|
-| `rewrite_slug` | `CptRegistrar::get_rewrite_slug()` → `register_post_type` 的 `rewrite.slug` | powershop CPT 的永久連結 `/{rewrite_slug}/{post-name}/` |
-| `report_slug` | `RewriteRules::get_report_slug()` → `add_rewrite_rule` pattern | partner 報表網址 `/{report_slug}/{partner-slug}/` |
+**第一類：零消費點**（`default_rate` 預設分潤比例 / `page_template` 頁面模板）
 
-**兩條紀律：**
+從 Phase 3-B 起就沒有任何一處讀取——`grep -rn "default_rate\|page_template" inc/` 除了 DTO
+自己的定義之外一處都沒有。新建賣場不吃 `default_rate`（`rate` 一律由 `ProfitShopInput` 帶），
+賣場前台固定 `require templates/profit-shop-front.php`，根本沒有讀 `page_template` 的分支。
+這種「存得進去、讀得出來、但沒人用」的欄位比缺功能更糟——它讓站長以為自己已經設定好了。
 
-1. **新增設定欄位前先確定「誰會讀它」**。曾經存在的 `default_rate`（預設分潤比例）與
-   `page_template`（頁面模板）從 Phase 3-B 就零消費點——`grep -rn "default_rate\|page_template" inc/`
-   除了 DTO 自己的定義之外，一處讀取都沒有。站長在設定頁填了值、存檔成功、
-   重新整理還讀得回來，但**填什麼都不影響任何行為**：新建賣場不吃 `default_rate`
-   （`rate` 一律由 `ProfitShopInput` 帶），賣場前台固定 `require templates/profit-shop-front.php`
-   （`ProfitShopRenderer.php:222`），根本沒有讀 `page_template` 的分支。
-   這種「存得進去、讀得出來、但沒人用」的欄位比缺功能更糟——它讓站長以為自己已經設定好了。
-   兩欄已於「移除無消費點設定」一役全鏈路刪除（DTO / api.yml / 前端 / 測試），
-   `DtoRoundTripTest::test_settings_dto_ignores_unknown_keys` 與
-   `UpdateSettingsTest::test_ignores_removed_fields`（IT）鎖死「舊 payload 仍帶這兩欄也不會復活」。
-   wp_options 內的殘留 key 由 `from_array` 忽略、下次 `save()` 自然覆蓋，**不需要 migration**。
+**第二類：有消費點，但站長改了只會弄壞東西**（`report_slug` / `rewrite_slug`）
 
-2. **`SettingsDto::from_array` 的預設值必須與 `CptRegistrar::DEFAULT_REWRITE_SLUG`
-   / `RewriteRules::DEFAULT_REPORT_SLUG` 逐字一致**。兩邊各自持有一份 fallback：
+| 欄位 | 真實消費點 | 為何仍不該開放 |
+|------|-----------|---------------|
+| `report_slug` | `add_rewrite_rule` pattern + `PartnerSnapshot.report_url` | 一改就讓**所有已經發給 partner 的報表網址一次失效**，而站長換個前綴得不到任何實質好處 |
+| `rewrite_slug` | `register_post_type` 的 `rewrite.slug` | 它產生的 `/{slug}/{post-name}/` 是條**沒有任何程式碼連過去**的半殘網址（見下） |
 
-   ```
-   option 不存在時（例如剛按下「還原預設」）
-     ├─ GET /profit-settings  → SettingsRepository::get() → SettingsDto::from_array([]) → 畫面顯示的值
-     └─ 實際 rewrite rule     → RewriteRules::get_report_slug() → DEFAULT_REPORT_SLUG → 真正生效的值
-   ```
+`rewrite_slug` 那條的推導過程值得記下來，因為光看欄位名會以為它很重要：
 
-   兩份預設值曾經不同步（DTO 給 `'shop'` / `'report'`，實際生效的是 `'powershop'` / `'profit-report'`），
-   後果是站長 reset 後在設定頁看到 `report`，照著去開 `/report/{partner}/` 卻吃 404——
-   畫面與現實不一致，而且**不會有任何錯誤訊息**提示他看到的是假的。
-   `DtoRoundTripTest::test_settings_dto_defaults_match_rewrite_fallbacks` 與
-   `GetSettingsTest` / `ResetSettingsTest` 的預設值斷言三處同時鎖住這個契約。
+1. 全專案 `grep get_permalink inc/` 三處命中**全是商品**（`$item->product_id`），
+   沒有任何一處組出或連到 powershop CPT 的 permalink
+2. `ProfitShopRenderer::maybe_render` 只在 query var `profit_shop_slug` 有值時才渲染
+   （`ProfitShopRenderer.php:112`），而 `/powershop/{post-name}/` 那條 query var 是空的
+3. 商品 grid 只存在於 `templates/profit-shop-front.php`，唯一的 `require` 點就是該 renderer
+   （另一個是 `ProfitShopShortcode`，但那要短碼）
+4. ⇒ `/powershop/{post-name}/` 打開只會拿到**佈景主題的 single template + `post_content`**：
+   沒有商品、沒有價格、沒有加購，而且照樣被搜尋引擎索引
 
-⚠️ **`rewrite_slug` 不是賣場前台網址**。賣場前台走 `RewriteRules::SHOP_REWRITE_PREFIX`
-（**固定常數** `'profit-shop'`，`RewriteRules.php:36`），與本設定完全無關。設定頁的欄位標籤
-與 `extra` 說明曾誤寫成「影響賣場前台網址」，改動這兩處文案時務必對照實際消費點，
-不要憑欄位名稱望文生義。
+讓站長設定一條「沒人連過去、內容半殘」的網址沒有任何正面價值。
+
+**現況**：兩者都是固定常數（`CptRegistrar::DEFAULT_REWRITE_SLUG = 'powershop'` /
+`RewriteRules::DEFAULT_REPORT_SLUG = 'profit-report'`），與賣場前台的
+`SHOP_REWRITE_PREFIX = 'profit-shop'` 同性質。`get_rewrite_slug()` / `get_report_slug()`
+兩個 method **都保留**（單一取值入口，caller 不需知道背後是設定值還是常數），
+但改為直接回傳常數、完全不讀 wp_options。
+
+wp_options 內殘留的 `power_shop_profit_settings` 成為孤兒，無人讀寫，**不需要 migration**。
+
+**回歸鎖**（防這頁被重新加回來）：
+- `V2ApiRoutingTest::test_profit_settings_routes_are_removed`（IT）：三個 route 都不該註冊
+- `FlushRewriteTest::test_slugs_ignore_stale_settings_option`（IT）：wp_options 有殘留設定時，
+  三個前綴仍回常數——防止「rewrite rule 用常數、`report_url` 用殘留值」的兩份真相
+
+### rewrite rules 的 flush 改為版本比對，掛 `init` 自動觸發
+
+移除設定頁時**必須**一併處理的配套，否則會留下比原本更嚴重的問題。
+
+舊機制：`RewriteRules::flush_rules_if_needed()` 比對「設定裡的 slug 是否與上次套用不同」，
+唯一觸發點是 `UpdateSettings` / `ResetSettings`（= 站長在設定頁按儲存）。
+
+這裡藏著一個**既有缺陷**：全專案**沒有 `register_activation_hook`**
+（`grep -rn "flush_rewrite_rules\|register_activation_hook" inc/ plugin.php` 可自行確認），
+所以那個藏在設定頁儲存流程裡的呼叫是全專案唯一的 `flush_rewrite_rules()`。新站台安裝後，
+若站長從未進設定頁按過儲存，`/profit-shop/{slug}/` 與 `/profit-report/{slug}/`
+會直接 404，且沒有任何提示說明原因。刪掉設定頁 = 連這個意外的入口都沒了。
+
+新機制：
+
+```php
+private const REWRITE_VERSION = '1';                                    // 改規則時 bump
+private const APPLIED_VERSION_OPTION = 'power_shop_profit_applied_rewrite_version';
+
+// __construct()
+\add_action( 'init', [ __CLASS__, 'register' ], 12 );
+\add_action( 'init', [ __CLASS__, 'flush_rules_if_needed' ], 13 );      // 晚一階，確保 register 已跑
+```
+
+三條紀律：
+
+1. **改動任何 rewrite rule（新增 / 移除 / 改前綴常數）時必須 bump `REWRITE_VERSION`**，
+   否則既有站台不會重新 flush，新規則安靜失效（網址 404、無錯誤訊息）
+2. **`APPLIED_VERSION_OPTION` 必須 autoload = true**（`update_option` 第三參數）——
+   `flush_rules_if_needed()` 每個請求都要讀它，走 alloptions cache 才不會每次多一次 DB query。
+   版本相同時直接 return，不會呼叫昂貴的 `flush_rewrite_rules()`
+3. **這個機制的前提是「rewrite 規則全是常數」**。若日後又把某個前綴變回可設定值，
+   版本比對就不成立了（會出現「同版本號、不同規則」的站台），必須改回值比對或兩者併用
+
+測試：`FlushRewriteTest`（IT，4 method）——全新安裝會 flush 並記錄版本 / 版本相同時
+early return 不 flush / 版本不同時重新 flush / 殘留設定不影響前綴常數。
 
 ---
 
@@ -753,14 +793,15 @@ Phase 9 新增測試（賣場商品變體層價格 / 灌水人數覆寫）：
 | `profit-shop` | `/profit-shop` / `/create` / `/edit/:id` | `pages/admin/ProfitShop/` |
 | `profit-partner` | `/profit-partner` / `/create` / `/edit/:id` | `pages/admin/ProfitPartner/` |
 | `profit-migration` | `/profit-migration` | `pages/admin/ProfitMigration/` |
-| `profit-settings` | `/profit-settings` | `pages/admin/ProfitSettings/` |
+
+（`profit-settings` 已整組移除，見 §7「全域設定頁已整組移除」。）
 
 ### 12.2 useCustom 取代 useTable / useForm
 
 後端 V2Api 統一回 `{code, message, data}`，與 antd-toolkit 預設 dataProvider 預期的 WordPress REST API shape（`x-wp-total` header、payload 直接是 array / object）**不相容**。
 
 **規範：**
-- 4 個 profit-* resource **不**使用 `useTable` / `useForm`
+- 3 個 profit-* resource **不**使用 `useTable` / `useForm`
 - 改用 `useCustom` / `useCustomMutation`，手動讀 `result.data.data`
 - 仍須明確指定 `dataProviderName: 'power-shop'`（含元件層 useCustom 如 `SlugInput`）
 - Refine 仍提供 `<List>` / `<Edit>` / `<Create>` UI shell + `useInvalidate` 做快取失效
@@ -773,7 +814,7 @@ Phase 9 新增測試（賣場商品變體層價格 / 灌水人數覆寫）：
 
 ### 12.4 不可逆操作的 4 道閘門 / 二次確認模式
 
-ProfitMigration `ImportModal` 與 ProfitSettings `ResetButton` 屬不可逆操作，採以下模式：
+ProfitMigration `ImportModal` 屬不可逆操作，採以下模式：
 
 **ImportModal（IMPORT）4 道閘門**：
 1. List 列每 row 的 `Import` 按鈕：`importable=false` 時 `disabled` + tooltip 顯示原因
@@ -781,12 +822,11 @@ ProfitMigration `ImportModal` 與 ProfitSettings `ResetButton` 屬不可逆操�
 3. PartnerSelector 必選（強制 partner_term_id）
 4. IMPORT 二次確認（typed confirmation 或 confirm dialog）
 
-**ResetButton（RESET）紀律**：
-- 自包 mutation（不外洩通用 `useReset` hook，避免誤用於其他頁面）
-- RESET 二次確認 + Modal `maskClosable=false` + `keyboard=false`（強制走確認按鈕）
-- 失敗保留 state；成功 `useInvalidate` 觸發父頁 content-diff 自動重填
+Modal 一律 `closable=false` / `maskClosable=false` / `keyboard=false` 強制使用者走確認按鈕，避免誤觸 ESC / mask click 被視為「同意」。
 
-兩個元件都用 `Modal closable=false` / `maskClosable=false` / `keyboard=false` 強制使用者走確認按鈕，避免誤觸 ESC / mask click 自動關閉視為「同意」。
+> 這裡原本還有一個 `ResetButton`（`#/profit-settings` 的「還原預設」，同樣的二次確認 + 自包
+> mutation 紀律）。設定頁整組移除後它一併刪除——但上面這套模式仍是本專案處理不可逆操作的標準，
+> 新增同類元件時照著做。
 
 ### 12.5 HIGH-RISK 元件的安全紀律
 
@@ -824,9 +864,9 @@ ProfitMigration `ImportModal` 與 ProfitSettings `ResetButton` 屬不可逆操�
 - `partnerExceptionMapper` context-aware 第二參數（`'default' | 'change-password'`）— Login 不傳預設 `'default'` 向後相容
 - LOW-7 跳過 DRY 重構（兩 context branch 80% 相同但語意差異點需保留 caller）
 
-#### ImportModal / ResetButton
+#### ImportModal
 
-見 §12.4。
+見 §12.4。（同章節的 `ResetButton` 已隨設定頁移除。）
 
 ### 12.6 防 refetch 覆寫使用者編輯 Pattern
 
@@ -847,7 +887,10 @@ useEffect(() => {
 // 雙保險：對應的 useCustom 加 queryOptions: { refetchOnWindowFocus: false }
 ```
 
-**ProfitSettings 加強版（4-A3）**：因為 reset 會讓 server 內容變動但 page 不重新 mount，不能光靠 `filledIdRef`（settings 沒有 id）。改用 `lastFilledSettingsRef` 做 content-diff：reset 後內容變動時重填，單純 refetch 同內容時不覆寫使用者編輯。
+> 曾經有個「ProfitSettings 加強版」變體（`lastFilledSettingsRef` content-diff，處理「reset 後
+> server 內容變動但 page 不重新 mount」且該頁沒有 id 可比對的情況）。設定頁移除後一併刪除，
+> 但若日後又出現「單例資源 + 可被外部改動」的頁面，content-diff 比對仍是正解——
+> 光靠 `filledIdRef` 在沒有 id 的單例頁上不成立。
 
 ### 12.7 Partner Portal Bundle（Phase 4-B，獨立 SPA）
 

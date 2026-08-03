@@ -11,12 +11,10 @@ use J7\PowerShop\Domains\ProfitShop\Application\DTO\ChangePasswordInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerLoginInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\ProfitShopInput;
-use J7\PowerShop\Domains\ProfitShop\Application\DTO\SettingsDto;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\ItemValidator;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\LoginRateLimiter;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PartnerAuthService;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PartnerTokenStore;
-use J7\PowerShop\Domains\ProfitShop\Application\Service\SettingsRepository;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\SlugConflictDetector;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Migration\ImportLegacyShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Migration\ListImportableLegacyShops;
@@ -33,9 +31,6 @@ use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\GetPartne
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\GetPartnerTrendUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\ListPartnerSettlementsUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\UpdatePartner;
-use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settings\GetSettings;
-use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settings\ResetSettings;
-use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settings\UpdateSettings;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\CreateShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\DeleteShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\DuplicateShop;
@@ -51,7 +46,6 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepo
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\LegacyOnePageShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\PartnerTermRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementSummaryProvider;
-use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRulesFlusher;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\SystemClock;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpAdminEmailNotifier;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpProductLookup;
@@ -78,7 +72,6 @@ use J7\WpUtils\Classes\WP;
  *  - profit-partners POST / PUT / DELETE：admin_only_permission（manage_options，
  *    因 partner 涉及密碼系統與身分發放，僅 admin 可操作）
  *  - profit-migration/*：admin_only_permission（manage_options）
- *  - profit-settings/*：admin_only_permission（manage_options）
  *
  * Exception 處理：每個 callback 自 try/catch \Throwable 後走 ExceptionMapper（避開
  * ApiBase::try 把 \Exception 整體變 500 + 洩漏 request payload 的問題）。
@@ -229,22 +222,6 @@ final class V2Api extends ApiBase {
 			],
 			[
 				'endpoint' => 'profit-migration/import',
-				'method' => 'post',
-				'permission_callback' => $admin_only,
-			],
-			// §4.8 profit-settings
-			[
-				'endpoint' => 'profit-settings',
-				'method' => 'get',
-				'permission_callback' => $admin_only,
-			],
-			[
-				'endpoint' => 'profit-settings',
-				'method' => 'put',
-				'permission_callback' => $admin_only,
-			],
-			[
-				'endpoint' => 'profit-settings/reset',
 				'method' => 'post',
 				'permission_callback' => $admin_only,
 			],
@@ -737,69 +714,6 @@ final class V2Api extends ApiBase {
 			);
 			$output = $useCase->execute( $legacy_id, $partner_term_id );
 			return self::created( $output->to_array() );
-		} catch ( \Throwable $e ) {
-			return ExceptionMapper::map( $e );
-		}
-	}
-
-	// ========== §4.8 profit-settings callbacks ==========
-
-	/**
-	 * GET /profit-settings
-	 *
-	 * @param \WP_REST_Request $request Request.
-	 * @return \WP_REST_Response
-	 * @phpstan-ignore-next-line
-	 */
-	public function get_profit_settings_callback( $request ): \WP_REST_Response {
-		try {
-			$useCase = new GetSettings( settingsRepo: SettingsRepository::instance() );
-			$dto     = $useCase->execute();
-			return self::ok( $dto->to_array() );
-		} catch ( \Throwable $e ) {
-			return ExceptionMapper::map( $e );
-		}
-	}
-
-	/**
-	 * PUT /profit-settings
-	 *
-	 * @param \WP_REST_Request $request Request.
-	 * @return \WP_REST_Response
-	 * @phpstan-ignore-next-line
-	 */
-	public function put_profit_settings_callback( $request ): \WP_REST_Response {
-		try {
-			$body = self::read_json_body( $request );
-			$dto  = SettingsDto::from_array( $body );
-
-			$useCase = new UpdateSettings(
-				settingsRepo: SettingsRepository::instance(),
-				flusher: RewriteRulesFlusher::instance(),
-				slugDetector: new SlugConflictDetector( WpSlugConflictLookup::instance() )
-			);
-			$persisted = $useCase->execute( $dto );
-			return self::ok( $persisted->to_array() );
-		} catch ( \Throwable $e ) {
-			return ExceptionMapper::map( $e );
-		}
-	}
-
-	/**
-	 * POST /profit-settings/reset
-	 *
-	 * @param \WP_REST_Request $request Request.
-	 * @return \WP_REST_Response
-	 * @phpstan-ignore-next-line
-	 */
-	public function post_profit_settings_reset_callback( $request ): \WP_REST_Response {
-		try {
-			$useCase = new ResetSettings(
-				settingsRepo: SettingsRepository::instance(),
-				flusher: RewriteRulesFlusher::instance()
-			);
-			$useCase->execute();
-			return self::ok( SettingsRepository::instance()->get()->to_array() );
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}

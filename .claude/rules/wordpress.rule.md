@@ -72,9 +72,13 @@ Phase 3-B（Admin CRUD，17 個）：
 | DELETE | `profit-partners/{id}` | **admin_only** | 刪除夥伴（is_in_use 預檢） |
 | GET | `profit-migration/legacy-shops` | admin_only | 列舉可遷入的 legacy 一頁商店 |
 | POST | `profit-migration/import` | admin_only | 匯入 legacy 商店（強制 partner_term_id） |
-| GET | `profit-settings` | admin_only | 取得全域設定 |
-| PUT | `profit-settings` | admin_only | 更新設定（含 SlugConflictDetector + flush_rules） |
-| POST | `profit-settings/reset` | admin_only | 還原預設值 |
+
+> ⚠️ `profit-settings` 三個 endpoint（GET / PUT / POST reset）**已整組移除**。該頁最後只剩
+> `rewrite_slug` / `report_slug` 兩個欄位，兩者都是「有消費點，但站長改了只會弄壞東西」——
+> 現為 `CptRegistrar::DEFAULT_REWRITE_SLUG` / `RewriteRules::DEFAULT_REPORT_SLUG` 固定常數。
+> rewrite rules 的 flush 改為「規則版本比對、`init` 自動觸發」（`RewriteRules::REWRITE_VERSION`），
+> 順便修掉「全專案沒有 `register_activation_hook`、新站不 flush 就 404」的既有缺陷。
+> 詳見 `profit-shop.rule.md` §7。
 
 Phase 3-C（Partner Auth + Reports，7 個）：
 

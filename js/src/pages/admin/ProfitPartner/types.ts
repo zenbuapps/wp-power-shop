@@ -37,6 +37,21 @@ export type TProfitPartner = {
 	 * 「有 image_id 但 image_url 為 null」是合法狀態，UI 需退回預設頭像。
 	 */
 	image_url: string | null
+
+	/**
+	 * 夥伴報表頁完整網址（`/profit-report/{partner-slug}/`，**唯讀衍生欄位**）
+	 *
+	 * ⚠️ **不要**在前端自行拼接這個網址。前綴目前是固定常數
+	 * （`RewriteRules::DEFAULT_REPORT_SLUG`），但組成規則的真相來源只有 PHP 端；
+	 * 在前端複製一份，只要哪天前綴變動（它曾經是可設定項，被移除過一次）就會分家，
+	 * 而症狀是按鈕安靜地連到 404（頁面正常載入、只是找不到報表），沒有任何錯誤訊息。
+	 *
+	 * 後端在 `PartnerTermRepository::resolve_report_url()` 用註冊 rewrite rule 的
+	 * 同一個 `RewriteRules::get_report_slug()` 組出，是唯一真相來源。
+	 *
+	 * 型別保留 nullable 與 `image_url` 對齊（消費端一律要處理 null）。
+	 */
+	report_url: string | null
 }
 
 /**

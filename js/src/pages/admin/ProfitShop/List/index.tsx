@@ -1,4 +1,5 @@
 import {
+	BarChartOutlined,
 	CopyOutlined,
 	DeleteOutlined,
 	EditOutlined,
@@ -106,12 +107,47 @@ const resolveCopyShortcodeBlockedReason = (
 }
 
 /**
+ * 「查看報表」的停用原因；回傳 null 代表可查看
+ *
+ * ⚠️ 刻意**不**檢查賣場本身的 status —— 報表屬於**分潤夥伴**（`/profit-report/{partner-slug}/`），
+ * 不屬於賣場。夥伴的報表涵蓋他名下所有賣場的分潤，賣場是草稿或已刪除都不影響那張報表
+ * 存不存在、也不影響其他賣場的數字。這正是它與 `resolveOpenShopBlockedReason` /
+ * `resolveCopyShortcodeBlockedReason` 的關鍵差異——三個函式看起來很像，
+ * 別為了 DRY 併成一個，那會讓草稿 / 已刪除賣場白白失去夥伴報表的入口。
+ *
+ * @param partner   該賣場的分潤夥伴（找不到時為 undefined）
+ * @param isLoading 夥伴列表是否仍在載入（載入中不可判定為「找不到」）
+ */
+const resolveViewReportBlockedReason = (
+	partner: TProfitPartner | undefined,
+	isLoading: boolean
+): string | null => {
+	// 載入中先停用，但訊息要與「真的找不到」區分——否則每次進頁面都會閃一次
+	// 「夥伴已被刪除」的假警告
+	if (isLoading) {
+		return '分潤夥伴資料載入中，請稍候'
+	}
+
+	if (!partner) {
+		return '找不到此賣場的分潤夥伴（可能已被刪除）'
+	}
+
+	// report_url 是後端唯讀衍生欄位；理論上有 slug 就一定組得出來，
+	// 但契約是 nullable，仍照實處理而非用 `!` 斷言掉
+	if (!partner.report_url) {
+		return '此分潤夥伴尚未產生報表網址'
+	}
+
+	return null
+}
+
+/**
  * Table `scroll.x`：各欄 width 總和
  *
  * 名稱 260 + 呈現模式 120 + 狀態 100 + 分潤夥伴 160 + 分潤 90 + 商品數 90
- * + 更新時間 170 + 操作 220。改動任一欄寬度時要一起更新，否則橫向捲軸會算錯。
+ * + 更新時間 170 + 操作 300。改動任一欄寬度時要一起更新，否則橫向捲軸會算錯。
  */
-const COLUMNS_TOTAL_WIDTH = 1210
+const COLUMNS_TOTAL_WIDTH = 1290
 
 /** FilterTags 的欄位名稱對映 */
 const keyLabelMapper = (key: keyof TProfitShopFilterValues): string =>
@@ -131,7 +167,8 @@ const ListComponent = () => {
 	const [applied, setApplied] = useState<TProfitShopFilterValues>({})
 
 	const { data, isLoading, isFetching } = useProfitShopList()
-	const { data: partnerData } = useProfitPartnerList()
+	const { data: partnerData, isLoading: isPartnerLoading } =
+		useProfitPartnerList()
 	const deleter = useProfitShopDelete()
 
 	// 後端 V2Api 統一裹 {code, data} → axios body 在 result.data 裡 → 真正資料在 result.data.data
@@ -140,11 +177,16 @@ const ListComponent = () => {
 		return Array.isArray(list) ? list : []
 	}, [data])
 
-	/** partner_term_id → 夥伴名稱（列表欄位與 FilterTags 共用） */
-	const partnerNameMap = useMemo(() => {
+	/**
+	 * partner_term_id → 夥伴物件（列表欄位、FilterTags、「查看報表」按鈕共用）
+	 *
+	 * 存整個物件而非只存 name：「查看報表」需要 `report_url`（後端唯讀衍生欄位），
+	 * 前端不可自行以 report slug 拼接網址（見 `TProfitPartner.report_url` 的註解）。
+	 */
+	const partnerMap = useMemo(() => {
 		const list = partnerData?.data?.data
 		const partners: TProfitPartner[] = Array.isArray(list) ? list : []
-		return new Map(partners.map((p) => [p.id, p.name]))
+		return new Map(partners.map((p) => [p.id, p]))
 	}, [partnerData])
 
 	/**
@@ -181,14 +223,14 @@ const ListComponent = () => {
 		() =>
 			(value: string, key?: keyof TProfitShopFilterValues): string => {
 				if (key === 'partner_term_id') {
-					return partnerNameMap.get(Number(value)) ?? `#${value}`
+					return partnerMap.get(Number(value))?.name ?? `#${value}`
 				}
 				if (key === 'status') {
 					return STATUS_TAG[value as TProfitShopStatus]?.label ?? value
 				}
 				return value
 			},
-		[partnerNameMap]
+		[partnerMap]
 	)
 
 	/**
@@ -347,6 +389,58 @@ const ListComponent = () => {
 		)
 	}
 
+	/**
+	 * 操作欄的「查看報表」：開啟該賣場所屬**分潤夥伴**的報表頁
+	 *
+	 * 網址一律取自後端衍生的 `partner.report_url`，前端零拼接 —— 前綴的真相來源只有
+	 * PHP 端（`RewriteRules::get_report_slug()`，即註冊 rewrite rule 所用的同一個來源），
+	 * 在前端複製一份遲早分家（詳見 `TProfitPartner.report_url`）。
+	 *
+	 * ⚠️ 報表頁是 **partner 自助入口**（cookie 認證），站長點進去會看到夥伴的登入畫面，
+	 * 而不是報表內容 —— 這是預期行為，此按鈕的用途是「確認網址 / 把連結交給夥伴」。
+	 * 站長端若要看分潤數據，目前沒有對應頁面（partner-reports/* 三個 endpoint
+	 * 全部鎖 partner_token，admin nonce 走不了，見 `profit-shop.rule.md` §6 雙軌制）。
+	 *
+	 * 停用 / 可用拆兩條 render 分支的理由與「開啟」完全相同（antd v5 的兩個陷阱），
+	 * 見下方 `renderPrimaryAction` 的註解。
+	 */
+	const renderReportAction = (record: TProfitShop) => {
+		const partner = partnerMap.get(record.partner_term_id)
+		const blockedReason = resolveViewReportBlockedReason(
+			partner,
+			isPartnerLoading
+		)
+
+		return blockedReason ? (
+			<Tooltip title={blockedReason}>
+				<span className="inline-block cursor-not-allowed">
+					<Button
+						type="link"
+						size="small"
+						icon={<BarChartOutlined />}
+						className="pointer-events-none"
+						disabled
+					>
+						報表
+					</Button>
+				</span>
+			</Tooltip>
+		) : (
+			<Tooltip title={`開啟「${partner?.name}」的分潤報表頁（夥伴需自行登入）`}>
+				<Button
+					type="link"
+					size="small"
+					icon={<BarChartOutlined />}
+					href={partner?.report_url ?? undefined}
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					報表
+				</Button>
+			</Tooltip>
+		)
+	}
+
 	const columns: TableProps<TProfitShop>['columns'] = [
 		{
 			title: '名稱',
@@ -385,7 +479,7 @@ const ListComponent = () => {
 			width: 160,
 			ellipsis: true,
 			render: (partnerTermId: number) => {
-				const name = partnerNameMap.get(partnerTermId)
+				const name = partnerMap.get(partnerTermId)?.name
 				return name ? (
 					<Tooltip title={`#${partnerTermId}`}>
 						<Text>{name}</Text>
@@ -425,12 +519,13 @@ const ListComponent = () => {
 		{
 			title: '操作',
 			key: 'actions',
-			width: 220,
+			width: 300,
 			fixed: 'right',
 			render: (_: unknown, record: TProfitShop) => {
 				return (
 					<Space size="small">
 						{renderPrimaryAction(record)}
+						{renderReportAction(record)}
 						<Button
 							type="link"
 							size="small"

@@ -34,13 +34,8 @@ applyTo: "**/*.{php,ts,tsx}"
 │  │  │  │           │  │  HIGH-RISK│  │  HIGH-RISK   │  │  │ │
 │  │  │  │           │  │  PW Reset)│  │  Import)     │  │  │ │
 │  │  │  └───────────┘  └───────────┘  └──────────────┘  │  │ │
-│  │  │  ┌──────────────┐                                 │  │ │
-│  │  │  │ ProfitSetti- │                                 │  │ │
-│  │  │  │     ngs      │                                 │  │ │
-│  │  │  │ (Refine +    │                                 │  │ │
-│  │  │  │  HIGH-RISK   │                                 │  │ │
-│  │  │  │  Reset)      │                                 │  │ │
-│  │  │  └──────────────┘                                 │  │ │
+│  │  │  （ProfitSettings 全域設定頁已整組移除——4 個欄位  │  │ │
+│  │  │    不是零消費點，就是「站長改了只會弄壞東西」）    │  │ │
 │  │  └───────────────────────────────────────────────────┘  │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │                           │                                   │
@@ -281,28 +276,29 @@ inc/classes/Domains/ProfitShop/
 │
 ├── Application/                     # 編排業務流程，依賴 Domain + Port interface
 │   ├── DTO/                         # 13 個 immutable readonly DTO（PartnerInput / ProfitShopInput / KpiReport / SlugValidationOutput...）
-│   ├── Service/                     # 13 個 Service：5 Port interface + 4 Service 實裝 + 4 Auth/Rate-limit/Crypto
+│   ├── Service/                     # 11 個 Service：4 Port interface + 3 Service 實裝 + 4 Auth/Rate-limit/Crypto
 │   │                                #   - Port: ProductLookup / SlugConflictLookup / TransientStore / Clock /
-│   │                                #     EmailNotifier / SettlementSummaryProvider / SettingsRepository / ItemValidator /
+│   │                                #     EmailNotifier / SettlementSummaryProvider / ItemValidator /
 │   │                                #     SaltProviderInterface（Phase 3-D，wp_salt 注入）
-│   │                                #   - 實裝: ItemValidator / SlugConflictDetector / SettingsRepository /
+│   │                                #   - 實裝: ItemValidator / SlugConflictDetector /
 │   │                                #     ProductSnapshotProvider / PartnerAuthService / PartnerTokenStore（Phase 3-D 升級：
 │   │                                #     4-interface DI + hash_hmac + password_changed_at 撤銷）/
 │   │                                #     LoginRateLimiter（Phase 3-D 升級：per-slug + per-IP 雙維度，IP hash_hmac）/
 │   │                                #     CartPriceSignatureService（Phase 3-D 新增：HMAC-SHA256 cart 簽章）
-│   └── UseCase/                     # 27 個 UseCase
+│   └── UseCase/                     # 24 個 UseCase
 │       ├── Shop/                    #   9 個（CRUD + publish/unpublish/duplicate + ValidateSlugUseCase[Phase 3-E]）
 │       ├── Partner/                 #   5 admin CRUD + 5 Auth（含 ChangePasswordUseCase[Phase 6-A1]）+ 3 Report
-│       ├── Migration/               #   2 個（list legacy / import）
-│       └── Settings/                #   3 個（get / update / reset）
+│       └── Migration/               #   2 個（list legacy / import）
+│                                    #   （Settings/ 3 個已整組移除，見 profit-shop.rule.md §7）
 │
 ├── Infrastructure/                  # 唯一可呼叫 WP / WC API 的層
 │   ├── Persistence/                 # CptProfitShopRepository / PartnerTermRepository（Phase 3-D：+get_password_changed_at）/
 │   │                                #   OrderItemSettlementRepository / LegacyOnePageShopRepository /
 │   │                                #   WpSettlementSummaryProvider（Phase 3-D：placeholder → 545 行真實 SQL，
 │   │                                #     含 HPOS 雙路徑 / bcadd 精度 / IDOR partner_term_id 鎖死）
-│   ├── WordPress/                   # CptRegistrar / TaxonomyRegistrar / RewriteRules /
-│   │                                #   RewriteRulesFlusher / WpProductLookup / WpSlugConflictLookup /
+│   ├── WordPress/                   # CptRegistrar / TaxonomyRegistrar / RewriteRules（含 REWRITE_VERSION
+│   │                                #     版本比對式 flush，掛 init 自動觸發）/
+│   │                                #   WpProductLookup / WpSlugConflictLookup /
 │   │                                #   WpTransientStore / SystemClock / WpAdminEmailNotifier /
 │   │                                #   WpSaltProvider（Phase 3-D，context 白名單防 silent salt rotation）
 │   ├── WooCommerce/                 # AddToCartHook（Phase 4-C2，priority 5，注入 profit_shop_id，

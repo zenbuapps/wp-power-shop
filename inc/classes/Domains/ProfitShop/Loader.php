@@ -32,7 +32,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
  * 對應規格：specs/2026-05-06-profit-shop-design.md §1.4、§1.5
  *
  * Phase 2：註冊 CPT / Taxonomy / Rewrite Rules。
- * Phase 3-B：加上 V2Api（profit-shops / profit-partners / profit-migration / profit-settings）。
+ * Phase 3-B：加上 V2Api（profit-shops / profit-partners / profit-migration）。
  * Phase 3-D：加上 CartPriceOverrideHook（前台 cart 價格防竄改）。
  * Phase 4-B1：加上 PartnerPortalRenderer（前台 /profit-report/{slug}/ HTML 骨架輸出）。
  * Phase 4-C1：加上 ProfitShopRenderer（前台 /profit-shop/{slug}/ 賣場頁面，走 theme 整合）。

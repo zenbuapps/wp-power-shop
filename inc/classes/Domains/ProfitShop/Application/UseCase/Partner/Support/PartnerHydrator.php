@@ -34,7 +34,8 @@ final class PartnerHydrator {
 			contact_email: $partner->contact_email,
 			created_at: $created_at,
 			image_id: $partner->image_id,
-			image_url: $partner->image_url
+			image_url: $partner->image_url,
+			report_url: $partner->report_url
 		);
 	}
 }

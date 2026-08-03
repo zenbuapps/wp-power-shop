@@ -48,7 +48,7 @@ pnpm release:major
 7. **Always** register new REST API classes in `Domains\Loader`
 8. **Always** use `WP::sanitize_text_field_deep()` on all REST request params
 9. **Don't** remove the Enqueue Guard (`General::in_url(['page=power-shop'])`)
-10. **Don't** 在 ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings 用 `useTable` / `useForm`（後端 `{code, data}` 與 antd-toolkit dataProvider shape 不相容）—— 用 `useCustom` / `useCustomMutation` 並明確指定 `dataProviderName: 'power-shop'`
+10. **Don't** 在 ProfitShop / ProfitPartner / ProfitMigration 用 `useTable` / `useForm`（後端 `{code, data}` 與 antd-toolkit dataProvider shape 不相容）—— 用 `useCustom` / `useCustomMutation` 並明確指定 `dataProviderName: 'power-shop'`
 11. **Partner self-service portal** 是**獨立 SPA bundle**（mount 點 `#profit_partner_portal`，URL `/profit-report/{slug}/`），與 admin SPA 完全隔離。Auth 走 cookie + sessionStorage metadata（永不存 token）；不用 Refine / dataProvider，直接 axios + `useCustom`/`useCustomMutation`；不打包 admin（grep `App1` / `Refine` 0 命中為驗收）。
 12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**，商品 grid 一律由 PHP 印出（SEO 內容必須留在 HTML）。Phase 10 起是**混合式**：PHP 負責內容，另有第三個 React bundle（`js/src/profit-shop-front/`，antd）掛互動層——Phase 12 起這一層**只剩「商品 Modal」**（購物車表格已移除，購物車與結帳一律走 WooCommerce 自己的頁面）。**Don't** 把商品名稱、價格搬離 PHP 輸出。AddToCart 走 **WooCommerce 原生表單送出**（帶 `profit_shop_id`），由 WC `woocommerce_add_cart_item_data` filter 注入分潤標記，再交給 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價；加購結果由 template 自印的 `wc_print_notices()` 呈現（賣場頁不是 WC template，佈景主題的 `woocommerce_output_all_notices` 不會被觸發）。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。**Shortcode 呈現模式**另有 `[power_shop_profit_shop id="{post_id}"]`（`ProfitShopShortcode`，與上述 template 共用同一份，靠 `$is_shortcode_context` 旗標把外層 `<main>` 換成 `<div>`）；⚠️ 但 shortcode 模式的賣場**公開網址仍然開得起來**（`ProfitShopRenderer` 不檢查 `mode`），`BasicTab.tsx` 的據實告知警語不可移除。詳見 `profit-shop.rule.md` §7 / §12.8、`react.rule.md` §6.7 與 `specs/tech-debt.md` TD-13。
 13. **Always** 讓 admin 列表頁遵循 `.claude/rules/admin-list-ui.rule.md` 的「篩選卡片 + 實體列表 & 新增按鈕」標準版型（基準範本 `#/products`）：兩張 `antd-toolkit` 的 `Card`、新增按鈕在列表卡片內 Table 之上、Table 鋪 `defaultTableProps` + `getDefaultPaginationProps({label})`。**Don't** 用 Refine `<List>` 當列表頁外框、**Don't** 用 `antd` 的 `Card`。
@@ -109,9 +109,9 @@ pnpm release:major
 | 層 | 內容 | 路徑 |
 |----|------|------|
 | Application UseCase | 18 個 UseCase（8 Shop + 5 Partner + 2 Migration + 3 Settings） | `inc/classes/Domains/ProfitShop/Application/UseCase/` |
-| Application Port | 7 個 interface（ProductLookup / SlugConflictLookup / LegacyShopRepository / RewriteRulesFlusher / SettingsRepository / ItemValidator / SlugConflictDetector） | `inc/classes/Domains/ProfitShop/Application/Service/` |
-| Application Service | 4 個 Service 實裝（ItemValidator / SlugConflictDetector / SettingsRepository / ProductSnapshotProvider） | `inc/classes/Domains/ProfitShop/Application/Service/` |
-| Infrastructure Adapter | WpProductLookup / WpSlugConflictLookup（spec §6.11 五類衝突 SQL）/ RewriteRulesFlusher / LegacyOnePageShopRepository | `inc/classes/Domains/ProfitShop/Infrastructure/(Persistence\|WordPress)/` |
+| Application Port | 5 個 interface（ProductLookup / SlugConflictLookup / LegacyShopRepository / ItemValidator / SlugConflictDetector）⚠️ 原有的 RewriteRulesFlusher / SettingsRepository 已隨全域設定頁移除 | `inc/classes/Domains/ProfitShop/Application/Service/` |
+| Application Service | 3 個 Service 實裝（ItemValidator / SlugConflictDetector / ProductSnapshotProvider） | `inc/classes/Domains/ProfitShop/Application/Service/` |
+| Infrastructure Adapter | WpProductLookup / WpSlugConflictLookup（spec §6.11 五類衝突 SQL）/ LegacyOnePageShopRepository | `inc/classes/Domains/ProfitShop/Infrastructure/(Persistence\|WordPress)/` |
 | Presentation | ExceptionMapper（spec §7 13 種 Domain Exception → HTTP）+ V2Api（17 個 admin endpoint，`namespace=power-shop`，partner POST/PUT/DELETE 升 `manage_options`） | `inc/classes/Domains/ProfitShop/Infrastructure/Rest/` |
 | Domain 補洞 | InvalidShopMode Exception | `inc/classes/Domains/ProfitShop/Domain/Exception/InvalidShopMode.php` |
 | 測試 | 99 個新測試（69 UseCase Unit + 10 Service Unit + 30 IT） | `tests/Unit/Application/` + `tests/Integration/Infrastructure/Rest/` |
@@ -159,14 +159,14 @@ pnpm release:major
 |-------|--------|------|------|
 | 4-A1 | `1c1e3b9` | ProfitShop CRUD（List / Edit / Create）+ SlugInput 即時驗證（debounce + useCustom enabled 切換）+ profitShopExceptionMapper（12 種 code → 友善繁中訊息）+ Q1 落坑紀錄（後端 `{code, data}` 不相容 antd-toolkit dataProvider，改 useCustom / useCustomMutation） | 12 檔（+1175 行） |
 | 4-A2 | `883edc9` | Partner CRUD（List / Edit / Create + PartnerForm + PartnerSelector）+ RegeneratePasswordButton ⚠ HIGH-RISK（明文僅 useState、5 min auto-clear、Modal closable=false / maskClosable=false / keyboard=false、navigator.clipboard 無 fallback）+ ItemsEditor（OverrideItem 列表編輯，dedupe）+ ShopActionsButtons（publish / unpublish / duplicate）+ ProfitShopForm 升級（partner_term_id → PartnerSelector、items → ItemsEditor）；reviewer + security 雙審 PASS | 18 檔（+1490 行） |
-| 4-A3 | `6610548` | ProfitMigration（List + ImportModal ⚠ HIGH-RISK 4 道閘門）+ ProfitSettings（單頁 + ResetButton ⚠ HIGH-RISK 自包 mutation）+ OneShop 改造為雙入口（新版 / 舊版 wp-admin）+ 三輪 reviewer 累積 9 條順手清單清完（含 LOW-1 統一補 `dataProviderName: 'power-shop'` 30+ 處、LOW-2 Input.Password 預設 mask + 5 min timer 補 setPwdVisible(false) bugfix）；reviewer + security 雙審 PASS | 18 檔（+945 行） |
+| 4-A3 | `6610548` | ProfitMigration（List + ImportModal ⚠ HIGH-RISK 4 道閘門）+ ProfitSettings（單頁 + ResetButton ⚠ HIGH-RISK 自包 mutation；**已於後續整組移除**）+ OneShop 改造為雙入口（新版 / 舊版 wp-admin）+ 三輪 reviewer 累積 9 條順手清單清完（含 LOW-1 統一補 `dataProviderName: 'power-shop'` 30+ 處、LOW-2 Input.Password 預設 mask + 5 min timer 補 setPwdVisible(false) bugfix）；reviewer + security 雙審 PASS | 18 檔（+945 行） |
 
 **Phase 4-A 完工要點**：
-- 4 個 resource：ProfitShop / ProfitPartner / ProfitMigration / ProfitSettings（全部掛在 marketing parent）
+- 3 個 resource：ProfitShop / ProfitPartner / ProfitMigration（全部掛在 marketing parent）。⚠️ 原有的第 4 個 `ProfitSettings` 全域設定頁**已整組移除**（含 3 個 REST endpoint、SettingsDto、3 個 UseCase、SettingsRepository、RewriteRulesFlusher）——4 個欄位不是零消費點（`default_rate` / `page_template`），就是「有消費點但站長改了只會弄壞東西」（`report_slug` 改了讓已發出的報表網址全失效；`rewrite_slug` 控制的 `/powershop/{post-name}/` 是條沒有任何程式碼連過去、打開只有 `post_content` 的半殘網址）。rewrite flush 改為 `RewriteRules::REWRITE_VERSION` 版本比對 + `init` 自動觸發，順帶修掉「全專案無 `register_activation_hook`、新站不 flush 就 404」的既有缺陷。詳見 `profit-shop.rule.md` §7
 - 共用工具：`utils/profitShopExceptionMapper.ts`（12 種 ErrorCode → 友善繁中訊息）
-- HIGH-RISK 元件 3 個：RegeneratePasswordButton（明文密碼）/ ImportModal（不可逆 import）/ ResetButton（不可逆 reset）
+- HIGH-RISK 元件 2 個：RegeneratePasswordButton（明文密碼）/ ImportModal（不可逆 import）。（原有的 ResetButton 已隨設定頁移除）
 - 防 refetch 覆寫 pattern：`filledIdRef` + `queryOptions.refetchOnWindowFocus: false`（4-A1 起沿用）
-- ProfitSettings：`filledRef` + `lastFilledSettingsRef` 雙保險（首次填表 + reset 後 server 變動自動重填）
+- （ProfitSettings 的 `filledRef` + `lastFilledSettingsRef` 雙保險 pattern 隨該頁移除，但「單例資源、無 id 可比對」時仍應用 content-diff，見 `react.rule.md`）
 - npx tsc --noEmit baseline 不變，pnpm lint 全綠，既有 SPA（Product / Order / Users）零 regression
 
 ### Phase 4-B（Partner self-service portal，獨立 SPA）已完工（commits `bc3ea5c` / `7e40969` / `23e76e9`）

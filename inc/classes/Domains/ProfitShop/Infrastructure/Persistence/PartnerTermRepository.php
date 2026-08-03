@@ -11,6 +11,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Exception\PersistenceFailure;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\PartnerRepositoryInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\PartnerSnapshot;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PartnerSlug;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\RewriteRules;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
 
 /**
@@ -23,6 +24,10 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
  * - _partner_contact_email
  * - _partner_password_changed_at（unix timestamp）
  * - _partner_image_id（夥伴圖片 attachment ID；只存 ID，URL 於讀取時即時解析）
+ *
+ * `PartnerSnapshot::$report_url` 沒有對應的 termmeta——它由 slug 加上站台設定的
+ * report slug 於讀取時即時組出（見 `resolve_report_url()`），與 `image_url` 同屬
+ * 唯讀衍生欄位，`save()` 不會寫入也不會讀取它。
  */
 final class PartnerTermRepository implements PartnerRepositoryInterface {
 
@@ -305,8 +310,31 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 			slug: $slug,
 			contact_email: $contact_email,
 			image_id: $image_id,
-			image_url: $image_url
+			image_url: $image_url,
+			report_url: $this->resolve_report_url( $slug )
 		);
+	}
+
+	/**
+	 * 組出夥伴報表頁網址（`/{report_slug}/{partner-slug}/`）
+	 *
+	 * 前綴一律取自 `RewriteRules::get_report_slug()`——那是 rewrite rule 實際註冊時用的
+	 * 同一個來源。**不要** hardcode `'profit-report'`：雖然它目前是固定常數
+	 * （`DEFAULT_REPORT_SLUG`，站長已無法修改），但一旦有人改動那個常數，寫死在這裡的
+	 * 網址會安靜地連到 404（頁面正常載入、只是找不到報表），沒有任何錯誤訊息可循。
+	 *
+	 * 回傳型別保留 nullable 是為了與 `image_url` 對齊（兩者都是唯讀衍生欄位，
+	 * caller 一律要處理 null）；實務上 slug 已由 `PartnerSlug` VO 保證非空，
+	 * 因此目前不會回 null。
+	 *
+	 * @param PartnerSlug $slug 已驗證的 Partner slug
+	 *
+	 * @return string|null 報表頁完整網址
+	 */
+	private function resolve_report_url( PartnerSlug $slug ): ?string {
+		$report_slug = RewriteRules::get_report_slug();
+
+		return \home_url( '/' . $report_slug . '/' . $slug->value() . '/' );
 	}
 
 	/**

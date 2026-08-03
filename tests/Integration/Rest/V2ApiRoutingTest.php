@@ -100,21 +100,28 @@ final class V2ApiRoutingTest extends TestCase {
 	}
 
 	/**
-	 * Spec §4.8：profit-settings resource
+	 * 回歸鎖：profit-settings 三個 endpoint 已移除，不該再註冊
+	 *
+	 * 全域設定頁整組刪除——它剩下的兩個欄位都是「能改，但不該能改」：
+	 * `report_slug` 一改就讓所有已發給 partner 的報表網址失效；
+	 * `rewrite_slug` 控制的 `/powershop/{post-name}/` 是條沒有任何程式碼連過去、
+	 * 打開只有佈景主題 single + `post_content`（沒有商品 grid）的半殘網址。
+	 *
+	 * 兩者現在都是固定常數（`CptRegistrar::DEFAULT_REWRITE_SLUG` /
+	 * `RewriteRules::DEFAULT_REPORT_SLUG`）。若日後有人重新加回這些 endpoint，
+	 * 代表又把 rewrite 前綴變成可變值——那會同時破壞
+	 * `RewriteRules::REWRITE_VERSION` 的 flush 假設（版本比對假設規則是常數）。
 	 *
 	 * @test
-	 * @group happy
+	 * @group edge
 	 * @group routing
 	 */
-	public function test_profit_settings_routes_are_registered(): void {
+	public function test_profit_settings_routes_are_removed(): void {
 		$server = \rest_get_server();
 		$routes = $server->get_routes();
 
-		$this->assertArrayHasKey(
-			'/power-shop/profit-settings',
-			$routes,
-			'spec §4.8：profit-settings collection route 應註冊'
-		);
+		$this->assertArrayNotHasKey( '/power-shop/profit-settings', $routes );
+		$this->assertArrayNotHasKey( '/power-shop/profit-settings/reset', $routes );
 	}
 
 	/**

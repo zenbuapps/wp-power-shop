@@ -2,7 +2,6 @@ import {
 	RadarChartOutlined,
 	LineChartOutlined,
 	ProductOutlined,
-	SettingOutlined,
 	UserOutlined,
 	MailOutlined,
 	TagsOutlined,
@@ -155,15 +154,6 @@ export const resources: ResourceProps[] = [
 		meta: {
 			label: '遷入舊版',
 			icon: <ImportOutlined />,
-		},
-	},
-	{
-		parentName: 'marketing',
-		name: 'profit-settings',
-		list: '/profit-settings',
-		meta: {
-			label: 'Profit 設定',
-			icon: <SettingOutlined />,
 		},
 	},
 	{

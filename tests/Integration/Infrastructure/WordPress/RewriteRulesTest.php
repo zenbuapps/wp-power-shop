@@ -23,23 +23,32 @@ use Tests\Integration\TestCase;
 final class RewriteRulesTest extends TestCase {
 
 	/**
+	 * 舊版全域設定的 wp_options key
+	 *
+	 * ⚠️ 刻意寫成字面值而非引用常數——`RewriteRules::OPTIONS_KEY` 已隨全域設定頁移除，
+	 * production 端**不該**再有這個常數（有的話代表 rewrite 前綴又變回可設定值了，
+	 * 那會讓 `REWRITE_VERSION` 版本比對式 flush 的前提失效）。
+	 */
+	private const LEGACY_SETTINGS_OPTION = 'power_shop_profit_settings';
+
+	/**
 	 * 每個測試前重新觸發 rewrite rule 註冊並 flush，確保 rules 已載入
 	 */
 	public function set_up(): void {
 		parent::set_up();
 
-		// 確保預設 slug 設定一致（避免前一個測試殘留 settings）
-		\delete_option( RewriteRules::OPTIONS_KEY );
+		// 清掉可能殘留的舊設定（現在不影響取值，但保持測試環境乾淨）
+		\delete_option( self::LEGACY_SETTINGS_OPTION );
 
 		RewriteRules::register();
 		\flush_rewrite_rules( false );
 	}
 
 	/**
-	 * 測試後清除自訂 settings option
+	 * 測試後清除殘留 settings option
 	 */
 	public function tear_down(): void {
-		\delete_option( RewriteRules::OPTIONS_KEY );
+		\delete_option( self::LEGACY_SETTINGS_OPTION );
 		parent::tear_down();
 	}
 

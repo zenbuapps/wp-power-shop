@@ -1,11 +1,19 @@
 <?php
 /**
- * UpdateSettings 改 slug 後 RewriteRules::flush_rules_if_needed 被呼叫 IT
+ * RewriteRules 版本比對式 flush IT
  *
- * 對應規格：specs/2026-05-06-profit-shop-design.md §4.8、§6.5
+ * 對應規格：specs/2026-05-06-profit-shop-design.md §3.8
+ *
+ * ⚠️ 本檔原本測的是「PUT /profit-settings 改 slug → 觸發 flush」。
+ * `#/profit-settings` 設定頁已整組移除（兩個欄位都是「有消費點，但不該讓站長改」），
+ * flush 機制隨之從「設定變更時觸發」改為「rewrite 規則版本變更時，於 init 自動觸發」。
+ *
+ * 這個改動同時修掉一個既有缺陷：全專案沒有 `register_activation_hook`，
+ * 舊版唯一的 `flush_rewrite_rules()` 呼叫點藏在設定頁儲存流程裡——新站台安裝後
+ * 若站長從未進設定頁按儲存，`/profit-shop/{slug}/` 與 `/profit-report/{slug}/`
+ * 會直接 404 且無任何提示。
  *
  * @group profit_shop
- * @group rest
  * @group application
  * @group settings
  */
@@ -23,76 +31,107 @@ use Tests\Integration\TestCase;
  */
 final class FlushRewriteTest extends TestCase {
 
-	public function set_up(): void {
-		parent::set_up();
-		$admin_id = self::factory()->user->create( [ 'role' => 'administrator' ] );
-		\wp_set_current_user( $admin_id );
+	/**
+	 * 取得 RewriteRules 的 private 常數值（測試需要知道當前版本號與 option key）
+	 *
+	 * 刻意用 reflection 而非把常數改成 public：那兩個常數是實作細節，
+	 * 對外公開只會讓別的程式碼開始依賴它們。
+	 *
+	 * @param string $name 常數名稱
+	 *
+	 * @return string
+	 */
+	private function constant( string $name ): string {
+		$reflection = new \ReflectionClass( RewriteRules::class );
+		return (string) $reflection->getConstant( $name );
 	}
 
 	/**
-	 * PUT /profit-settings 改 report slug → applied_slug option 被更新
-	 * （flush_rules_if_needed 內部會在 slug 改時更新這個 option）
+	 * 版本 option 不存在（= 全新安裝）→ flush 並寫入當前版本
+	 *
+	 * 這是本機制存在的主要理由：新站台不需要任何 UI 操作，
+	 * 賣場前台與夥伴報表網址就能直接生效。
 	 *
 	 * @test
 	 * @group happy
 	 */
-	public function test_update_settings_with_new_slug_triggers_flush(): void {
-		// 紀錄舊 applied slug
-		\update_option( 'power_shop_profit_applied_report_slug', 'profit-report', false );
+	public function test_flushes_and_records_version_on_fresh_install(): void {
+		$option_key = $this->constant( 'APPLIED_VERSION_OPTION' );
+		\delete_option( $option_key );
 
-		// 注意：rewrite_slug 不能用 'shop'（會被 SlugConflictDetector 擋下回 409，
-		// 因為 'shop' 是 WooCommerce 商店頁的保留 slug）
-		$request = new \WP_REST_Request( 'PUT', '/power-shop/profit-settings' );
-		$request->set_header( 'Content-Type', 'application/json' );
-		$request->set_body(
-			\wp_json_encode(
-				[
-					'rewrite_slug' => 'profit-test-shop',
-					'report_slug'  => 'kpi-report',
-				]
-			)
-		);
+		RewriteRules::flush_rules_if_needed();
 
-		$response = \rest_do_request( $request );
-
-		$this->assertSame( 200, $response->get_status() );
-
-		// 驗證 RewriteRules 內部用來追蹤 applied slug 的 option 已被更新
-		$applied = (string) \get_option( 'power_shop_profit_applied_report_slug', '' );
 		$this->assertSame(
-			'kpi-report',
-			$applied,
-			'spec §4.8：UpdateSettings 改 report slug 後應觸發 flush_rules_if_needed，使 applied slug option 同步'
+			$this->constant( 'REWRITE_VERSION' ),
+			(string) \get_option( $option_key, '' ),
+			'全新安裝應 flush 一次並記錄當前 rewrite 版本'
 		);
 	}
 
 	/**
-	 * PUT /profit-settings 把 slug 改回原本值 → 不需 flush（applied slug 不變）
+	 * 版本相同 → 不覆寫 option（代表走了 early return，沒有呼叫昂貴的 flush）
 	 *
 	 * @test
 	 * @group edge
 	 */
-	public function test_update_settings_with_same_slug_does_not_overwrite_applied(): void {
-		\update_option( 'power_shop_profit_applied_report_slug', 'profit-report-same', false );
-		\update_option( CptRegistrar::APPLIED_SLUG_OPTION, 'profit-shop-same', false );
+	public function test_does_not_reflush_when_version_matches(): void {
+		$option_key = $this->constant( 'APPLIED_VERSION_OPTION' );
+		\update_option( $option_key, $this->constant( 'REWRITE_VERSION' ), true );
 
-		// 用無衝突的 slug（避免 SlugConflictDetector 攔下回 409）
-		$request = new \WP_REST_Request( 'PUT', '/power-shop/profit-settings' );
-		$request->set_header( 'Content-Type', 'application/json' );
-		$request->set_body(
-			\wp_json_encode(
-				[
-					'rewrite_slug' => 'profit-shop-same',
-					'report_slug'  => 'profit-report-same',
-				]
-			)
+		// rewrite_rules 清空；若 flush 真的被呼叫，它會被重新填回。
+		\delete_option( 'rewrite_rules' );
+
+		RewriteRules::flush_rules_if_needed();
+
+		$this->assertFalse(
+			\get_option( 'rewrite_rules' ),
+			'版本相同時應 early return，不呼叫 flush_rewrite_rules()'
+		);
+	}
+
+	/**
+	 * 版本不同（= 開發者 bump 過 REWRITE_VERSION）→ 重新 flush 並更新 option
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_reflushes_when_version_changed(): void {
+		$option_key = $this->constant( 'APPLIED_VERSION_OPTION' );
+		\update_option( $option_key, 'stale-version', true );
+
+		RewriteRules::flush_rules_if_needed();
+
+		$this->assertSame(
+			$this->constant( 'REWRITE_VERSION' ),
+			(string) \get_option( $option_key, '' ),
+			'版本不同時應重新 flush 並記錄新版本'
+		);
+	}
+
+	/**
+	 * 回歸鎖：兩個 rewrite 前綴與 CPT slug 都是固定常數，不再讀 wp_options
+	 *
+	 * 舊版這三個值有兩個來自 `power_shop_profit_settings`。設定頁移除後，
+	 * 就算 wp_options 內還有殘留設定，也必須完全不影響取值——否則
+	 * `REWRITE_VERSION` 版本比對的前提（規則是常數）就不成立，
+	 * 會出現「站台 A 和站台 B 同版本號卻有不同 rewrite 規則」的狀況。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_slugs_ignore_stale_settings_option(): void {
+		\update_option(
+			'power_shop_profit_settings',
+			[
+				'rewrite_slug' => 'legacy-custom-shop',
+				'report_slug'  => 'legacy-custom-report',
+			],
+			false
 		);
 
-		$response = \rest_do_request( $request );
-
-		$this->assertSame( 200, $response->get_status() );
-
-		// 確認 applied slug 仍維持原樣（沒有被 noop flush 路徑誤改）
-		$this->assertSame( 'profit-report-same', (string) \get_option( 'power_shop_profit_applied_report_slug', '' ) );
+		$this->assertSame( 'powershop', CptRegistrar::get_rewrite_slug() );
+		$this->assertSame( 'profit-report', RewriteRules::get_report_slug() );
+		$this->assertSame( 'profit-report', RewriteRules::DEFAULT_REPORT_SLUG );
+		$this->assertSame( 'profit-shop', RewriteRules::SHOP_REWRITE_PREFIX );
 	}
 }

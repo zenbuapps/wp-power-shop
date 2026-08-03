@@ -67,7 +67,7 @@ power-shop React SPA
   /profit-shops/edit/:id         多 Tab：基本/商品/設定/版型/短代碼/預覽
   /profit-partners               KOL Term 管理
   /profit-settlements            結算 ledger
-  /profit-settings               全站設定（rewrite slug 等）
+  （/profit-settings 全站設定頁已整組移除——見 §4.8）
         │
         │ dataProvider: 'power-shop'
         ▼
@@ -232,11 +232,19 @@ variation.override.{price}
 
 ```json
 power_shop_profit_settings = {
-  "rewrite_slug": "powershop",
-  "report_slug": "profit-report",
-  "default_partner_session_ttl": 3600
+  "rewrite_slug": "powershop"
 }
 ```
+
+> ⚠️ 本節原始設計含 `report_slug` 與 `default_partner_session_ttl` 兩個 key，皆已移除：
+> - `report_slug`：改為 `RewriteRules::DEFAULT_REPORT_SLUG` 固定常數 `profit-report`。
+>   它有真實消費點，但**不該開放設定**——改動會讓所有已發給 partner 的報表網址一次失效，
+>   而站長換前綴得不到任何實質好處。與賣場前台的 `SHOP_REWRITE_PREFIX` 同性質。
+> - `default_partner_session_ttl`：實作為 `V2Api::PARTNER_TOKEN_TTL_SECONDS` 常數（3600），
+>   從未落到 wp_options（`grep -rn "default_partner_session_ttl" inc/ js/src/` 零命中）。
+>
+> wp_options 內若有這些殘留 key，`SettingsDto::from_array` 一律忽略，**不需要 migration**。
+> 詳見 `.claude/rules/profit-shop.rule.md`「`SettingsDto` 只放有消費點、而且**真的該讓站長改**的欄位」。
 
 ### 2.7 DBML 速覽（可加進 specs/entity/erm.dbml）
 
@@ -300,7 +308,8 @@ Table line_item_attribution {
 | `/profit-partners` | `ProfitPartner/List` | `power-shop` |
 | `/profit-partners/edit/:id` | `ProfitPartner/Edit` | `power-shop` |
 | `/profit-settlements` | `Settlement/List`（結算 ledger） | `power-shop` |
-| `/profit-settings` | `ProfitSettings`（rewrite slug 等） | `power-shop` |
+
+> `/profit-settings` 已整組移除，見 §4.8。
 
 > **UI 開發參考**：`/zenbu-powers:antd-toolkit` skill；Refine 整合參考 `~/.claude/skills/refine/references/`（antd-crud + data-hooks）。
 
@@ -545,15 +554,26 @@ function ($request) {
 5. **不刪除舊版**
 6. 回傳新建賣場 ID + diff 報告
 
-### 4.8 ProfitSettings
+### 4.8 ~~ProfitSettings~~（已整組移除）
 
-| Method | Endpoint | Capability |
-|--------|----------|------------|
-| GET | `profit-settings` | `manage_options` |
-| PUT | `profit-settings` | `manage_options` |
-| GET | `profit-settings/validate-slug?slug=xxx` | `manage_options` |
+原設計的三個 endpoint（GET / PUT `profit-settings`、POST `profit-settings/reset`）與整個
+設定頁**已全部刪除**。這頁存在期間放過四個欄位，四個都不該留：
 
-PUT 後自動 `flush_rewrite_rules()`。
+| 欄位 | 移除理由 |
+|------|----------|
+| `default_rate` / `page_template` | **零消費點**——從 Phase 3-B 起沒有任何一處讀取（新賣場不吃 `default_rate`，賣場前台固定 `require templates/profit-shop-front.php`）。「存得進去、讀得出來、但沒人用」的欄位比缺功能更糟，它讓站長以為自己已經設定好了 |
+| `report_slug` | **有消費點，但不該開放**——改動它會讓所有已經發給 partner 的報表網址一次失效，而站長換前綴得不到任何實質好處 |
+| `rewrite_slug` | **有消費點，但那條網址是半殘的**——全專案沒有任何程式碼組出或連到 powershop CPT 的 permalink，且 `ProfitShopRenderer` 只在 query var `profit_shop_slug` 有值時才渲染商品 grid，所以 `/powershop/{post-name}/` 打開只有佈景主題 single + `post_content` |
+
+現況：`CptRegistrar::DEFAULT_REWRITE_SLUG`（`powershop`）與 `RewriteRules::DEFAULT_REPORT_SLUG`
+（`profit-report`）皆為固定常數，與賣場前台的 `SHOP_REWRITE_PREFIX`（`profit-shop`）同性質。
+
+`flush_rewrite_rules()` 改為「規則版本比對、掛 `init` 自動觸發」（`RewriteRules::REWRITE_VERSION`），
+不再依賴任何 UI 操作——這順帶修掉原設計的一個缺陷：全專案沒有 `register_activation_hook`，
+舊版唯一的 flush 呼叫藏在設定頁儲存流程裡，新站台若沒進設定頁按過儲存，前台網址會直接 404。
+
+> `profit-settings/validate-slug` 這個原設計 endpoint 從未實作；實際上線的是
+> `GET /profit-shops/validate-slug`（Phase 3-E），用於**賣場** slug 的即時驗證，仍然存在。
 
 ### 4.9 OpenAPI 文件
 
@@ -687,7 +707,7 @@ GET partner-reports/* (帶 X-Partner-Token / cookie)
 | 端點分類 | 認證方式 | Capability |
 |---------|---------|------------|
 | `profit-shops/*`、`profit-partners/*`、`profit-settlements/*` | nonce + Powerhouse | `manage_woocommerce` |
-| `profit-migration/*`、`profit-settings` | nonce + Powerhouse | `manage_options`（更嚴格） |
+| `profit-migration/*` | nonce + Powerhouse | `manage_options`（更嚴格） |
 | `partner-auth/login` | 公開 | rate-limit |
 | `partner-reports/*` | Cookie/Header `X-Partner-Token` | token → partner_id 範圍鎖死 |
 | `profit-shops/{id}/add-to-cart` | 公開 + nonce | rate-limit |
@@ -720,7 +740,7 @@ $cart_item_data['_actual_price'] = $actual;
 - **儲存**：`set_transient('profit_token_' . hash('sha256', $token), $partner_id, 3600)`
   - **存 hash 不存原 token**（資料庫被脫不會洩 token）
 - **Cookie**：`httponly` ✅、`samesite=Lax` ✅、`secure` ✅（HTTPS）、`path=/wp-json/power-shop/v2/partner-`
-- **Token TTL**：1 小時（可在 `profit-settings` 調整）
+- **Token TTL**：1 小時（`V2Api::PARTNER_TOKEN_TTL_SECONDS` 常數；原設計寫「可在 `profit-settings` 調整」，該設定頁已移除，且 TTL 從未真的落到 wp_options）
 - **登出**：`delete_transient` + `setcookie('', expires=past)`
 
 #### 6.3.1 Partner 自助修密碼（Phase 6-A1）

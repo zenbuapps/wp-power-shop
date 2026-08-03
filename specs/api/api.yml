@@ -1130,38 +1130,31 @@ components:
             夥伴圖片 URL（`thumbnail` size），由 image_id 於讀取時即時解析的**唯讀衍生欄位**。
             attachment 已被刪除時為 null 但 image_id 仍保留（孤兒 ID 不自動清除），
             因此「image_id 非 null 但 image_url 為 null」是合法狀態，UI 需退回預設頭像。
+        report_url:
+          type: string
+          format: uri
+          nullable: true
+          description: |
+            夥伴報表頁完整網址（`/profit-report/{partner-slug}/`），
+            由 slug 加上 report 前綴（`RewriteRules::get_report_slug()`）
+            於讀取時即時組出的**唯讀衍生欄位**，不持久化、PartnerInput 也不接受它。
+            前綴為固定常數（站長無法修改），但前端仍**不可**自行拼接網址：
+            組成規則的真相來源只有 PHP 端，複製一份到前端會在日後前綴變動時
+            安靜地連到 404。一律使用本欄位。
       required:
         - id
         - name
         - slug
         - created_at
 
-    SettingsDto:
-      type: object
-      description: |
-        Profit Shop 全域設定 DTO（spec §6.5）。
-        rewrite_slug / report_slug 須符合 `^[a-z0-9][a-z0-9\-]{0,29}$`，
-        會經 sanitize_title 正規化；違反格式拋 400 validation_failed。
-      properties:
-        rewrite_slug:
-          type: string
-          minLength: 1
-          maxLength: 30
-          pattern: '^[a-z0-9][a-z0-9\-]{0,29}$'
-          default: powershop
-          description: >-
-            powershop CPT 的 rewrite slug。⚠️ 不是賣場前台網址 ——
-            前台走 RewriteRules::SHOP_REWRITE_PREFIX（固定 profit-shop）。
-        report_slug:
-          type: string
-          minLength: 1
-          maxLength: 30
-          pattern: '^[a-z0-9][a-z0-9\-]{0,29}$'
-          default: profit-report
-          description: Partner 報表頁面的 rewrite slug（/{report_slug}/{partner-slug}/）
-      required:
-        - rewrite_slug
-        - report_slug
+    # SettingsDto 已整組移除（連同 GET/PUT/POST /power-shop/profit-settings 三個 endpoint）。
+    # 它剩下的兩個欄位都是「有消費點，但不該讓站長改」：
+    #   - report_slug：一改就讓所有已發給 partner 的報表網址失效
+    #   - rewrite_slug：控制的 /{slug}/{post-name}/ 沒有任何程式碼連過去，
+    #     打開只有佈景主題 single + post_content（商品 grid 只在 ProfitShopRenderer
+    #     走 profit_shop_slug query var 時才渲染）
+    # 兩者現為 CptRegistrar::DEFAULT_REWRITE_SLUG / RewriteRules::DEFAULT_REPORT_SLUG 固定常數。
+    # wp_options 殘留的 power_shop_profit_settings 成孤兒、無人讀寫，不需要 migration。
 
     LegacyShopRef:
       type: object
@@ -3439,112 +3432,6 @@ paths:
                 $ref: '#/components/schemas/ProfitShopExceptionError'
         '422':
           description: legacy_unimportable（含 reason）
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProfitShopExceptionError'
-
-  # ────────────────────────────
-  # Profit Shop — Settings（§4.8）
-  # ────────────────────────────
-
-  /power-shop/profit-settings:
-    get:
-      tags:
-        - ProfitShop
-      summary: 取得全域設定（admin_only）
-      operationId: getProfitSettings
-      security:
-        - WPNonce: []
-      responses:
-        '200':
-          description: 設定
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: string
-                  data:
-                    $ref: '#/components/schemas/SettingsDto'
-        '403':
-          description: 無權限
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProfitShopExceptionError'
-
-    put:
-      tags:
-        - ProfitShop
-      summary: 更新全域設定（admin_only，含 SlugConflictDetector + flush_rules）
-      description: |
-        Permission: `manage_options`。
-        更新 rewrite_slug / report_slug 時會經 `SlugConflictDetector` 5 類衝突檢查，
-        通過後 `flush_rewrite_rules` 重建 permalink 結構。
-      operationId: updateProfitSettings
-      security:
-        - WPNonce: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SettingsDto'
-      responses:
-        '200':
-          description: 更新成功（回傳已 persist 的設定）
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: string
-                  data:
-                    $ref: '#/components/schemas/SettingsDto'
-        '400':
-          description: validation_failed（slug 格式錯誤）
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProfitShopExceptionError'
-        '403':
-          description: 無權限
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProfitShopExceptionError'
-        '409':
-          description: slug_conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProfitShopExceptionError'
-
-  /power-shop/profit-settings/reset:
-    post:
-      tags:
-        - ProfitShop
-      summary: 還原全域設定預設值（admin_only）
-      operationId: resetProfitSettings
-      security:
-        - WPNonce: []
-      responses:
-        '200':
-          description: 已還原為預設值
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: string
-                  data:
-                    $ref: '#/components/schemas/SettingsDto'
-        '403':
-          description: 無權限
           content:
             application/json:
               schema:

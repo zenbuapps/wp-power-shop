@@ -64,12 +64,23 @@
 兩者各自有獨立的停用判斷函式。
 
 ⚠️ **各動作的停用條件要分開判斷、不要為了 DRY 併成一個函式**——它們看起來高度相似，
-但差異點往往正是關鍵：`resolveOpenShopBlockedReason` 檢查 slug（沒 slug 組不出網址），
-`resolveCopyShortcodeBlockedReason` **刻意不檢查 slug**（短碼以 `id` 定位，沒設永久連結
-一樣複製得出可用的短碼）。併成一個函式會讓「沒設 slug 的 shortcode 賣場」白白失去複製入口。
+但差異點往往正是關鍵：
+
+| 函式 | 檢查項 | 差異點為何關鍵 |
+|------|--------|----------------|
+| `resolveOpenShopBlockedReason` | 無 slug／已 trash | 「開啟」要組出 `/profit-shop/{slug}/`，沒 slug 就組不出網址 |
+| `resolveCopyShortcodeBlockedReason` | **只**檢查已 trash | 短碼以 `id` 定位，**沒設 slug 一樣複製得出可用的短碼** |
+| `resolveViewReportBlockedReason` | **完全不檢查賣場狀態**，只看夥伴 | 報表屬於**分潤夥伴**（`/profit-report/{partner-slug}/`）而非賣場，草稿／已刪除的賣場不影響那張報表存不存在 |
+
+併成一個函式會讓「沒設 slug 的 shortcode 賣場」白白失去複製入口，也會讓草稿／已刪除
+賣場白白失去夥伴報表入口。
+
+**依賴其他 resource 資料的停用判斷要多帶一個 `isLoading` 參數**：
+`resolveViewReportBlockedReason` 需要 `useProfitPartnerList()` 的夥伴資料，若不區分
+「還在載入」與「真的找不到」，每次進頁面都會先閃一次「夥伴已被刪除」的假警告。
 
 參考實作：`pages/admin/ProfitShop/List/index.tsx` 的 `renderPrimaryAction` /
-`resolveOpenShopBlockedReason` / `resolveCopyShortcodeBlockedReason`。
+`renderReportAction` / 上表三個 `resolve*BlockedReason`。
 
 ### 9 的寫法
 
@@ -146,7 +157,7 @@ const { searchFormProps, tableProps, filters } = useTable<TRecord, HttpError, TF
 
 ### 3.2 路線 B：`useCustom` + client-side 篩選（profit-* resource）
 
-`profit-shop` / `profit-partner` / `profit-migration` / `profit-settings` 的後端 V2Api 回 `{code, message, data}`，與 antd-toolkit dataProvider 形狀不相容（見 `react.rule.md` §3「Profit Shop 系列特例」與 CLAUDE.md Pitfall #10），**不能用 `useTable`**。
+`profit-shop` / `profit-partner` / `profit-migration` 的後端 V2Api 回 `{code, message, data}`，與 antd-toolkit dataProvider 形狀不相容（見 `react.rule.md` §3「Profit Shop 系列特例」與 CLAUDE.md Pitfall #10），**不能用 `useTable`**。
 
 這條路線的篩選在前端做：
 

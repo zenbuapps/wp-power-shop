@@ -26,6 +26,7 @@ final class PartnerOutput {
 	 * @param string      $created_at    建立時間（Y-m-d H:i:s）
 	 * @param int|null    $image_id      夥伴圖片 attachment ID（可為 null）
 	 * @param string|null $image_url     夥伴圖片 URL（由 image_id 推導；attachment 已被刪除時為 null）
+	 * @param string|null $report_url    夥伴報表頁網址（由 slug + 站台 report slug 推導；唯讀衍生欄位）
 	 */
 	public function __construct(
 		public readonly int $id,
@@ -34,7 +35,8 @@ final class PartnerOutput {
 		public readonly ?string $contact_email,
 		public readonly string $created_at,
 		public readonly ?int $image_id = null,
-		public readonly ?string $image_url = null
+		public readonly ?string $image_url = null,
+		public readonly ?string $report_url = null
 	) {}
 
 	/**
@@ -53,6 +55,7 @@ final class PartnerOutput {
 			created_at: (string) ( $data['created_at'] ?? '' ),
 			image_id: isset( $data['image_id'] ) && (int) $data['image_id'] > 0 ? (int) $data['image_id'] : null,
 			image_url: isset( $data['image_url'] ) && '' !== $data['image_url'] ? (string) $data['image_url'] : null,
+			report_url: isset( $data['report_url'] ) && '' !== $data['report_url'] ? (string) $data['report_url'] : null,
 		);
 	}
 
@@ -66,7 +69,8 @@ final class PartnerOutput {
 	 *   contact_email: string|null,
 	 *   created_at: string,
 	 *   image_id: int|null,
-	 *   image_url: string|null
+	 *   image_url: string|null,
+	 *   report_url: string|null
 	 * }
 	 */
 	public function to_array(): array {
@@ -78,6 +82,7 @@ final class PartnerOutput {
 			'created_at'    => $this->created_at,
 			'image_id'      => $this->image_id,
 			'image_url'     => $this->image_url,
+			'report_url'    => $this->report_url,
 		];
 	}
 }
