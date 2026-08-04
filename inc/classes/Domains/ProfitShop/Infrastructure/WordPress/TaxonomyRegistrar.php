@@ -34,6 +34,12 @@ final class TaxonomyRegistrar {
 	 */
 	private const PROTECTED_META_KEYS = [
 		'_partner_password',
+
+		// 明文密碼（站長後台查看 / 複製用，見 PartnerTermRepository class docblock）。
+		// 它比雜湊更敏感——雜湊外洩還需破解，明文外洩即可直接登入，
+		// 因此**絕不可**從這份清單移除。
+		'_partner_password_plain',
+
 		'_partner_contact_email',
 		'_partner_password_changed_at',
 	];

@@ -16,7 +16,11 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Snapshot\PartnerSnapshot;
 final class PartnerHydrator {
 
 	/**
-	 * 將 PartnerSnapshot 轉成 PartnerOutput（不含密碼）
+	 * 將 PartnerSnapshot 轉成 PartnerOutput
+	 *
+	 * ⚠️ 產出的 `PartnerOutput` **含明文密碼**，只能回給 admin-only endpoint。
+	 * partner-facing endpoint 請自行列舉欄位輸出，不要呼叫這個方法——
+	 * 理由見 `PartnerOutput` 的 class docblock。
 	 *
 	 * @param PartnerSnapshot $partner    Partner Snapshot
 	 * @param string          $created_at 建立時間（可選）
@@ -35,7 +39,8 @@ final class PartnerHydrator {
 			created_at: $created_at,
 			image_id: $partner->image_id,
 			image_url: $partner->image_url,
-			report_url: $partner->report_url
+			report_url: $partner->report_url,
+			password: $partner->password
 		);
 	}
 }

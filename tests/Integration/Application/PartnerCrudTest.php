@@ -27,13 +27,22 @@ final class PartnerCrudTest extends TestCase {
 	}
 
 	/**
-	 * POST /profit-partners → 201 + body 不含密碼
+	 * POST /profit-partners → 201 + body 帶回明文密碼（admin-only endpoint）
+	 *
+	 * ⚠️ 本測試在 2026-08 之前斷言的是**相反**的契約（回應不得含 password），
+	 * 由站長要求變更：後台需要能查看 / 複製夥伴的報表登入密碼再轉交給對方，
+	 * 那在「只存不可逆雜湊」的前提下技術上不可能，因此改為雜湊與明文並存。
+	 *
+	 * 這條斷言之所以仍掛 `@group security`，是因為它同時鎖住了作用範圍：
+	 * 這個 endpoint 是 **admin_only**（manage_options）。若哪天有人把
+	 * `PartnerOutput` 接到 partner-facing endpoint 上，明文就會送進夥伴的瀏覽器——
+	 * `GET /partner-auth/me` 因此刻意自行列舉欄位輸出，不使用這個 DTO。
 	 *
 	 * @test
 	 * @group happy
 	 * @group security
 	 */
-	public function test_create_partner_returns_output_without_password(): void {
+	public function test_create_partner_returns_output_with_plain_password(): void {
 		$request = new \WP_REST_Request( 'POST', '/power-shop/profit-partners' );
 		$request->set_header( 'Content-Type', 'application/json' );
 		$request->set_body(
@@ -52,10 +61,38 @@ final class PartnerCrudTest extends TestCase {
 		$this->assertSame( 201, $response->get_status() );
 		$body = $response->get_data();
 		$this->assertSame( 'Mary', $body['data']['name'] );
+		$this->assertSame(
+			'secret-pa55!',
+			$body['data']['password'],
+			'admin endpoint 應帶回明文供站長複製'
+		);
+	}
+
+	/**
+	 * GET /partner-auth/me 不得帶出明文密碼
+	 *
+	 * `PartnerOutput` 自 2026-08 起含明文密碼，只允許出現在 admin-only endpoint。
+	 * partner-facing 的 me endpoint 刻意在 callback 內明確列舉四個欄位輸出，
+	 * 而不是回傳 `PartnerOutput::to_array()`——這條測試就是那個決定的護欄：
+	 * 一旦有人「順手」改成用 DTO，明文密碼會直接送進夥伴的瀏覽器。
+	 *
+	 * 這裡不需要有效 token：401 的回應本身也不該含 password，
+	 * 而「欄位白名單」的驗證重點在於 me 的回應形狀，與認證結果無關。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_partner_me_endpoint_never_exposes_plain_password(): void {
+		$request  = new \WP_REST_Request( 'GET', '/power-shop/partner-auth/me' );
+		$response = \rest_do_request( $request );
+
+		$body = $response->get_data();
+
+		$this->assertIsArray( $body );
 		$this->assertArrayNotHasKey(
 			'password',
-			$body['data'],
-			'安全性違規：API 回應不應暴露密碼'
+			$body,
+			'安全性違規：partner-facing endpoint 不可回傳明文密碼'
 		);
 	}
 

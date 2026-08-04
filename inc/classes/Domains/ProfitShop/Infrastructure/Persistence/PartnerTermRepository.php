@@ -20,10 +20,25 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\TaxonomyRegistrar;
  * 對應規格：specs/2026-05-06-profit-shop-design.md §2.4、§6.3、§6.4
  *
  * termmeta 欄位（spec §2.4）：
- * - _partner_password（wp_hash_password 雜湊）
+ * - _partner_password（wp_hash_password 雜湊，登入驗證的唯一依據）
+ * - _partner_password_plain（**明文密碼**，僅供站長在後台查看 / 複製；見下方說明）
  * - _partner_contact_email
  * - _partner_password_changed_at（unix timestamp）
  * - _partner_image_id（夥伴圖片 attachment ID；只存 ID，URL 於讀取時即時解析）
+ *
+ * ⚠️ **明文密碼是站長要求下的刻意設計，不是遺漏。**
+ * 站長需要在後台隨時看到 / 複製夥伴的報表登入密碼再轉交給夥伴（LINE / Email），
+ * 這件事在「只存雜湊」的前提下技術上不可能——雜湊不可逆。因此改為**雜湊與明文並存**：
+ *
+ *   - `_partner_password`（雜湊）**仍是 `verify_password()` 的唯一依據**，登入驗證邏輯完全未變
+ *   - `_partner_password_plain`（明文）**只供顯示**，任何驗證路徑都不得讀它
+ *
+ * 兩者刻意分開而非「只留明文」，是為了讓這個決定可逆：日後若要收回明文功能，
+ * 只需停止寫入並刪除這個 meta，登入流程一行都不用改。
+ *
+ * 已知風險（站長已知悉並接受）：資料庫或備份外洩時，所有夥伴的報表密碼將直接可讀；
+ * 若夥伴重複使用了他在其他服務的密碼，該密碼也會一併曝光。
+ * 緩解限縮在「這組密碼只能登入唯讀的分潤報表頁，不能改任何資料、不涉金流」。
  *
  * `PartnerSnapshot::$report_url` 沒有對應的 termmeta——它由 slug 加上站台設定的
  * report slug 於讀取時即時組出（見 `resolve_report_url()`），與 `image_url` 同屬
@@ -37,6 +52,7 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 	 * Term meta keys
 	 */
 	private const META_PASSWORD            = '_partner_password';
+	private const META_PASSWORD_PLAIN      = '_partner_password_plain';
 	private const META_CONTACT_EMAIL       = '_partner_contact_email';
 	private const META_PASSWORD_CHANGED_AT = '_partner_password_changed_at';
 	private const META_IMAGE_ID            = '_partner_image_id';
@@ -84,9 +100,16 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 	}
 
 	/**
-	 * 儲存 Partner（含密碼雜湊）
+	 * 儲存 Partner（含密碼雜湊與明文）
 	 *
-	 * @param PartnerSnapshot $partner        Partner 資訊
+	 * ⚠️ 這是**密碼寫入的唯一出口**——五條路徑（建立夥伴 / 更新夥伴 / 站長指定密碼 /
+	 * 重新產生密碼 / 夥伴自助改密碼）全部經過這裡，所以雜湊與明文只要在這一處同步寫入，
+	 * 五條路徑就不可能分家。新增密碼寫入路徑時**必須**走這個方法，不可自行 update_term_meta。
+	 *
+	 * `$partner->password` 一律被忽略——它是讀取時填的唯讀衍生欄位（見 hydrate_from_term），
+	 * 密碼變更一律以第二參數 `$plain_password` 表達。這與 `image_url` / `report_url` 同一條紀律。
+	 *
+	 * @param PartnerSnapshot $partner        Partner 資訊（其 `password` 欄位會被忽略）
 	 * @param string|null     $plain_password 明文密碼（null 代表不變更）
 	 *
 	 * @return int term ID
@@ -138,9 +161,20 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 			\update_term_meta( $term_id, self::META_IMAGE_ID, $partner->image_id );
 		}
 
-		// 僅在 plain_password 非 null 時更新密碼雜湊與變更時間。
+		// 僅在 plain_password 非 null 時更新密碼雜湊、明文與變更時間。
+		//
+		// 雜湊與明文**必須成套寫入**：只寫其中一邊會讓「後台顯示的密碼」與「實際能登入的密碼」
+		// 分家，而症狀是站長把後台看到的密碼給了夥伴、夥伴卻登不進去，兩邊都沒有任何錯誤訊息。
 		if ( null !== $plain_password ) {
 			\update_term_meta( $term_id, self::META_PASSWORD, \wp_hash_password( $plain_password ) );
+
+			// ⚠️ 明文**必須** wp_slash() 後再寫入：`update_metadata()` 內部會對值跑一次
+			// `wp_unslash()`（它預期收到的是 slashed 資料）。不先 slash 的話，密碼裡的
+			// `\` / `'` / `"` 會被**靜默吃掉**，而雜湊是用未經處理的原始明文算的——
+			// 結果就是後台顯示的密碼比實際密碼少了幾個字元，站長照著複製給夥伴卻登不進去。
+			// 雜湊那一行不需要 slash，因為 wp_hash_password() 的輸出字元集不含這些字元。
+			\update_term_meta( $term_id, self::META_PASSWORD_PLAIN, \wp_slash( $plain_password ) );
+
 			\update_term_meta( $term_id, self::META_PASSWORD_CHANGED_AT, time() );
 		}
 
@@ -304,6 +338,12 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 		$image_id  = $image_id > 0 ? $image_id : null;
 		$image_url = null === $image_id ? null : $this->resolve_image_url( $image_id );
 
+		// 明文密碼供站長在後台查看 / 複製。'' 一律正規化為 null——代表這位夥伴是在
+		// 明文功能上線**之前**建立的（只有雜湊、沒有明文），UI 需據實顯示「無法顯示」
+		// 而不是顯示一個空密碼讓站長誤以為密碼是空的。
+		$password_raw = (string) \get_term_meta( $term->term_id, self::META_PASSWORD_PLAIN, true );
+		$password     = '' === $password_raw ? null : $password_raw;
+
 		return new PartnerSnapshot(
 			term_id: (int) $term->term_id,
 			name: (string) $term->name,
@@ -311,7 +351,8 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 			contact_email: $contact_email,
 			image_id: $image_id,
 			image_url: $image_url,
-			report_url: $this->resolve_report_url( $slug )
+			report_url: $this->resolve_report_url( $slug ),
+			password: $password
 		);
 	}
 

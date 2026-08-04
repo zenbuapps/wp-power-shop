@@ -10,13 +10,9 @@
  *     由呼叫者（ImportModal）處理，避免 hook 內偷偷做副作用。
  */
 
-import {
-	useApiUrl,
-	useCustom,
-	useCustomMutation,
-	useInvalidate,
-} from '@refinedev/core'
+import { useApiUrl, useCustom, useCustomMutation } from '@refinedev/core'
 
+import { useInvalidateProfitQueries } from '@/hooks'
 import type {
 	TImportResult,
 	TLegacyShop,
@@ -46,7 +42,7 @@ export const useLegacyShopList = () => {
  */
 export const useLegacyShopImport = () => {
 	const apiUrl = useApiUrl('power-shop')
-	const invalidate = useInvalidate()
+	const invalidateProfitQueries = useInvalidateProfitQueries()
 	const mutation = useCustomMutation<TWrappedResponse<TImportResult>>()
 
 	const mutateAsync = (values: {
@@ -62,16 +58,9 @@ export const useLegacyShopImport = () => {
 			},
 			{
 				onSuccess: () => {
-					invalidate({
-						resource: PROFIT_MIGRATION_RESOURCE,
-						invalidates: ['list'],
-						dataProviderName: 'power-shop',
-					})
-					invalidate({
-						resource: 'profit-shops',
-						invalidates: ['list'],
-						dataProviderName: 'power-shop',
-					})
+					// 匯入會同時影響兩份清單：legacy 來源（可匯入狀態變了）與賣場列表（多了一筆）。
+					void invalidateProfitQueries(PROFIT_MIGRATION_RESOURCE)
+					void invalidateProfitQueries('profit-shops')
 				},
 			}
 		)

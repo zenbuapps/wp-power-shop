@@ -241,8 +241,9 @@ const ListComponent = () => {
 	 *      直接 throw TypeError（同步拋，但在 async 函式的 try 內仍會被接到）
 	 *   2. API 存在但使用者 / 瀏覽器拒絕剪貼簿權限 —— `writeText` 回傳的 promise reject
 	 *
-	 * ⚠️ 刻意**不** fallback 到 `document.execCommand('copy')`（`react.rule.md` §6.5
-	 * `RegeneratePasswordButton` 第 4 條的既有紀律）。改為把短碼原文攤在 notification 上
+	 * ⚠️ 刻意**不** fallback 到 `document.execCommand('copy')`（該 API 已廢棄，
+	 * 且在部分瀏覽器會靜默失敗——使用者以為複製到了、貼出來卻是空的）。
+	 * 改為把短碼原文攤在 notification 上
 	 * 讓站長自行選取 —— 只丟一句「複製失敗」等於把人留在原地。
 	 *
 	 * `duration: 0` 讓通知不自動消失，否則站長還沒選取完字就被收走。

@@ -3,20 +3,22 @@ import type { TImage } from 'antd-toolkit/wp'
 /**
  * Profit Partner 前端型別定義
  *
- * 對齊 specs/api/api.yml 的 PartnerOutput / PartnerInput / RegeneratePasswordOutput。
+ * 對齊 specs/api/api.yml 的 PartnerOutput / PartnerInput。
  *
- * 安全紀律：
- *   - TProfitPartner（對應 PartnerOutput）**絕無** password 欄位，避免 list / detail 流程
- *     不慎透過 React state / DevTools / 其他元件讀到密碼明文。
- *   - 重新產生密碼的明文僅在 RegeneratePasswordButton 的 modal 父元件 useState 暫存，
- *     不寫入任何 query cache、不寫 sessionStorage / localStorage、不 console.log，
- *     5 分鐘 auto-clear，modal close 立即 setState(null)。
+ * ⚠️ 密碼在本模組是**一般欄位**（站長要求）：後端額外保存一份明文
+ * （`_partner_password_plain` termmeta），因此列表 / 編輯頁讀得到、也複製得走。
+ * 雜湊仍是登入驗證的唯一依據，明文只供顯示。背景、風險與可逆性見
+ * `inc/.../Persistence/PartnerTermRepository.php` 的 class docblock。
+ *
+ * 這代表 `TProfitPartner.password` 會進 React Query cache 與 React DevTools——
+ * 這是明文功能的必然結果，不是疏漏；若哪天要收回明文功能，請從後端 termmeta 下手，
+ * 在前端做遮蔽只是障眼法。
  */
 
 /**
  * Partner 讀取 DTO（Output；對應後端 PartnerOutput）
  *
- * 注意：後端 PartnerOutput 不含 password / is_in_use / updated_at；
+ * 注意：後端 PartnerOutput 不含 is_in_use / updated_at；
  * `is_in_use` 在 UI 上若需要呈現需另外打 endpoint 取得（4-A2 不擴張此 endpoint，
  * Delete 操作仍走「先嘗試 → 後端 409 partner_in_use 攔下」流程）。
  */
@@ -26,6 +28,15 @@ export type TProfitPartner = {
 	slug: string
 	contact_email: string | null
 	created_at: string
+
+	/**
+	 * 報表登入密碼明文（admin-only）
+	 *
+	 * `null` 代表這位夥伴建立於「保存明文」功能上線之前——DB 裡只有雜湊、無法還原明文。
+	 * 這是**合法狀態**，UI 需顯示「無法顯示，請重設密碼」而不是空白或空字串，
+	 * 否則站長會誤以為該夥伴的密碼是空的。重設一次密碼後明文即補上。
+	 */
+	password: string | null
 
 	/** 夥伴圖片 attachment ID（未設定為 null） */
 	image_id: number | null
@@ -58,8 +69,12 @@ export type TProfitPartner = {
  * Partner 寫入 DTO（Input；建立 / 更新共用）
  *
  * `password` 標 optional：
- *   - Create 表單會強制要求填入（前端 form rule required）
- *   - Edit 表單**不傳** password（要改密碼請走 RegeneratePasswordButton）
+ *   - Create：必填（前端 form rule required）
+ *   - Edit：**只在站長真的改動了密碼時才帶**。沒改動就整個欄位不送——
+ *     後端 `save()` 收到 password 就會 bump `password_changed_at`，
+ *     那會讓該夥伴**當下所有登入 session 立即失效**。若每次存檔（哪怕只改名稱）
+ *     都原封不動送回同一組密碼，夥伴會莫名其妙被踢出報表頁。
+ *     比對邏輯見 `Edit/index.tsx` 的 `initialPasswordRef`。
  *
  * `id` 為 nullable，建立時為 null（與 OpenAPI 對齊）。
  */
@@ -84,42 +99,7 @@ export type TProfitPartnerInput = {
  */
 export type TPartnerFormValues = Omit<TProfitPartnerInput, 'image_id'> & {
 	images?: TImage[]
-
-	/**
-	 * Edit 模式「設定新密碼」區塊的兩個欄位（Create 模式不存在）
-	 *
-	 * ⚠️ 這兩欄雖然住在主表單的 `Form` 裡（為了取得一般欄位的 label / 對齊 / 驗證），
-	 * 但**絕不隨主表單的「儲存」送出** —— 由 `PasswordSection` 自己的「更新密碼」
-	 * 按鈕走 `POST /profit-partners/{id}/set-password`。`Edit/index.tsx` 的 payload
-	 * 是明確列舉欄位（不是 `...values` 展開），所以不會誤送；改那段時務必維持列舉寫法。
-	 *
-	 * 也因此兩欄的 rules **不可加 `required`** —— 主表單 submit 會跑
-	 * `form.validateFields()` 驗全部欄位，加了會導致「不改密碼就存不了其他欄位」。
-	 */
-	new_password?: string
-	new_password_confirm?: string
 }
 
-/**
- * 重新產生 Partner 密碼回應（裸 payload，不裹 {code, data}）
- *
- * 對應 OpenAPI RegeneratePasswordOutput。response header 會帶
- * `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`，
- * 不會被 proxy / browser 快取。
- */
-export type TRegeneratePasswordOutput = {
-	partner_id: number
-	password: string
-}
-
-/**
- * `POST /profit-partners/{id}/set-password` 的裸 payload
- *
- * ⚠️ 刻意**不含** `password` —— 站長自己輸入的密碼他本來就知道，回傳只會多一個
- * 沒必要的洩漏面（response 進 log / proxy cache）。這是與
- * `TRegeneratePasswordOutput` 的關鍵差異：後者是系統產生的，不回傳就沒人知道。
- */
-export type TSetPasswordOutput = {
-	partner_id: number
-	password_changed_at: number
-}
+/** 前端「產生密碼」按鈕的長度（與後端 regenerate-password 的 12 字元一致） */
+export const GENERATED_PASSWORD_LENGTH = 12

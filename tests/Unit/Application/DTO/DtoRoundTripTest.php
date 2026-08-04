@@ -135,6 +135,36 @@ final class DtoRoundTripTest extends TestCase {
 	}
 
 	/**
+	 * PartnerInput：password 為空字串時正規化為 null（= 不變更密碼）
+	 *
+	 * 密碼在夥伴編輯頁是**一般表單欄位**、隨主表單一起送出，站長可能把它清空後按儲存。
+	 * 若空字串沒被正規化，`PartnerTermRepository::save()` 會把它當成新密碼寫進去——
+	 * 該夥伴的密碼變成空值、從此再也登不進報表頁，而且整個過程沒有任何錯誤訊息。
+	 *
+	 * `null`（欄位缺席）與 `''`（欄位存在但為空）必須殊途同歸，因為兩者的使用者意圖相同。
+	 *
+	 * @group edge
+	 */
+	public function test_partner_input_normalizes_empty_password_to_null(): void {
+		$base = [
+			'id'   => 7,
+			'name' => 'Alice',
+			'slug' => 'alice',
+		];
+
+		$this->assertNull( PartnerInput::from_array( $base )->password, '缺席時應為 null' );
+		$this->assertNull(
+			PartnerInput::from_array( $base + [ 'password' => '' ] )->password,
+			'空字串應正規化為 null，否則會把夥伴密碼覆寫成空值'
+		);
+		$this->assertSame(
+			'kept-as-is',
+			PartnerInput::from_array( $base + [ 'password' => 'kept-as-is' ] )->password,
+			'非空密碼必須原樣保留'
+		);
+	}
+
+	/**
 	 * PartnerInput：image_id 缺席 / 0 / 負數一律正規化為 null
 	 *
 	 * 對應「清除夥伴圖片時前端送 null」的契約，同時擋掉 attachment ID 0 這種不存在的值。
@@ -175,11 +205,48 @@ final class DtoRoundTripTest extends TestCase {
 			'image_id'      => 321,
 			'image_url'     => 'https://example.test/wp-content/uploads/alice-150x150.jpg',
 			'report_url'    => 'https://example.test/profit-report/alice/',
+			'password'      => 'alice-pw-1234',
 		];
 
 		$dto = PartnerOutput::from_array( $arr );
 
 		$this->assertSame( $arr, $dto->to_array() );
+	}
+
+	/**
+	 * PartnerOutput：無明文密碼時 password 為 null（不是空字串）
+	 *
+	 * 「明文不存在」與「密碼是空字串」在 UI 上是完全不同的兩件事：
+	 * 前者要顯示「無法顯示，請重設密碼」，後者會讓站長以為夥伴沒有設密碼。
+	 * 鎖死線材形狀為 null，前端才能用 `password ?? fallback` 直接分流。
+	 *
+	 * 這是「明文功能上線前建立的夥伴」的實際狀態（DB 只有雜湊、無明文可還原）。
+	 *
+	 * @group edge
+	 */
+	public function test_partner_output_without_plain_password_is_null(): void {
+		$without_key = PartnerOutput::from_array(
+			[
+				'id'         => 7,
+				'name'       => 'Alice',
+				'slug'       => 'alice',
+				'created_at' => '2026-04-01 09:00:00',
+			]
+		);
+		$this->assertNull( $without_key->password );
+		$this->assertNull( $without_key->to_array()['password'] );
+
+		// 空字串同樣正規化為 null——termmeta 讀不到值時回的就是空字串。
+		$empty_string = PartnerOutput::from_array(
+			[
+				'id'         => 7,
+				'name'       => 'Alice',
+				'slug'       => 'alice',
+				'created_at' => '2026-04-01 09:00:00',
+				'password'   => '',
+			]
+		);
+		$this->assertNull( $empty_string->password );
 	}
 
 	/**

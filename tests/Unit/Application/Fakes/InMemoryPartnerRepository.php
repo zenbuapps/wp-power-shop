@@ -104,8 +104,15 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 	public function save( PartnerSnapshot $partner, ?string $plain_password = null ): int {
 		$term_id = $partner->term_id > 0 ? $partner->term_id : ++$this->next_id;
 
+		// 模擬 production：未帶新密碼時，既有明文原封不動保留
+		// （PartnerTermRepository::save 對 $plain_password === null 完全不碰密碼 meta）。
+		$stored_plain = $plain_password ?? ( $this->partners[ $term_id ]->password ?? null );
+
 		// 模擬 production：只持久化 image_id，image_url 於讀取時由 id 衍生
 		// （傳入的 image_url 一律忽略，與 PartnerTermRepository::save 行為一致）。
+		// `password` 同屬唯讀衍生欄位——Snapshot 上帶的值一律忽略，
+		// 密碼只認第二參數 $plain_password，否則會多出一條繞過 password_changed_at
+		// bump（= 舊 token 撤銷）的隱形寫入路徑。
 		$this->partners[ $term_id ] = new PartnerSnapshot(
 			term_id: $term_id,
 			name: $partner->name,
@@ -113,6 +120,7 @@ final class InMemoryPartnerRepository implements PartnerRepositoryInterface {
 			contact_email: $partner->contact_email,
 			image_id: $partner->image_id,
 			image_url: null === $partner->image_id ? null : self::fake_image_url( $partner->image_id ),
+			password: $stored_plain,
 		);
 
 		if ( null !== $plain_password ) {

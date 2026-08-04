@@ -1,4 +1,5 @@
 import {
+	CopyOutlined,
 	DeleteOutlined,
 	EditOutlined,
 	PictureOutlined,
@@ -11,7 +12,6 @@ import {
 	Button,
 	Empty,
 	Form,
-	Image,
 	Popconfirm,
 	Space,
 	Table,
@@ -62,9 +62,27 @@ const valueLabelMapper = (
 	return value
 }
 
+/**
+ * 判斷「複製密碼」不可用的原因
+ *
+ * 回傳 null 代表可用。分離成獨立函式是為了讓「停用」與「停用原因」永遠成套——
+ * 只有一顆灰掉的按鈕而沒有原因，站長只會以為功能壞了。
+ *
+ * @param {TProfitPartner} record 夥伴資料
+ * @return {string|null} 不可用的原因；可用時回 null
+ */
+const resolveCopyPasswordBlockedReason = (
+	record: TProfitPartner
+): string | null => {
+	if (!record.password) {
+		return '此夥伴建立於舊版，資料庫僅存不可逆的雜湊，無法還原密碼。請進編輯頁重設一次密碼。'
+	}
+	return null
+}
+
 const ListComponent = () => {
 	const go = useGo()
-	const { notification } = App.useApp()
+	const { notification, message } = App.useApp()
 	const [form] = Form.useForm<TProfitPartnerFilterValues>()
 
 	/** 已按下「篩選」的條件（打字當下不即時過濾，與 useTable 的 submit 行為一致） */
@@ -110,6 +128,21 @@ const ListComponent = () => {
 		})
 	}, [partners, applied])
 
+	/** 複製該夥伴的報表登入密碼到剪貼簿 */
+	const handleCopyPassword = async (record: TProfitPartner) => {
+		if (!record.password) return
+
+		try {
+			// Clipboard API 需要 secure context（https / localhost）。
+			// 不做 document.execCommand fallback：那個 API 已廢棄，且失敗時
+			// 明確要求站長手動複製，比靜默失敗（以為複製到了、貼出空白）好。
+			await navigator.clipboard.writeText(record.password)
+			message.success(`已複製「${record.name}」的密碼`)
+		} catch {
+			message.warning('瀏覽器拒絕剪貼簿存取，請進編輯頁手動複製')
+		}
+	}
+
 	const handleDelete = async (id: number) => {
 		try {
 			await deleter.mutateAsync(id)
@@ -134,12 +167,22 @@ const ListComponent = () => {
 			align: 'center',
 			render: (url: string | null) =>
 				url ? (
-					<Image
+					/*
+					 * 刻意用原生 <img> 而非 antd <Image>：列表只需要「看到頭像」。
+					 * antd Image 會額外掛上點擊放大的預覽層（遮罩 + portal + 鍵盤事件），
+					 * 在密集列表裡那是誤觸來源而非功能，也多出好幾層無謂的 DOM。
+					 */
+					<img
 						src={url}
-						fallback={defaultImage}
 						alt="夥伴圖片"
-						className="w-10 h-10 rounded-full object-cover"
-						wrapperClassName="w-10 h-10 overflow-hidden rounded-full"
+						className="w-10 h-10 rounded-full object-cover inline-block"
+						onError={(e) => {
+							// 換 src 之前**必須先清掉 handler**：fallback 圖若本身也載入失敗，
+							// onError 會再次觸發、再換上同一張失敗的圖，形成無限迴圈
+							// （畫面看起來只是圖沒出來，實際上瀏覽器在狂打同一個請求）。
+							e.currentTarget.onerror = null
+							e.currentTarget.src = defaultImage
+						}}
 					/>
 				) : (
 					<span
@@ -192,53 +235,91 @@ const ListComponent = () => {
 		{
 			title: '操作',
 			key: 'actions',
-			width: 160,
+			width: 240,
 			fixed: 'right',
-			render: (_: unknown, record: TProfitPartner) => (
-				<Space size="small">
-					<Button
-						type="link"
-						size="small"
-						icon={<EditOutlined />}
-						onClick={() =>
-							go({
-								to: {
-									resource: 'profit-partner',
-									action: 'edit',
-									id: record.id,
-								},
-							})
-						}
-					>
-						編輯
-					</Button>
-					<Popconfirm
-						title="確定刪除此夥伴？"
-						description={
-							<>
-								<div>若仍有賣場掛在此夥伴上，將回傳 409 錯誤。</div>
-								<div className="mt-1 text-xs text-red-500">
-									此操作無法復原。
-								</div>
-							</>
-						}
-						okText="刪除"
-						okType="danger"
-						cancelText="取消"
-						onConfirm={() => handleDelete(record.id)}
-					>
+			render: (_: unknown, record: TProfitPartner) => {
+				const copyBlockedReason = resolveCopyPasswordBlockedReason(record)
+
+				return (
+					<Space size="small">
 						<Button
 							type="link"
 							size="small"
-							danger
-							icon={<DeleteOutlined />}
-							loading={deleter.isLoading}
+							icon={<EditOutlined />}
+							onClick={() =>
+								go({
+									to: {
+										resource: 'profit-partner',
+										action: 'edit',
+										id: record.id,
+									},
+								})
+							}
 						>
-							刪除
+							編輯
 						</Button>
-					</Popconfirm>
-				</Space>
-			),
+
+						{/*
+						 * ⚠️ antd v5 的 <Tooltip> 直接包 disabled <Button> **不會顯示**
+						 * （v5 拿掉了 v4 的 disabled 相容包裝，瀏覽器又不對 disabled button
+						 * 派發滑鼠事件）。停用分支必須外包一層 <span> 承接事件，
+						 * 按鈕本身加 pointer-events-none 讓事件穿透上去。
+						 * 詳見 .claude/rules/react.rule.md §2。
+						 */}
+						{copyBlockedReason ? (
+							<Tooltip title={copyBlockedReason}>
+								<span className="inline-block cursor-not-allowed">
+									<Button
+										type="link"
+										size="small"
+										disabled
+										icon={<CopyOutlined />}
+										className="pointer-events-none"
+									>
+										複製密碼
+									</Button>
+								</span>
+							</Tooltip>
+						) : (
+							<Tooltip title="複製此夥伴的報表登入密碼">
+								<Button
+									type="link"
+									size="small"
+									icon={<CopyOutlined />}
+									onClick={() => handleCopyPassword(record)}
+								>
+									複製密碼
+								</Button>
+							</Tooltip>
+						)}
+						<Popconfirm
+							title="確定刪除此夥伴？"
+							description={
+								<>
+									<div>若仍有賣場掛在此夥伴上，將回傳 409 錯誤。</div>
+									<div className="mt-1 text-xs text-red-500">
+										此操作無法復原。
+									</div>
+								</>
+							}
+							okText="刪除"
+							okType="danger"
+							cancelText="取消"
+							onConfirm={() => handleDelete(record.id)}
+						>
+							<Button
+								type="link"
+								size="small"
+								danger
+								icon={<DeleteOutlined />}
+								loading={deleter.isLoading}
+							>
+								刪除
+							</Button>
+						</Popconfirm>
+					</Space>
+				)
+			},
 		},
 	]
 
@@ -272,7 +353,7 @@ const ListComponent = () => {
 						pageSize: 20,
 						...getDefaultPaginationProps({ label: '夥伴' }),
 					}}
-					scroll={{ x: 1100 }}
+					scroll={{ x: 1180 }}
 					locale={{
 						emptyText: (
 							<Empty

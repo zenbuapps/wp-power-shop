@@ -175,6 +175,42 @@ const list = data?.data?.data ?? []  // 注意要剝兩層
 
 未來若要改用 `useTable` / `useForm`，需先為 `'power-shop'` dataProvider 寫 thin wrapper 拆解 `{code, data}`。
 
+### ⚠️ Refine 的 `useInvalidate` 對 `useCustom` **完全無效**（2026-08 踩坑，profit-* 全系列）
+
+**症狀**：改完資料回列表頁，看到的還是改之前的內容，**且沒有任何錯誤訊息**。
+實際案例：站長在 `#/profit-partner/edit/{id}` 設定完密碼，回列表頁「複製密碼」按鈕仍是停用的
+——因為 cache 裡的 `password` 還是設定前的 `null`。
+
+**成因是兩件事疊加**：
+
+1. **queryKey 落在不同命名空間**。`useInvalidate({ resource: 'profit-partners', invalidates: ['list'] })`
+   產生的是 **resource 命名空間**的 key；而 profit-* 全走 `useCustom`（因為後端 `{code,data}`
+   形狀不相容），它的 key 在 **custom 命名空間**（含 method + url）。兩者前綴在第一段就分岔，
+   `invalidateQueries` 的 prefix matching **一次都打不中**。
+2. **`main.tsx` 全域 `staleTime: 1000 * 60 * 10`（10 分鐘）**。少了這條，換頁 remount 時
+   react-query 會因為 stale 而順手 refetch，剛好掩蓋了問題 1；有了它，「改完回列表」
+   這條最常見的動線會在 10 分鐘內**穩定地**顯示舊資料。
+
+**修法**：用 `useInvalidateProfitQueries`（`js/src/hooks/useInvalidateProfitQueries.tsx`），
+它以 **predicate 比對「queryKey 序列化後是否含該 endpoint 路徑」**：
+
+```ts
+import { useInvalidateProfitQueries } from '@/hooks'
+
+const invalidateProfitQueries = useInvalidateProfitQueries()
+// mutation onSuccess：
+void invalidateProfitQueries('profit-partners')  // list 與 detail 一起失效
+```
+
+**為什麼用 predicate 而不是明確組出 queryKey**：明確組 key 等於複製一份 Refine 內部的
+key builder 結構（`keys().data(...).mutation('custom').params({ method, url })`），
+那是實作細節、升版可能改變，一旦分家就會**再次靜默失效**——與這個 bug 本身同一種失敗模式。
+`useCustom` **必然**把 url 放進 queryKey（否則不同 url 的查詢會互撞），所以字串比對不依賴內部結構。
+它同時也命中 resource 命名空間的 key，是 `useInvalidate` 的**超集**，可直接取代、不需並用。
+
+**適用範圍**：`ProfitShop` / `ProfitPartner` / `ProfitMigration` 三個 hooks 檔已全數改用。
+新增任何 profit-* 的 mutation 時**不要**回頭用 `useInvalidate`——它在這條路線上是無聲的死碼。
+
 ### ⚠️ 走 `wc-rest` 時 `pagination.pageSize` 完全無效（Phase 7 踩坑）
 
 6 個 dataProvider 共用同一份分頁序列化邏輯，一律把 Refine 的 `pagination` 轉成 Powerhouse 風格的 `paged` / `posts_per_page` query param。但 WooCommerce `wc/v3/products`（以及其他 `wc-rest` resource）**只認 `page` / `per_page`**，不認 `posts_per_page`——`posts_per_page` 會被 WC REST API 直接忽略，`per_page` 沒被送出就靜默退回 WooCommerce 預設**每頁 10 筆**。
@@ -287,7 +323,7 @@ const isEditing = useIsEditing()
 | `/profit-shop/edit/:id` | `ProfitShop/Edit` | `power-shop` |
 | `/profit-partner` | `ProfitPartner/List` | `power-shop` |
 | `/profit-partner/create` | `ProfitPartner/Create` | `power-shop` |
-| `/profit-partner/edit/:id` | `ProfitPartner/Edit` | `power-shop`（含 RegeneratePasswordButton）|
+| `/profit-partner/edit/:id` | `ProfitPartner/Edit` | `power-shop`（密碼為一般欄位）|
 | `/profit-migration` | `ProfitMigration/List` | `power-shop`（含 ImportModal）|
 | `/analytics` | `Analytics` | `power-shop` |
 | `/wp-media-library` | `WPMediaLibraryPage` | `default` |
@@ -521,7 +557,7 @@ grep -c '\.min-w-0{\|\.flex-none{\|at-name' js/dist/assets/index-*.css   # 0 = �
 ```
 js/src/pages/admin/
 ├── ProfitShop/         # 賣場 CRUD（含 ItemsEditor、ShopActionsButtons、ProductPickerModal[Phase 7]）
-├── ProfitPartner/      # 分潤夥伴 CRUD（含 RegeneratePasswordButton ⚠ HIGH-RISK、PartnerSelector）
+├── ProfitPartner/      # 分潤夥伴 CRUD（密碼為一般欄位、PartnerSelector）
 ├── ProfitMigration/    # legacy 一頁商店匯入（含 ImportModal ⚠ HIGH-RISK）
                         # （ProfitSettings 全域設定頁已整組移除，見 profit-shop.rule.md §7）
 ```
@@ -546,9 +582,45 @@ js/src/pages/admin/
 
 | 元件 | 風險面 | 紀律 |
 |------|--------|------|
-| `PasswordSection` | 站長指定密碼（明文進 Form） | **不是 Modal，是表單內嵌區塊**（位於 Edit 頁「聯絡 Email」下方）。兩個密碼欄掛在**主表單的 `Form`** 上（取得一般欄位的 label / 對齊 / 驗證），但**送出獨立**——自帶「更新密碼」按鈕走 `set-password` 端點，絕不隨主表單「儲存」一起送。三條連帶紀律見下方說明 |
-| `RegeneratePasswordButton` | 明文新密碼僅展示一次 | 僅 `useState`（不進 cache / storage / log / Jotai / Context）+ 5 min auto-clear timer + unmount cleanup + Modal `closable=false` / `maskClosable=false` / `keyboard=false`（強制走確認按鈕）+ `navigator.clipboard.writeText`（不 fallback execCommand）+ Input.Password 預設 mask（`visibilityToggle.visible` 由 state 控制）|
+| ~~`PasswordSection`~~ | — | **已於 2026-08 刪除**，密碼改為 `PartnerForm` 內的一般欄位（見下方「夥伴密碼是一般欄位」） |
+| ~~`RegeneratePasswordButton`~~ | — | **已於 2026-08 刪除**，改為 `PartnerForm` 密碼欄旁的「產生」按鈕（純前端 `crypto.getRandomValues`，不打 API，按「儲存」才生效） |
 | `ImportModal` | legacy 一頁商店 → profit shop 不可逆 | 4 道閘門：row Import 按鈕 disabled / Modal 開啟後 canSubmit 雙檢 importable / PartnerSelector 必選 / IMPORT 二次確認 |
+
+> ⚠️ 上面兩個元件刪除的是**前端 UI**，不是後端端點。`set-password` / `regenerate-password`
+> 兩個 endpoint 仍在（各自帶有一般欄位路徑沒有的 VO 強度驗證與一次性明文顯示能力），
+> 是給日後「站長不該看到密碼」情境留的退路。詳見 `profit-shop.rule.md` §6 的五條密碼路徑表。
+>
+> partner portal 的 `ChangePassword.tsx`（夥伴自己改密碼）**不受影響、8 條紀律照舊**——
+> 那是夥伴自己的帳號安全操作，且 partner portal 是公開網址，沒有 admin 後台那層登入保護。
+
+### 夥伴密碼是一般欄位（2026-08，站長要求）
+
+`#/profit-partner` 的密碼相關 UI 從「HIGH-RISK 獨立送出 + 一次性明文 Modal」降級為一般表單欄位：
+
+| | 行為 |
+|---|---|
+| Edit 頁 | 「報表登入密碼」`Input.Password`（帶眼睛切換），**預填目前明文**，隨主表單「儲存」一起送 |
+| Create 頁 | 「初始密碼」必填，行為不變 |
+| 兩頁共用 | 欄位右側「產生」按鈕，`crypto.getRandomValues` 產生 12 碼英數（排除 `0O1lI` 易混淆字元），填入欄位、按儲存才生效 |
+| List 頁 | 操作欄「複製密碼」，`navigator.clipboard.writeText(record.password)` |
+
+後端額外保存一份明文（`_partner_password_plain` termmeta），雜湊仍是登入驗證的唯一依據。
+背景、風險與四條紀律見 `profit-shop.rule.md` §6「明文密碼並存」。
+
+**三個實作細節，少任何一個都會出事：**
+
+1. **只在密碼真的改動時才送**（`Edit/index.tsx` 的 `initialPasswordRef`）。後端 `save()`
+   一收到 password 就 bump `password_changed_at` = 該夥伴所有登入 session 立即失效；
+   密碼是預填的，不比對就原封不動送回去 → 站長改個名稱都會把夥伴踢出報表頁。
+   送出成功後要把基準線推到新值，否則連按兩次儲存會登出兩次。
+2. **Edit 模式密碼欄不可加 `required`**。主表單 submit 會驗這個欄位，加了會讓
+   「舊資料無明文、站長又不想改密碼」的情況完全存不了檔。留空 = 不變更（後端把空字串正規化為 null）。
+3. **`password: record.password ?? ''`，不可用 `undefined`**。`setFieldsValue` 收到 undefined
+   會沿用欄位既有值，切換不同夥伴時會殘留上一位的密碼。
+
+**List 頁「複製密碼」的停用分支**：`record.password` 為 null（舊資料無明文）時停用並用
+Tooltip 說明原因。⚠️ antd v5 的 `<Tooltip>` 直接包 disabled `<Button>` **不會顯示提示**，
+必須拆成停用 / 可用兩條 render 分支、停用分支外包一層 `<span>` 承接事件——見 §2。
 
 ### 防 refetch 覆寫使用者編輯 Pattern（Edit 頁面共用）
 
@@ -573,28 +645,17 @@ const { data } = useCustom({
 
 （曾經有個 ProfitSettings 變體用 `lastFilledSettingsRef` 做 content-diff，處理「單例資源、沒有 id 可比對」的情況；該頁已移除，但那個 pattern 對日後同類頁面仍然適用——見 `profit-shop.rule.md` §12.6。）
 
-### 「欄位長得像表單、送出卻獨立」的區塊：`PasswordSection`
+### 夥伴 Edit 頁的欄位清單與 payload 是一組的
 
-夥伴報表密碼設定放在 Edit 頁「聯絡 Email」下方，視覺上就是一般表單欄位，
-但**動作獨立於主表單**（Phase 4-A2 起的安全紀律：站長改名稱 / Email 時不該有任何
-機會動到密碼）。這個「同一個 Form、不同送出路徑」的組合有三個必須成套的細節，
-少任何一個都會壞：
+`Edit/index.tsx` 的 `form.validateFields([...])` 明確列舉欄位，payload 也明確列舉
+（**不可**改成 `...values` 展開）。兩者是同一組的兩端，新增欄位時兩處都要加，
+漏一邊的症狀是「欄位填了、存檔沒反應」或「送出了不該送的欄位」。
 
-| # | 做法 | 少了會怎樣 |
-|---|------|-----------|
-| 1 | 密碼欄的 rules **不可加 `required`** | 主表單存檔會跑 `validateFields()` 驗全部欄位 → 變成「不改密碼就存不了名稱」 |
-| 2 | 主表單 submit 用 **`validateFields(['name','slug','contact_email','images'])` 明確列舉**，不可用無參數版 | 站長密碼打到一半（填了新密碼、還沒填確認）就存不了其他欄位——被一個不相干的欄位擋住 |
-| 3 | 主表單 payload 維持**明確列舉欄位**（不可改成 `...values` 展開） | 密碼會跟著漏進 `PUT /profit-partners/{id}`，繞過 `set-password` 的強度驗證，也違反「主表單不含 password」的紀律 |
-
-第 2、3 點是同一組的兩端——`Edit/index.tsx` 裡那份欄位清單與 payload 欄位要一起維護，
-新增欄位時兩處都要加。
-
-**為什麼不用 Modal**：站長是在編輯這位夥伴的資料，密碼就是其中一個欄位；
-先前做成右上角按鈕 + Modal，等於把一個欄位放到頁面另一端還多一層彈窗。
-`headerButtons={() => null}` 是刻意蓋掉 Refine 預設 header buttons，不是漏寫。
-
-其餘安全紀律（明文只在 Form state、`resetFields` 與 `mutation.reset()` 並用、
-送出鈕三重守門、兩欄確認、失敗時不要判 `mapped.code`）見元件本身的 docblock 與 §3。
+> 2026-08 之前這裡是一個叫 `PasswordSection` 的內嵌區塊：密碼欄掛在主表單的 `Form` 上、
+> 但由自己的按鈕走 `set-password` 端點獨立送出，刻意讓「站長改名稱時不該有機會動到密碼」。
+> 站長要求把密碼當一般欄位後該元件已刪除，密碼改為隨主表單送出。
+> `headerButtons={() => null}` 仍保留（蓋掉 Refine 預設 header buttons，不是漏寫）。
+> 現行密碼欄位的三個實作細節見上方「夥伴密碼是一般欄位」。
 
 ### Partner 夥伴圖片（直接複用商品 `Gallery` 元件）
 
@@ -1389,7 +1450,7 @@ js/src/
 │   └── components/           # 頁面專用元件
 ├── pages/admin/ProfitShop/      # Phase 4-A1：賣場 CRUD + ItemsEditor + ShopActionsButtons + SlugInput
 │                                #   Phase 7：+ components/ProductPickerModal（商品選擇器 Modal，消費 §6.4 ProductTableBody）
-├── pages/admin/ProfitPartner/   # Phase 4-A2：夥伴 CRUD + RegeneratePasswordButton（HIGH-RISK）+ PartnerSelector
+├── pages/admin/ProfitPartner/   # 夥伴 CRUD（密碼為一般欄位，2026-08 起）+ PartnerSelector
 ├── pages/admin/ProfitMigration/ # Phase 4-A3：legacy 一頁商店匯入 + ImportModal（HIGH-RISK）
 │                             # （Phase 4-A3 的 ProfitSettings 全域設定頁已整組移除）
 ├── partner-portal/             # Phase 4-B + 6-A2：獨立 SPA bundle（mount 點 #profit_partner_portal，與 admin 完全隔離）

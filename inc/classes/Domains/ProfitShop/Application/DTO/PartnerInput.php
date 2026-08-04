@@ -51,7 +51,11 @@ final class PartnerInput {
 			name: (string) ( $data['name'] ?? '' ),
 			slug: (string) ( $data['slug'] ?? '' ),
 			contact_email: isset( $data['contact_email'] ) ? (string) $data['contact_email'] : null,
-			password: isset( $data['password'] ) ? (string) $data['password'] : null,
+			// 空字串一律正規化為 null（= 不變更密碼），**不可**直接 (string) cast。
+			// 密碼在 Edit 頁是一般表單欄位、隨主表單一起送出，站長若把它清空後按儲存，
+			// 未正規化就會把空字串當成「新密碼」寫進去——夥伴的密碼被設成空值、
+			// 從此再也登不進報表頁，而且過程中不會有任何錯誤訊息。
+			password: isset( $data['password'] ) && '' !== $data['password'] ? (string) $data['password'] : null,
 			// 0 / 負數 / 未帶皆視為「無圖片」——與前端「清除圖片時送 null」對齊，
 			// 也避免 attachment ID 0 這種不存在的值被寫進 termmeta。
 			image_id: isset( $data['image_id'] ) && (int) $data['image_id'] > 0 ? (int) $data['image_id'] : null,

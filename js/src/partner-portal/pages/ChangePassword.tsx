@@ -3,7 +3,11 @@
  *
  * URL: #/change-password（authenticated only，由 AuthGate 守門）
  *
- * ⚠ HIGH-RISK 紀律（對齊 admin 的 RegeneratePasswordButton 8 條紀律）：
+ * ⚠ HIGH-RISK 紀律（8 條）：
+ *
+ * 注意：admin 端的夥伴密碼 UI 已依站長要求降級為一般表單欄位（明文可見可複製），
+ * 但**本頁不跟進**——這裡是夥伴自己的帳號安全操作，且 partner portal 是公開網址，
+ * 沒有 admin 後台那層登入保護。以下紀律維持原樣：
  *  1. 明文密碼**只**在 React useState（透過 antd Form），**不**進 cache /
  *     sessionStorage / Jotai / Context / log / 任何外部 storage
  *  2. 不寫 console.log / debug 印密碼欄位

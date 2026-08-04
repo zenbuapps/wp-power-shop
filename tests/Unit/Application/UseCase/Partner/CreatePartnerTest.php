@@ -63,8 +63,20 @@ final class CreatePartnerTest extends TestCase {
 		$this->assertNotSame( 'plain-pa55!', $hash, '安全性違規：密碼必須雜湊' );
 		$this->assertStringContainsString( 'hashed::', $hash );
 
-		// PartnerOutput 不含 password
-		$this->assertArrayNotHasKey( 'password', $output->to_array() );
+		// PartnerOutput **含**明文密碼——站長要在後台查看 / 複製後轉交夥伴。
+		//
+		// ⚠️ 這條斷言在 2026-08 之前是反過來的（assertArrayNotHasKey），由站長要求變更。
+		// 明文另存於 `_partner_password_plain` termmeta，與上面的雜湊**並存**：
+		// 雜湊仍是 verify_password 的唯一依據（所以上面那幾條斷言不可放寬），
+		// 明文只供顯示。背景見 PartnerTermRepository 的 class docblock。
+		//
+		// 這也代表 PartnerOutput 只能出現在 admin-only endpoint——
+		// partner-facing 的 /partner-auth/me 刻意自行列舉欄位輸出，不用這個 DTO。
+		$this->assertSame(
+			'plain-pa55!',
+			$output->to_array()['password'],
+			'PartnerOutput 應帶出明文供站長複製'
+		);
 	}
 
 	/**

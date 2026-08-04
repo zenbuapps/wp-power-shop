@@ -1103,7 +1103,11 @@ components:
 
     PartnerOutput:
       type: object
-      description: Partner 讀取 DTO（不含密碼）
+      description: |
+        Partner 讀取 DTO。
+
+        ⚠️ **含明文密碼欄位（`password`），僅供 admin-only endpoint 使用。**
+        絕不可用於任何 partner-facing endpoint（`GET /partner-auth/me` 刻意自行列舉欄位輸出）。
       properties:
         id:
           type: integer
@@ -1141,6 +1145,19 @@ components:
             前綴為固定常數（站長無法修改），但前端仍**不可**自行拼接網址：
             組成規則的真相來源只有 PHP 端，複製一份到前端會在日後前綴變動時
             安靜地連到 404。一律使用本欄位。
+        password:
+          type: string
+          nullable: true
+          description: |
+            夥伴報表登入密碼的**明文**，供站長在後台查看 / 複製後轉交夥伴（admin-only）。
+
+            後端除了不可逆的 `wp_hash_password` 雜湊（登入驗證的唯一依據）之外，
+            另存一份明文於 `_partner_password_plain` termmeta。這是站長明確要求的取捨：
+            「複製密碼」在只存雜湊的前提下技術上不可能。
+
+            `null` 代表該夥伴建立於此功能上線之前（DB 只有雜湊、無明文可還原），
+            這是合法狀態；重設一次密碼後即補上。UI 需據實顯示「無法顯示」而非空白，
+            否則站長會誤以為密碼是空的。
       required:
         - id
         - name

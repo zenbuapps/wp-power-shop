@@ -145,16 +145,66 @@ public function __construct(
 - email 失敗 try/catch `\Throwable` + `error_log`，**不阻擋登入**
 - 失敗回應對未知 slug **不** record_failure（避免 timing oracle 暴露 slug 存在性）
 
-### 四條密碼路徑的分工（改動任一條前先對照這張表）
+### 🔴 明文密碼並存（2026-08，站長要求的安全降級）
 
-Partner 密碼可以被四個地方寫入，**規則刻意不同**，改動前先確認自己在哪一條：
+站長需要在後台隨時查看 / 複製夥伴的報表登入密碼，再自行透過 LINE / Email 轉交。
+這件事在「只存不可逆雜湊」的前提下**技術上不可能**，因此改為**雜湊與明文並存**：
 
-| 路徑 | 端點 / UseCase | 誰操作 | 密碼來源 | 過 `PartnerPassword` VO？ | 回傳明文？ |
-|------|---------------|--------|----------|--------------------------|-----------|
-| 建立夥伴 | `POST /profit-partners` → `CreatePartner` | 站長 | 站長輸入 | ❌ **沒有**（見 `specs/tech-debt.md` TD-33） | 否 |
-| 站長指定 | `POST /profit-partners/{id}/set-password` → `SetPartnerPasswordUseCase` | 站長 | 站長輸入（Edit 頁「聯絡 Email」下方的 `PasswordSection`） | ✅ | ❌ **不回傳** |
-| 重新產生 | `POST /profit-partners/{id}/regenerate-password` → `RegeneratePartnerPasswordUseCase` | 站長 | `wp_generate_password(12)` | 不需要（系統保證強度） | ✅ 一次性顯示 |
-| 夥伴自助 | `POST /partner-auth/change-password` → `ChangePasswordUseCase` | partner 本人 | partner 輸入 | ✅ | 否 |
+| termmeta | 用途 | 誰可以讀 |
+|---|---|---|
+| `_partner_password` | `wp_hash_password` 雜湊，**`verify_password()` 的唯一依據** | 只有驗證路徑 |
+| `_partner_password_plain` | 明文，**只供顯示**（後台查看 / 複製） | 只有 admin-only endpoint |
+
+**四條紀律：**
+
+1. **驗證路徑永遠不得讀明文**——`verify_password()` 只認 `wp_check_password()` 對雜湊的比對。
+   拿明文做字串比對，會讓「雜湊與明文不同步」的資料靜默通過驗證。
+2. **兩者必須在 `save()` 內成套寫入**。只寫一邊的症狀是「站長把後台看到的密碼給了夥伴、
+   夥伴卻登不進去」，兩邊都沒有任何錯誤訊息。`save()` 是**密碼寫入的唯一出口**
+   （五條路徑全部經過它），新增密碼寫入路徑時不可自行 `update_term_meta`。
+3. **明文寫入前必須 `wp_slash()`**。`update_metadata()` 內部會對值跑一次 `wp_unslash()`，
+   不先 slash 的話密碼裡的 `\` / `'` / `"` 會被靜默吃掉，而雜湊是用原始明文算的——
+   後台顯示的密碼會比實際密碼少幾個字元。雜湊那一行不需要（其輸出字元集不含這些字元）。
+4. **`PartnerOutput` 因此含明文，只能用於 admin-only endpoint**。partner-facing 的
+   `GET /partner-auth/me` 刻意在 callback 內明確列舉四個欄位輸出，**不要**「順手」改成
+   回傳 `PartnerOutput::to_array()`，那會把明文送進夥伴的瀏覽器。
+   `PartnerCrudTest::test_partner_me_endpoint_never_exposes_plain_password` 是這道護欄。
+
+**保留雜湊而非「只留明文」，是為了讓這個決定可逆**：日後若要收回明文功能，
+只需停止寫入並刪除該 meta，登入流程一行都不用改。
+
+**已知風險（站長已知悉並接受）**：DB 或備份外洩時所有夥伴的報表密碼直接可讀；
+若夥伴重複使用了他在其他服務的密碼，該密碼也會一併曝光。緩解僅限於
+「這組密碼只能登入唯讀的分潤報表頁，不能改任何資料、不涉金流」。
+
+**`null` 是合法狀態**：功能上線前建立的夥伴只有雜湊、無明文可還原。UI 必須顯示
+「無法顯示，請重設密碼」而不是空白——否則站長會誤以為該夥伴的密碼是空的。
+
+### 五條密碼路徑的分工（改動任一條前先對照這張表）
+
+Partner 密碼可以被五個地方寫入，**規則刻意不同**，改動前先確認自己在哪一條。
+全部都經過 `PartnerTermRepository::save()`，所以雜湊與明文一定同步。
+
+| 路徑 | 端點 / UseCase | 誰操作 | 密碼來源 | 過 `PartnerPassword` VO？ | 前端是否使用 |
+|------|---------------|--------|----------|--------------------------|-------------|
+| 建立夥伴 | `POST /profit-partners` → `CreatePartner` | 站長 | 站長輸入（Create 頁「初始密碼」必填欄位） | ❌ **沒有**（見 `specs/tech-debt.md` TD-33） | ✅ |
+| **更新夥伴** | `PUT /profit-partners/{id}` → `UpdatePartner` | 站長 | 站長輸入（Edit 頁「報表登入密碼」一般欄位，預填目前明文） | ❌ 沒有 | ✅ **現行主要路徑** |
+| 站長指定 | `POST /profit-partners/{id}/set-password` → `SetPartnerPasswordUseCase` | 站長 | 站長輸入 | ✅ | ❌ 前端已不使用 |
+| 重新產生 | `POST /profit-partners/{id}/regenerate-password` → `RegeneratePartnerPasswordUseCase` | 站長 | `wp_generate_password(12)` | 不需要（系統保證強度） | ❌ 前端已不使用 |
+| 夥伴自助 | `POST /partner-auth/change-password` → `ChangePasswordUseCase` | partner 本人 | partner 輸入 | ✅ | ✅（partner portal） |
+
+⚠️ 第 3、4 條的端點**保留但前端不再呼叫**（原本的 `PasswordSection` / `RegeneratePasswordButton`
+兩個元件已刪除）。它們**不是死碼**——是給日後「站長不該看到密碼」的部署情境留的退路，
+且各自帶有前兩條路徑沒有的能力（VO 強度驗證、一次性明文顯示）。刪掉它們就等於把那條退路砍斷。
+
+⚠️ **`PartnerInput::from_array()` 必須把空字串正規化為 null**。密碼在 Edit 頁是隨主表單送出的
+一般欄位，站長可能清空後按儲存；未正規化就會把空字串當新密碼寫進去——夥伴的密碼變成空值、
+從此再也登不進報表頁，過程中沒有任何錯誤訊息。
+`DtoRoundTripTest::test_partner_input_normalizes_empty_password_to_null` 鎖住這條。
+
+⚠️ **前端只在密碼「真的被改動」時才送**（`Edit/index.tsx` 的 `initialPasswordRef`）。
+`save()` 只要收到 password 就會 bump `password_changed_at` = 該夥伴所有登入 session 立即失效；
+若每次存檔都原封不動送回同一組密碼，站長改個名稱都會把夥伴踢出報表頁。
 
 **三條容易搞錯的紀律：**
 
@@ -167,7 +217,8 @@ Partner 密碼可以被四個地方寫入，**規則刻意不同**，改動前�
    站長自己輸入的密碼他本來就知道，回傳只會多一個洩漏面（response 進 log / proxy cache）。
    regenerate 必須回傳是因為系統產生的，不回傳就沒人知道。
 
-3. **body 讀取必須用 `read_json_body_for_partner()`，不是 `read_json_body()`**：
+3. **body 讀取必須用 `read_json_body_for_partner()`，不是 `read_json_body()`**（這條**沒有**
+   因為密碼改成一般欄位而失效——`PUT /profit-partners/{id}` 也走這個 reader）：
    後者會對所有欄位跑 `WP::sanitize_text_field_deep()`，把密碼裡的 `<` / `>` / 連續空白
    靜默改寫。症狀是「站長設的密碼夥伴登不進去」，而且兩邊看到的字串**完全一樣**，
    極難排查。`PARTNER_RAW_FIELDS = ['password']` 這個常數就是為此存在的。
@@ -948,22 +999,32 @@ Modal 一律 `closable=false` / `maskClosable=false` / `keyboard=false` 強制�
 
 ### 12.5 HIGH-RISK 元件的安全紀律
 
-#### RegeneratePasswordButton（admin SPA，明文密碼僅展示一次）
+#### ~~RegeneratePasswordButton~~（admin SPA，**已於 2026-08 刪除**）
 
-8 條紀律（4-A2 master self-check + reviewer / security 雙審 PASS）：
+站長要求把夥伴密碼當一般欄位後，這個元件與 `PasswordSection` 一併刪除，
+密碼改為 `PartnerForm` 內的一般欄位（預填明文、隨主表單送出、旁邊一顆純前端「產生」按鈕）。
+現行 UI 紀律見 `react.rule.md` §6.5「夥伴密碼是一般欄位」；
+後端明文並存的四條紀律見本檔 §6「明文密碼並存」。
 
-1. 明文新密碼僅在元件 `useState` —— **不**進 cache / storage / log / Jotai / Context / Redux
-2. 5 分鐘 `setTimeout` auto-clear + unmount cleanup（4-A3 補 `setPwdVisible(false)`，否則下次開 modal 殘留 visible=true）
-3. Modal `closable=false` + `maskClosable=false` + `keyboard=false`（強制走確認按鈕）
-4. `navigator.clipboard.writeText` —— **不**fallback `document.execCommand('copy')`
-5. response 型別守衛：`'password' in payload && typeof payload.password === 'string'`
-6. error case **不**顯示舊密碼（清空 state）
-7. Edit 主表單 submit payload **不**含 password（要改密碼必須走 RegeneratePasswordButton）
-8. Input.Password 預設 mask（`visibilityToggle.visible` 由 state 控制，初始 `false`）
+⚠️ **後端 `regenerate-password` / `set-password` 兩個 endpoint 仍在**（前端不再呼叫），
+是給日後「站長不該看到密碼」情境留的退路——它們各自帶有一般欄位路徑沒有的能力
+（VO 強度驗證、系統產生 12 碼強密碼）。刪掉端點等於把退路砍斷。
+
+它原本的 8 條紀律留檔於此，日後若要恢復一次性明文顯示的 UI，照這張表做：
+明文僅存元件 `useState`（不進 cache / storage / log / Jotai / Context）/ 5 分鐘 auto-clear +
+unmount cleanup（含 `setPwdVisible(false)`）/ Modal `closable=false` + `maskClosable=false` +
+`keyboard=false` / `navigator.clipboard.writeText` 不 fallback `execCommand` /
+response 型別守衛 / error case 不顯示舊密碼 / 主表單 payload 不含 password /
+`Input.Password` 預設 mask。
 
 #### ChangePassword.tsx（partner portal，6-A2 HIGH-RISK 強化版 8 條紀律）
 
-對照 admin RegeneratePasswordButton（**admin 由 admin 產生密碼給 partner**）的不同點：partner 自助改密本人輸入明文 current + new，端點 `POST /partner-auth/change-password`（partner_token），成功後本機**強制重新登入**（後端 password_changed_at 同秒撤銷舊 token，6-A1 PartnerTokenStore::verify L138 `<=` 同秒契約）。
+**這頁不隨 admin 端降級**——夥伴自己改密碼是他的帳號安全操作，且 partner portal 是公開網址、
+沒有 admin 後台那層登入保護。8 條紀律照舊。
+
+與 admin 端的不同點：partner 自助改密本人輸入明文 current + new，端點
+`POST /partner-auth/change-password`（partner_token），成功後本機**強制重新登入**
+（後端 password_changed_at 同秒撤銷舊 token，6-A1 PartnerTokenStore::verify L138 `<=` 同秒契約）。
 
 8 條紀律（二輪後強化）：
 

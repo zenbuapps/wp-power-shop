@@ -413,6 +413,135 @@ final class PartnerTermRepositoryTest extends TestCase {
 		);
 	}
 
+	// ========== 明文密碼（站長後台查看 / 複製用） ==========
+
+	/**
+	 * save() 寫入的明文可被讀回，且與雜湊驗證的結果一致
+	 *
+	 * 雜湊與明文是**兩份獨立寫入**，只要有一邊漏寫或寫錯，症狀就是
+	 * 「站長把後台看到的密碼給夥伴、夥伴卻登不進去」，而且兩邊都不會有錯誤訊息。
+	 * 因此這條測試同時斷言兩件事：讀回的明文正確、且該明文真的能通過驗證。
+	 *
+	 * @group happy
+	 */
+	public function test_save_persists_plain_password_alongside_hash(): void {
+		$term_id = $this->create_partner( 'pw-plain', 'PW Plain', 'partner-pw-1234' );
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertSame( 'partner-pw-1234', $persisted->password, '明文應可讀回供站長複製' );
+
+		$this->assertTrue(
+			$this->repo->verify_password( $term_id, 'partner-pw-1234' ),
+			'讀回的明文必須真的能通過雜湊驗證，否則後台顯示的密碼是錯的'
+		);
+	}
+
+	/**
+	 * 含反斜線 / 引號的密碼不會在往返後變形
+	 *
+	 * `update_metadata()` 內部會對值跑一次 `wp_unslash()`，不先 `wp_slash()` 的話
+	 * `\` / `'` / `"` 會被靜默吃掉——而雜湊是用未經處理的原始明文算的，
+	 * 於是後台顯示的密碼比實際密碼少了幾個字元。這正是「看起來正常、實際登不進去」的成因。
+	 *
+	 * @group edge
+	 */
+	public function test_save_preserves_backslash_and_quotes_in_plain_password(): void {
+		$tricky  = 'a\\b\'c"d1234';
+		$term_id = $this->create_partner( 'pw-tricky', 'PW Tricky', $tricky );
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertSame( $tricky, $persisted->password, '反斜線 / 引號不可在 termmeta 往返中被吃掉' );
+
+		$this->assertTrue(
+			$this->repo->verify_password( $term_id, $tricky ),
+			'明文與雜湊必須對同一個字串成立'
+		);
+	}
+
+	/**
+	 * 未帶密碼的 save() 不會清掉既有明文
+	 *
+	 * 站長只改名稱 / Email 時 `$plain_password` 是 null，此時**兩份**密碼資料
+	 * （雜湊與明文）都必須原封不動。若明文被誤清成空，列表頁的「複製密碼」
+	 * 會突然變成停用狀態，站長會以為資料壞了。
+	 *
+	 * @group edge
+	 */
+	public function test_save_without_password_keeps_existing_plain_password(): void {
+		$term_id = $this->create_partner( 'pw-keep', 'PW Keep', 'original-pw-99' );
+
+		$this->repo->save(
+			new PartnerSnapshot(
+				term_id: $term_id,
+				name: 'PW Keep Renamed',
+				slug: new PartnerSlug( 'pw-keep' ),
+				contact_email: null
+			)
+		);
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertSame( 'PW Keep Renamed', $persisted->name, '名稱應已更新' );
+		$this->assertSame( 'original-pw-99', $persisted->password, '未帶密碼時明文不可被清掉' );
+		$this->assertTrue( $this->repo->verify_password( $term_id, 'original-pw-99' ) );
+	}
+
+	/**
+	 * Snapshot 傳入的 password 一律被忽略（唯讀衍生欄位）
+	 *
+	 * 與 `image_url` / `report_url` 同一條紀律：密碼變更**只**認 `save()` 的第二參數。
+	 * 若 Snapshot 的 password 也能寫入，就會多出一條繞過 `password_changed_at` bump
+	 * （= 舊 token 撤銷）的隱形寫入路徑。
+	 *
+	 * @group security
+	 */
+	public function test_save_ignores_password_field_on_snapshot(): void {
+		$term_id = $this->create_partner( 'pw-ignore', 'PW Ignore', 'legit-pw-123' );
+
+		$this->repo->save(
+			new PartnerSnapshot(
+				term_id: $term_id,
+				name: 'PW Ignore',
+				slug: new PartnerSlug( 'pw-ignore' ),
+				contact_email: null,
+				password: 'injected-pw-999'
+			)
+		);
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertSame( 'legit-pw-123', $persisted->password, 'Snapshot 的 password 不可被持久化' );
+		$this->assertFalse(
+			$this->repo->verify_password( $term_id, 'injected-pw-999' ),
+			'透過 Snapshot 注入的密碼不可生效'
+		);
+	}
+
+	/**
+	 * 只有雜湊、沒有明文的舊資料，password 讀為 null
+	 *
+	 * 模擬「明文功能上線前建立」的夥伴：能正常登入（雜湊在），但明文無法還原。
+	 * 這是合法狀態，必須是 null 而非空字串——UI 靠這個分流顯示「無法顯示，請重設密碼」。
+	 *
+	 * @group edge
+	 */
+	public function test_legacy_partner_without_plain_meta_reads_password_as_null(): void {
+		$term_id = $this->create_partner( 'pw-legacy', 'PW Legacy', 'legacy-pw-77' );
+
+		// 模擬舊資料：刪掉明文 meta，只留雜湊
+		\delete_term_meta( $term_id, '_partner_password_plain' );
+
+		$persisted = $this->repo->find_by_id( $term_id );
+		$this->assertNotNull( $persisted );
+		$this->assertNull( $persisted->password, '無明文 meta 時應回 null（不是空字串）' );
+		$this->assertTrue(
+			$this->repo->verify_password( $term_id, 'legacy-pw-77' ),
+			'明文不存在不影響登入——雜湊仍是驗證的唯一依據'
+		);
+	}
+
 	// ========== Helpers ==========
 
 	/**

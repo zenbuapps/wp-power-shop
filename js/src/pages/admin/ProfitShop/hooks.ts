@@ -11,12 +11,12 @@ import {
 	useApiUrl,
 	useCustom,
 	useCustomMutation,
-	useInvalidate,
 	useList,
 } from '@refinedev/core'
 import { useMemo } from 'react'
 
 import { TProductRecord } from '@/components/product/types'
+import { useInvalidateProfitQueries } from '@/hooks'
 import type {
 	TProfitShop,
 	TProfitShopInput,
@@ -71,7 +71,7 @@ export const useProfitShopOne = (id: number | string | undefined) => {
 /** 建立分潤賣場 */
 export const useProfitShopCreate = () => {
 	const apiUrl = useApiUrl('power-shop')
-	const invalidate = useInvalidate()
+	const invalidateProfitQueries = useInvalidateProfitQueries()
 	const mutation = useCustomMutation<TWrappedResponse<TProfitShop>>()
 
 	const mutateAsync = (values: TProfitShopInput) =>
@@ -84,11 +84,7 @@ export const useProfitShopCreate = () => {
 			},
 			{
 				onSuccess: () => {
-					invalidate({
-						resource: PROFIT_SHOP_RESOURCE,
-						invalidates: ['list'],
-						dataProviderName: 'power-shop',
-					})
+					void invalidateProfitQueries(PROFIT_SHOP_RESOURCE)
 				},
 			}
 		)
@@ -99,7 +95,7 @@ export const useProfitShopCreate = () => {
 /** 更新分潤賣場 */
 export const useProfitShopUpdate = () => {
 	const apiUrl = useApiUrl('power-shop')
-	const invalidate = useInvalidate()
+	const invalidateProfitQueries = useInvalidateProfitQueries()
 	const mutation = useCustomMutation<TWrappedResponse<TProfitShop>>()
 
 	const mutateAsync = (id: number, values: TProfitShopInput) =>
@@ -112,12 +108,7 @@ export const useProfitShopUpdate = () => {
 			},
 			{
 				onSuccess: () => {
-					invalidate({
-						resource: PROFIT_SHOP_RESOURCE,
-						invalidates: ['list', 'detail'],
-						id,
-						dataProviderName: 'power-shop',
-					})
+					void invalidateProfitQueries(PROFIT_SHOP_RESOURCE)
 				},
 			}
 		)
@@ -128,7 +119,7 @@ export const useProfitShopUpdate = () => {
 /** 刪除（trash）分潤賣場 */
 export const useProfitShopDelete = () => {
 	const apiUrl = useApiUrl('power-shop')
-	const invalidate = useInvalidate()
+	const invalidateProfitQueries = useInvalidateProfitQueries()
 	const mutation =
 		useCustomMutation<TWrappedResponse<{ id: number; deleted: boolean }>>()
 
@@ -142,11 +133,7 @@ export const useProfitShopDelete = () => {
 			},
 			{
 				onSuccess: () => {
-					invalidate({
-						resource: PROFIT_SHOP_RESOURCE,
-						invalidates: ['list'],
-						dataProviderName: 'power-shop',
-					})
+					void invalidateProfitQueries(PROFIT_SHOP_RESOURCE)
 				},
 			}
 		)
@@ -160,7 +147,7 @@ export const useProfitShopDelete = () => {
  */
 const useProfitShopAction = (action: 'publish' | 'unpublish' | 'duplicate') => {
 	const apiUrl = useApiUrl('power-shop')
-	const invalidate = useInvalidate()
+	const invalidateProfitQueries = useInvalidateProfitQueries()
 	const mutation = useCustomMutation<TWrappedResponse<TProfitShop>>()
 
 	const mutateAsync = (id: number) =>
@@ -173,12 +160,7 @@ const useProfitShopAction = (action: 'publish' | 'unpublish' | 'duplicate') => {
 			},
 			{
 				onSuccess: () => {
-					invalidate({
-						resource: PROFIT_SHOP_RESOURCE,
-						invalidates: ['list', 'detail'],
-						id,
-						dataProviderName: 'power-shop',
-					})
+					void invalidateProfitQueries(PROFIT_SHOP_RESOURCE)
 				},
 			}
 		)
