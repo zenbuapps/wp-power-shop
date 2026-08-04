@@ -62,6 +62,7 @@ pnpm release:major
 21. **Don't** 想把 antd `<Table>` 的展開圖示放進「某個欄位內」（而非表格最左端）時，還去改 `components.body.row` 或另外處理展開列——用 `showExpandColumn: false` 關掉預設最左展開欄，改在目標欄位自刻按鈕 + 受控 `expandedRowKeys`（非受控點了沒反應）即可；`expandable` 與自訂 `components.body.row`（例如 dnd-kit 拖曳排序）**零衝突**，因為 rc-table 渲染展開列時只傳 `className` / `style` 給自訂 row component、**不傳 `data-row-key`**，會自動落進「先判斷 `data-row-key` 是否存在」這種既有守門的 fallback 分支。`expandedRowRender` 也天然 lazy（沒展開過的列不 render，收合是 `display:none` 不 unmount），查詢可以直接寫在展開列渲染的子元件裡，不需要自己刻快取。詳見 `react.rule.md` §6.5「`ItemsEditor` 變體展開列」。
 22. **Don't** 在賣場前台的加購路徑上漏掉 `profit_shop_id`——後端 `AddToCartHook`（priority 5）**只**從 `$_GET` / `$_POST` 讀它，讀不到就**靜默走商品原價、分潤失效，且沒有任何錯誤訊息**。Phase 12 起前台加購一律走 **WooCommerce 原生表單**：React Modal 的「加入購物車」動態建一張隱藏 `<form method="post">` POST 回本頁（欄位 `add-to-cart` / `quantity` / `variation_id` / `attribute_*` / `profit_shop_id`），`<noscript>` 降級路徑則是 GET query string；兩者都會正常填 `$_GET` / `$_POST`，三道閘門照常驗證。**Don't** 為了「不重新載入頁面」改用 `fetch` / axios 送 JSON body——PHP 不會填 `$_POST`，分潤會靜默失效；真要走 REST 就必須自己在呼叫 `add_to_cart()` 前把值橋接進 `$_POST`。也**不要**改用 `add_to_cart()` 的第 5 個參數 `$cart_item_data` 傳 `profit_shop_id`（`AddToCartHook` 開頭有 short-circuit，那會**跳過全部三道閘門**，變成任何人都能對任意商品套任意賣場的分潤價）。詳見 `react.rule.md` §6.7。（Phase 10 的 admin-ajax `FrontAjax` + WC Store API 雙通道、Phase 11 的自訂 REST `FrontCartApi` 皆已**整條移除**，前台不再有任何購物車 API。）
 23. **Don't** 改動賣場前台的 PHP↔React DOM 契約（`data-ps-product-id` / `.ps-btn` / `.ps-not-ready` / `#profit_shop_front_app`）——改了會讓商品 Modal 開不起來、卡片永久灰階，而且**不會有任何錯誤訊息**。
+24. **Don't** 在 cart 只呼叫 `set_price()` 就以為賣場覆寫價格已經完成——Cart Block / Store API 顯示的劃線原價讀的是 `get_regular_price()`（`WooCommerce/src/StoreApi/Schemas/V1/ProductSchema.php`），漏了它顧客會看到**商品原始原價**被劃掉、只有實收價正確，且沒有任何錯誤訊息。改動 cart 價格時 `price` / `regular_price` / `sale_price` **三者必須成套**（`set_price()` + `set_regular_price()` + `set_sale_price()`）；`sale_price` 留空時仍要顯式呼叫 `set_sale_price('')` 清掉商品原本的特價，否則會出現「原價劃掉→特價」但實收卻是覆寫原價的矛盾。詳見 `profit-shop.rule.md` §7 與 Phase 13。
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -69,7 +70,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）+ 10（賣場前台 UI 照搬 legacy）+ 11（賣場前台購物車改自訂 REST）+ 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台混合式 UI + Modal 加購端到端（WooCommerce 原生表單）+ Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式可實際嵌入頁面）。Phase 7 / 8 / 9 已 commit（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）；Phase 10 / 11 由 `issue/L3` 分支的 `ff81dbb` 帶入，經本次 merge 併進 `refactor/one-page`。⚠️ Phase 9 與 Phase 10 / 11 是**兩條平行開發的分支**（各自從 Phase 8 之後接續編號、各自都叫 Phase 9），合併時以 `refactor/one-page` 保號、`issue/L3` 順延一位收斂；讀舊 commit message 時請注意 `ff81dbb` 內文的「Phase 9 / 10」即本文件的 Phase 10 / 11。已知問題與技術債見 `specs/tech-debt.md`。
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）+ 10（賣場前台 UI 照搬 legacy）+ 11（賣場前台購物車改自訂 REST）+ 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車）+ 13（購物車顯示賣場覆寫後的原價 / 特價）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台混合式 UI + Modal 加購端到端（WooCommerce 原生表單）+ Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式可實際嵌入頁面 + 購物車劃線原價與單品頁 / 賣場卡片三處一致）。Phase 7 / 8 / 9 已 commit（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）；Phase 10 / 11 由 `issue/L3` 分支的 `ff81dbb` 帶入，經本次 merge 併進 `refactor/one-page`。⚠️ Phase 9 與 Phase 10 / 11 是**兩條平行開發的分支**（各自從 Phase 8 之後接續編號、各自都叫 Phase 9），合併時以 `refactor/one-page` 保號、`issue/L3` 順延一位收斂；讀舊 commit message 時請注意 `ff81dbb` 內文的「Phase 9 / 10」即本文件的 Phase 10 / 11。已知問題與技術債見 `specs/tech-debt.md`。
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -508,6 +509,55 @@ Phase 10 的前台購物車是「寫入走 admin-ajax（`FrontAjax`）、讀取�
 A/B/C 三組對照同時證明：`$_POST['profit_shop_id']` 確實被 `AddToCartHook`（priority 5）讀到、三道閘門對偽造 shop_id 有效、`CartPriceOverrideHook`（priority 999）驗章後 `set_price` 正確、`CartItemMetaDisplay` 分潤標記正常。**退回原生表單後不需要任何 `$_POST` 橋接**這個推論在真實環境成立。
 
 ⚠ 驗證過程踩到兩個**與本次改動無關**的環境陷阱，記錄下來避免重踩：(1) 站台裝了 **WP Rocket**，`/cart/` 頁與賣場頁的 GET 都會拿到快取版本，直接用 HTTP client 讀 `/cart/` 會看到「購物車是空的」的假象——要查真實購物車狀態必須走 `POST /?wc-ajax=get_refreshed_fragments`（見 TD-32）；(2) 系統 PATH 上的 `php` 不是 Local by Flywheel 的 PHP，`require wp-load.php` 會 Database Error，CLI 診斷腳本必須用 Local 自己的 PHP。
+
+### Phase 13（購物車顯示賣場覆寫後的原價 / 特價）已完工
+
+> 上游：team lead 已完成 systematic-debugging Phase 1-3 根因調查（不重複調查，直接進規劃）
+> 規劃：`specs/plan/2026-08-03-cart-regular-price-override-plan.md`（含 9 條已知風險 R-1～R-9、10 條失敗模式登記表、簽章版本遷移設計、過渡期行為矩陣、4 條待 team lead 拍板的決策點）
+> 對照實作：`SingleProductPriceHook`（Phase 9，單品頁的同型問題早已修好的另一半）
+
+站長回報：分潤賣場覆寫商品價格（原價 800 / 特價 600）後，購物車（WooCommerce Cart Block / Store API）顯示的**劃線原價**是商品的**原始** `regular_price`（1000），只有特價正確。成因是 `CartPriceOverrideHook::apply_override()` 只呼叫 `set_price()`，從未覆寫 `regular_price` / `sale_price`，而其 `resolve_effective_price()` 回傳型別 `?string` 在結構上就丟棄了原價覆寫這個資訊；`SingleProductPriceHook`（Phase 9，單品頁）當時早就是回傳 `{price, regular, sale}` 三元組，兩條路徑因此分歧，卻都「正常運作」、沒有任何錯誤訊息。
+
+| 層 | 內容 | 路徑 |
+|----|------|------|
+| Domain Service | **新增** `OverridePriceResolver`：從 `SingleProductPriceHook::resolve_prices()` 抽出的純 Domain 服務（不依賴 WP / WC），回傳 `{price, regular, sale}` 三元組，是 cart 與單品頁**唯一的取價真相**——取代原本靠人維持「逐字一致」的紀律（那個約定已失敗過一次，本 bug 即後果） | `Domain/Service/OverridePriceResolver.php` |
+| Infrastructure | `SingleProductPriceHook::resolve_prices()` 改為委派 `OverridePriceResolver`（純重構，行為零變更；`SingleProductPriceHookTest` 11 method **零修改**全綠，是重構無誤的直接證據） | `Infrastructure/WooCommerce/SingleProductPriceHook.php` |
+| Application Service | `CartPriceSignatureService`：`PAYLOAD_VERSION` 升 `v2`（payload 納入 regular / sale）+ `LEGACY_PAYLOAD_VERSION = 'v1'` 永久保留驗證能力 + `sign()` / `verify()` 各加兩個 optional 尾參（皆有預設空字串，既有 16 個測試方法僅 2 條版本前綴斷言需更新，其餘零修改）+ 新增 `payload_version(): ?string`（前綴不認得回 `null`）+ 抽 `build_payload()` 依版本組出 v1 / v2 payload | `Application/Service/CartPriceSignatureService.php` |
+| Infrastructure | `CartPriceOverrideHook`：新增 `META_REGULAR_OVERRIDE` / `META_SALE_OVERRIDE` 2 個 meta 常數 + meta key 清單收斂為 `META_KEYS_BASE` / `META_KEYS_V2` / `META_KEYS_ALL` 常數陣列（`restore_from_session()` / `strip_profit_meta()` / `has_all_profit_meta()` 三處共用，根除清單漂移）+ `resolve_effective_price()` 改名並委派 `OverridePriceResolver` → `resolve_override_prices()` 回傳三元組 + `before_calculate_totals()` 新增 `try_apply_for_version()` 依 `payload_version()` 分派 v1 / v2 驗證邏輯 + 新增 `apply_prices_to_product()` helper（`regular`/`sale` 的 `''` / `null` 語意分開處理）+ `has_all_profit_meta()` 改為條件式（`$require_v2` 參數，防新 meta 被無條件判必填）+ `reset_to_original_price()` 一併還原 regular / sale（防同一 request 內二次計算殘留竄改值）+ 新增 `normalize_nullable_price()`（`null`/`''` 提前 `return ''`，避免進 `wc_format_decimal` 被轉成 `'0.00'`）+ 修正 `normalize_price_for_signature()` docblock（僅改註解，不改行為，見下方要點） | `Infrastructure/WooCommerce/CartPriceOverrideHook.php` |
+| Loader | 建立共用的 `OverridePriceResolver` 實例，同時注入 `CartPriceOverrideHook` 與 `SingleProductPriceHook` 建構子 | `Loader.php` |
+| 測試 | **新增** `OverridePriceResolverTest`（11 method）；`CartPriceSignatureServiceTest` 16→26 method（**+10 新增**：v2 預設輸出 / regular 被竄改 / sale 被竄改 / 手動組出的 v1 簽章仍可驗證 / v1 簽章換 `v2.` 前綴必須失敗 / `payload_version()` 對各種前綴的回傳等；既有 16 method 中僅 2 條硬編 `'v1'` 字面值的斷言更新為 `'v2'`，其餘零修改）；`CartPriceOverrideHookTest` 14→27 method（**+13 新增**：核心回歸 5 + v1 相容與安全 6 + 連帶行為 2；另修正既有 6 條斷言為實測值 `'888.00'` / `'666.00'`，即 R-5） | `tests/Unit/Domain/Service/` + `tests/Unit/Application/Service/` + `tests/Integration/Infrastructure/WooCommerce/` |
+
+**Phase 13 完工要點**：
+- **`OverridePriceResolver` 是本次最重要的架構收斂**：把 cart 與單品頁「取價語意必須逐字一致」從一條**靠人記住**的紀律，變成**結構上做不到分歧**的設計——兩邊都委派同一份 Domain 服務。詳見 `profit-shop.rule.md` §7「`OverridePriceResolver`」
+- **簽章版本遷移是本次複雜度核心**：`CartPriceSignatureService` 從 v1 升級到 v2（payload 納入 regular/sale），**v1 驗證分支永久保留、不設下架期限**——登入使用者的持久化購物車（`_woocommerce_persistent_cart_{blog_id}`）沒有任何過期機制，拔掉 v1 會讓那些既有購物車的分潤價**靜默消失**且無任何錯誤訊息。7 種情境的過渡期行為矩陣、版本判斷規則、v1→v2 就地升級的前置條件詳見 `profit-shop.rule.md` §7
+- **安全紀律**：版本判斷一律用 `CartPriceSignatureService::payload_version()`，**不可**用「regular/sale meta 是否存在」判斷——否則攻擊者可保留合法 v1 簽章、額外注入偽造的 `_profit_regular_price_override`，讓假原價繞過簽章保護生效。已有 IT 安全測試鎖死
+- **`regular === ''` 與 `sale === ''` 語意不同**：regular 空字串 = 不覆寫（沿用商品原本原價）；sale 空字串 = **必須寫入** `set_sale_price('')` 清掉商品原本特價，否則會出現「原價劃掉 → 特價」但實收是覆寫原價的矛盾
+- **修正一處既有文件錯誤描述（R-5）**：`normalize_price_for_signature()` 的舊 docblock 宣稱 `wc_format_decimal($price, '')` 會 trim trailing zeros（`'888'` → `'888'`），實際行為是補足到預設小數位（`'888'` → `'888.00'`，因 `$trim_zeros` 未傳 `true`）。這極可能就是 `specs/tech-debt.md` TD-1 記載的「cart hook 6 個 pre-existing 失敗」的成因，Phase 13 修正了 docblock 與對應的 6 條測試斷言（**只改文件與測試，不改行為**——修行為會讓所有既有 v1 簽章的 payload 格式改變，導致既有購物車驗章全滅）
+- **行為變更（刻意接受，已告知站長）**：套用 regular/sale 後 `WC_Product::is_on_sale()` 會反映真實特價狀態，可能讓「排除特價商品」的優惠券對分潤商品從可折扣變成不可折扣。語意上正確（與 `SingleProductPriceHook` 在單品頁的既有行為一致），已寫 IT 測試鎖住此行為變更
+- 新增技術債 2 條：TD-34（跨層級 regular < sale 的荒謬顯示，R-8，與單品頁行為一致、刻意不修）、TD-35（v1 驗證分支不是死碼，必須永久保留）；另發現 1 條 pre-existing 測試 flaky，登記 TD-36（見下方「failure 減 5 而非減 6」）
+- 不引入新 npm / composer 套件；不改 `AddToCartHook`（三道閘門）、`CartItemMetaDisplay`、`OverrideItem` / `PriceOverride` / `VariationOverride` / `PriceCalculator` Domain 層、`V2Api`、`specs/api/api.yml`（cart meta 不是 wire 契約）、任何前端檔案；訂單 / 訂單 email 已查證完全不使用 `regular_price`（line item 存的是 `subtotal` / `total`），故本次不需改動
+
+**驗證數據**（實測，2026-08-03；baseline 為動工前實測，非沿用文件記載數字）：
+
+| 層級 | Baseline（動工前實測） | 完成後 | 判定 |
+|---|---|---|---|
+| Unit | 362 tests / 736 assertions / 1 failure | **399 / 816 / 1** | +37 tests，failure 未增加（TD-2 pre-existing） |
+| Integration | 216 / 928 / 20 failures | **229 / 976 / 15** | +13 tests，failure **減 5**（詳見下方說明） |
+| `vendor/bin/phpcs inc/` | 133/133 綠 | **134/134 綠** | +1 新檔（`OverridePriceResolver.php`） |
+| `CartPriceOverrideHookTest` 單獨跑 | 6 failures | **OK（27 tests / 84 assertions）** | 全綠 |
+| `OverridePriceResolverTest` 單獨跑 | — | **OK（11 tests / 37 assertions）** | 新增 |
+| `SingleProductPriceHookTest` | 11 method | **`git diff` 為空、全綠** | 重構零破壞的直接證據 |
+
+**failure 減 5 而非減 6**：cart hook 那 6 條確實全數轉綠（R-5 修正生效），但 `PartnerReportsScopeTest` 在完整跑 integration testsuite 時多浮現 1 條失敗（`test_partner_a_token_settlements_query_string_attack_ignored`，預期 401 實得 200）。已用 `git stash` 對照確認：baseline 狀態下**單獨**跑該檔同樣失敗（只是失敗的是另一條方法 `test_partner_a_token_can_only_see_partner_a_kpi`），屬於 order-dependent 的 pre-existing flaky，與本次改動無關，已登記 `specs/tech-debt.md` TD-36。
+
+**真實站台端到端驗證**（`local-turbo.powerhouse.tw`，賣場 `test-shop-alpha` shopId=1932，商品 65 T-Shirt 原始價 18、賣場覆寫 300/240），直接讀 Store API `/wp-json/wc/store/v1/cart` 的 `items[].prices`：
+
+| 情境 | price | regular_price | sale_price | item_data 分潤標記 |
+|---|---|---|---|---|
+| POST 加購帶 `profit_shop_id=1932` | 240 | **300** | 240 | 有 |
+| POST 加購**不帶** `profit_shop_id` | 18 | 18 | 18 | 無（零殘留） |
+
+修復前 `regular_price` 會是商品原始的 18（劃線價顯示錯誤）。負向驗證（不帶 `profit_shop_id`）證明作用範圍精準收斂、零殘留。
 
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 

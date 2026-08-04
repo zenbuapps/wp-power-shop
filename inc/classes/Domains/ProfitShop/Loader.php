@@ -9,6 +9,7 @@ namespace J7\PowerShop\Domains\ProfitShop;
 
 use J7\PowerShop\Domains\ProfitShop\Application\Service\CartPriceSignatureService;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PageRateLimitService;
+use J7\PowerShop\Domains\ProfitShop\Domain\Service\OverridePriceResolver;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\AddToCartHook;
@@ -91,10 +92,15 @@ final class Loader {
 			CptProfitShopRepository::instance()
 		);
 
+		// Phase 13：cart 與單品頁共用同一份取價語意（{price, regular, sale} 三元組）。
+		// 兩邊各自複製一份 fallback chain 曾導致「購物車劃線原價顯示商品原始原價」的分歧。
+		$price_resolver = new OverridePriceResolver();
+
 		// Phase 3-D：前台 cart 價格 override hook（最高風險：影響真實訂單金額）
 		CartPriceOverrideHook::instance(
 			CptProfitShopRepository::instance(),
-			new CartPriceSignatureService( new WpSaltProvider() )
+			new CartPriceSignatureService( new WpSaltProvider() ),
+			$price_resolver
 		);
 
 		// Phase 4-C2：cart UI「來自賣場 XXX」分潤標記（mini-cart / cart page / checkout 一致顯示）
@@ -105,7 +111,8 @@ final class Loader {
 		// Phase 9：WC 單品頁套用賣場覆寫價（含變體），消除「單品頁一個價、購物車另一個價」的落差。
 		// 只在 is_product() 且網址帶 profit_shop_id 時才註冊 filter，不影響 cart / checkout。
 		SingleProductPriceHook::instance(
-			CptProfitShopRepository::instance()
+			CptProfitShopRepository::instance(),
+			$price_resolver
 		);
 	}
 }

@@ -232,17 +232,101 @@ Authorization: Bearer <partner_A_token>
 
 `ProfitShop::change_status()` 內部檢查 `VALID_STATUSES`，違反則拋 `InvalidStatusTransition`。直接設 `$status` 屬性是不允許的（property 是 `protected`）。
 
-### Cart price signature normalize 兩端一致（Phase 3-D T-8）
+### Cart price signature normalize 兩端一致（Phase 3-D T-8；Phase 13 更正實測行為）
 
 `CartPriceOverrideHook` 的 sign / verify / set_price 三處呼叫點**必須**使用同一個 `normalize_price_for_signature(string): string` helper：
 
 ```php
-// 用 wc_format_decimal 第二參數空字串，trim trailing zeros
 wc_format_decimal( $price, '' )
-// '888' → '888'、'888.50' → '888.5'、'888.55' → '888.55'
 ```
 
+⚠️ **真實行為**（已於 Phase 13 實測確認，2026-08-03）：
+
+```
+'888'     → '888.00'
+'888.0'   → '888.00'
+'888.00'  → '888.00'
+'888.5'   → '888.50'
+'888.55'  → '888.55'
+```
+
+也就是**補足到 `wc_get_price_decimals()` 位小數**，**不是** trim trailing zeros——第二參數 `$dp = ''` 讓函式走 `number_format()` 分支，第三參數 `$trim_zeros` 預設 `false` 且本呼叫沒有傳 `true`。**本文件先前的描述是錯的**（曾寫「trim trailing zeros，`'888'` → `'888'`」）。這極可能就是 `specs/tech-debt.md` TD-1 記載的「cart hook 6 個 pre-existing 失敗」的成因——`CartPriceOverrideHookTest` 內斷言 `'888'` / `'666'` 字面值的 6 個方法原本會失敗（`Expected '888' / Actual '888.00'`），Phase 13 已修正這 6 條測試斷言（純測試變更，非產品行為變更）。
+
+**不要為了讓行為符合「trim trailing zeros」的直覺去改 `normalize_price_for_signature()`。** 改了會讓所有既有 v1 簽章的 payload 價格字串從 `'888.00'` 變成 `'888'` → **既有購物車驗章全數失敗** → `strip_profit_meta()` + `reset_to_original_price()` → **分潤價靜默消失**，且沒有任何錯誤訊息（站長通常要等到對帳才會發現）。產品端零影響：`_profit_price_override` 不對外顯示，`set_price('888.00')` 之後所有 WC 計算與 `wc_price()` 顯示都走數值比較，`'888.00'` 與 `'888'` 完全等價。
+
 若任何路徑漏 normalize（例如 sign 端用 `'888'` / verify 端經過 `wc_format_decimal` 變 `'888.00'`），舊 cart signature 會全部驗證失敗→靜默 fallback 到原價→商家損失。整個 cart_item 生命週期都用 normalized 形式儲存。
+
+### Cart 也要套 regular / sale，不是只有 price（Phase 13）
+
+`CartPriceOverrideHook` 曾經在 `before_calculate_totals` 只呼叫 `set_price()`，從未呼叫 `set_regular_price()` / `set_sale_price()`。結果是購物車（WooCommerce Cart Block / Store API）顯示的**劃線原價**讀到的是商品的**原始** `regular_price`，而非賣場覆寫後的原價——實收價正確、劃線價錯誤，且沒有任何錯誤訊息。成因是舊版 `resolve_effective_price(): ?string` 的回傳型別在結構上就把「原價覆寫」這個資訊丟掉了；`SingleProductPriceHook`（單品頁，Phase 9）當時已經是回傳 `{price, regular, sale}` 三元組，兩條路徑因此分歧（見下方「`OverridePriceResolver`」如何根除這個分歧）。
+
+修法是 cart 端改為向 `OverridePriceResolver` 取同一份三元組，並在驗章通過後套用完整三個值。cart_item meta 因此從 4 筆擴為 6 筆：
+
+| meta key | 用途 | `''` 的語意 |
+|----------|------|-------------|
+| `_profit_shop_id` | 賣場 ID | — |
+| `_profit_partner_term_id` | 分潤夥伴 term ID | — |
+| `_profit_price_override` | 實際生效價格（`set_price()` 用） | 有覆寫才會寫入 meta，不會是空字串 |
+| `_profit_regular_price_override` | 覆寫後原價（`set_regular_price()` 用） | **「不覆寫原價」，沿用商品原本的原價** |
+| `_profit_sale_price_override` | 覆寫後特價（`set_sale_price()` 用） | **「沒有特價」，呼叫端必須主動清掉商品原本的特價** |
+| `_profit_signature` | HMAC 簽章 | — |
+
+⚠️ **`regular === ''` 與 `sale === ''` 語意不同，這是本檔最容易寫錯的一行**：
+- `regular === ''` ⇒「不覆寫原價」⇒ **不呼叫** `set_regular_price()`，沿用商品原本的原價（對齊 `SingleProductPriceHook::filter_regular_price()`）
+- `sale === ''` ⇒「沒有特價」⇒ **必須呼叫** `set_sale_price('')` 清掉商品原本的特價（對齊 `SingleProductPriceHook::filter_sale_price()`）——不清會出現「原價劃掉 → 特價」但實收卻是覆寫原價的矛盾
+
+`reset_to_original_price()`（驗章失敗時的 fallback）同樣要一併還原 regular / sale，不能只還原 price：同一個 request 內 `calculate_totals()` 會被呼叫多次，若第一次驗章通過（已寫入覆寫 regular/sale）、第二次因竄改而失敗，只還原 price 會讓錯誤的劃線價殘留在畫面上。
+
+**行為變更（刻意接受）**：設了 regular/sale 之後 `WC_Product::is_on_sale()` 會變 `true`，而 `WC_Discounts` 用它判斷優惠券的 `exclude_sale_items`。所以站台若有「排除特價商品」的優惠券，分潤賣場的商品會從可折扣變成不可折扣。這在語意上是**正確的**（該品項確實在特價中），且與 `SingleProductPriceHook` 在單品頁的既有行為一致——這不是 bug，已寫 IT 測試鎖住（`test_override_makes_cart_item_on_sale_for_exclude_sale_items_coupon`）。
+
+### 簽章版本遷移：v1 分支永久保留，不可移除（Phase 13）
+
+把 regular / sale 納入簽章 payload 是必要的（未簽章的話，攻擊者改自己 cart session 裡的 `_profit_sale_price_override` 就能翻轉 `is_on_sale()`，讓「排除特價商品」的優惠券變成可用或反之——這是有金額影響的，不只是顯示層風險）。但若不做版本相容，**所有既有購物車**驗章會全部失敗。`CartPriceSignatureService` 因此同時支援兩個 payload 版本：
+
+```
+v1（既有，永久保留驗證能力）：'cart-signature:v1|{shop_id}|{partner_term_id}|{price}'
+v2（現行，sign() 一律產出）：  'cart-signature:v2|{shop_id}|{partner_term_id}|{price}|{regular}|{sale}'
+```
+
+`{regular}` / `{sale}` 為 normalize 後的字串，未覆寫一律是空字串 `''`（絕不可是 `null`，見 `CartPriceOverrideHook::normalize_nullable_price()`）。domain prefix 本身含版本字串（`cart-signature:v1` vs `cart-signature:v2`），這是「兩個版本的 hash 天然不可互通」的來源——v1 簽章硬改成 `v2.` 前綴必須驗證失敗，已有測試鎖死。
+
+**🔴 v1 分支不可移除、不設下架期限。** 理由：登入使用者的**持久化購物車**寫在 usermeta（`_woocommerce_persistent_cart_{blog_id}`），**沒有任何過期機制**，只有結帳完成或清空購物車才會被刪除（相對地訪客 session 只活 2 天、登入使用者一般 session 只活 1 週）。移除 v1 分支 = 那些購物車的簽章驗證失敗 = `strip_profit_meta()` + `reset_to_original_price()` = **分潤價靜默消失，顧客與站長都不會收到任何訊息**，通常要等到對帳才會發現。這不是忘了清的死碼，已登記 `specs/tech-debt.md` TD-35。
+
+**過渡期行為矩陣**（`apply_override()` / `try_apply_for_version()` 的判斷依據）：
+
+| cart item 情境 | 簽章 | regular/sale meta | 套用結果 |
+|---|---|---|---|
+| 改版前加入、之後沒再加購 | v1 | 無 | ✅ price 套用、regular/sale **不動**（維持改版前行為，價格不退回原價） |
+| 改版前加入 + 攻擊者注入假 regular meta | v1 | 有（偽造） | ✅ price 套用、假 regular **強制忽略** |
+| 改版後新加購 | v2 | 有 | ✅ price + regular + sale 全套用（劃線價修好） |
+| v2 但 regular/sale meta 被刪 | v2 | 缺 | ❌ fallback 原價 + `error_log` |
+| v2 且 regular/sale meta 被竄改 | v2 | 有（偽造） | ❌ fallback 原價 + `error_log` |
+| v1 簽章硬改成 `v2.` 前綴 | 偽 v2 | 任意 | ❌ fallback 原價 + `error_log` |
+| 同一顧客車內 v1 + v2 品項並存 | 混合 | 混合 | ✅ 逐品項獨立判版，兩者都正確 |
+
+**若日後真的要拔掉 v1**，必須先做 v1→v2 就地升級：在 `restore_from_session()`（每個 request 每個品項只跑一次，比 `before_calculate_totals` 便宜很多）偵測到 v1 簽章且驗章通過時，回查賣場、重新解析三元組、改寫成 v2 meta + v2 簽章；等升級路徑上線並跑滿一段時間後才移除 v1。**Phase 13 本身沒有做這件事**（會把 repository 查詢加回熱路徑，且非當時需求）。
+
+### 版本判斷必須用 `payload_version()`，不可用「meta 是否存在」（Phase 13，安全紀律）
+
+`CartPriceSignatureService::verify()` 只回 `bool`，無法告訴呼叫端是哪個版本驗過的。若 `CartPriceOverrideHook` 改用「regular meta 存不存在」判斷要不要套用 regular/sale，會出現這個漏洞：
+
+> 攻擊者保留合法的 v1 簽章（驗證通過），**額外注入**一筆偽造的 `_profit_regular_price_override`。hook 若看到 meta 存在就以為是 v2 → 用 v2 payload 驗 → v2 分支失敗（因為 v1 簽章從未涵蓋 regular/sale）→ 落到 v1 分支 → 只驗 price → **通過** → 於是套用了一個**從未被簽章保護的假原價**。
+
+因此 `CartPriceOverrideHook::try_apply_for_version()` 一律先呼叫 `$this->signatures->payload_version($signature)` 決定分支，**v1 分支無條件忽略任何 regular/sale meta**（即使 cart_item 上出現這兩筆 meta，也視為未提供）——不是靠 meta 是否存在來判斷版本。這條規則在程式碼註解與 `CartPriceSignatureService::verify()` 的 docblock 都有明寫，且有 IT 安全測試鎖死（`test_legacy_v1_signature_ignores_injected_regular_price_meta`）。
+
+### `OverridePriceResolver`：cart / 單品頁的唯一取價真相（Phase 13）
+
+在 Phase 13 之前，「cart 與單品頁的取價語意必須逐字一致」只是**靠人維持的紀律**（程式碼註解要求兩邊複製時要對齊）——這個約定失敗過一次：cart 端的 `resolve_effective_price()` 回傳單一價格字串，結構上丟失了「原價覆寫」，於是購物車劃線原價一直顯示商品的原始 `regular_price`，而單品頁顯示的是覆寫後的原價，兩邊都「正常運作」、沒有任何錯誤訊息。
+
+Phase 13 把這份 fallback chain 抽成 `Domain\Service\OverridePriceResolver`（純 Domain 服務，不依賴 WP / WC，可在 `tests/Unit/Domain/` 不啟 WP 直接測），`CartPriceOverrideHook` 與 `SingleProductPriceHook` 都改為委派它取 `{price, regular, sale}` 三元組。**任何新的取價需求都應該呼叫這個類別，不要再複製一份 fallback chain**——這把「逐字一致」從一條靠人記住的紀律，變成結構上做不到分歧。
+
+Fallback 語意（`OverridePriceResolver::resolve()` class docblock 明寫）：變體只要有**任一**覆寫欄位（原價或特價），就**整組**採用變體層，**不與商品層逐欄混用**。若改成逐欄 fallback，會出現「單品頁顯示商品層特價、購物車實收變體層原價」這種價格跳動——那正是本類要消滅的問題（與 R-8 的「跨層級 regular < sale」是不同層次的取捨：前者是「哪一層生效」，後者是「同一層內 regular 與 sale 的相對大小」，見 `specs/tech-debt.md` TD-34）。
+
+重構驗收標準：`SingleProductPriceHookTest`（11 method）**零修改**全綠——`git diff` 對該測試檔為空是「委派沒有改變單品頁既有行為」的直接證據。
+
+### `is_on_sale()` 翻轉 → `exclude_sale_items` 優惠券行為變更（Phase 13，R-6）
+
+見上方「cart 也要套 regular / sale」的「行為變更」段落——這裡補充成因供日後排查：`WC_Product::is_on_sale()` 的判斷式是 `'' !== get_sale_price() && get_regular_price() > get_sale_price()`；`WC_Discounts` 對 `exclude_sale_items = true` 的優惠券會排除 `is_on_sale()` 為 `true` 的品項。改版前 cart item 只 `set_price()`，`is_on_sale()` 讀的是商品原始的 regular/sale；改版後套用賣場覆寫的 regular/sale，`is_on_sale()` 會如實反映「這個品項現在正在特價中」，因此可能從「可折扣」變成「不可折扣」。若站長回報「排除特價商品」優惠券對分潤賣場商品的行為改變了，這是預期中的正確行為，不是迴歸。
 
 ### Cart override 僅限 `status='publish'` 賣場（Phase 3-D T-8 reviewer L-3）
 

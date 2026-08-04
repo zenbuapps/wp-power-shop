@@ -20,8 +20,9 @@
  *   3. 當前商品必須存在於 shop->items()
  *   任一條件失敗 → 完全不註冊 filter，單品頁走商品原價。
  *
- * ⚠️ 價格語意必須與 CartPriceOverrideHook::resolve_effective_price() 完全一致，
- *    否則「單品頁顯示的價」與「購物車實收的價」會對不起來——那正是本類要消滅的問題。
+ * ⚠️ 價格語意由 Domain\Service\OverridePriceResolver 統一提供，與 CartPriceOverrideHook
+ *    共用同一份實作——兩邊各自複製一份 fallback chain 曾經導致「單品頁顯示覆寫原價、
+ *    購物車劃線價卻是商品原始原價」的分歧，且沒有任何錯誤訊息。不要把解析邏輯搬回本類。
  */
 
 declare(strict_types=1);
@@ -31,6 +32,7 @@ namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce;
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\OverrideItem;
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\ProfitShop;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterface;
+use J7\PowerShop\Domains\ProfitShop\Domain\Service\OverridePriceResolver;
 
 /**
  * 單品頁價格 override hook
@@ -61,17 +63,28 @@ final class SingleProductPriceHook {
 	private ?OverrideItem $item = null;
 
 	/**
+	 * 價格解析器（與 CartPriceOverrideHook 共用同一份取價語意）
+	 *
+	 * @var OverridePriceResolver
+	 */
+	private readonly OverridePriceResolver $resolver;
+
+	/**
 	 * 建構子
 	 *
 	 * 掛 template_redirect priority 20：
 	 * - 晚於 ProfitShopRenderer 的 9（賣場頁自己 exit，不會走到這裡）
 	 * - 此時主查詢已解析完成，is_product() 才可靠
 	 *
-	 * @param ProfitShopRepositoryInterface $shops 賣場 Repository（DIP，禁鴨子型別）
+	 * @param ProfitShopRepositoryInterface $shops    賣場 Repository（DIP，禁鴨子型別）
+	 * @param OverridePriceResolver|null    $resolver 價格解析器；null 時建立預設實例（純 Domain 物件、無狀態）
 	 */
 	public function __construct(
-		private readonly ProfitShopRepositoryInterface $shops
+		private readonly ProfitShopRepositoryInterface $shops,
+		?OverridePriceResolver $resolver = null
 	) {
+		$this->resolver = $resolver ?? new OverridePriceResolver();
+
 		// admin context guard：純後台（非 ajax）不掛 hook，與其餘 WooCommerce hook 一致
 		if ( \is_admin() && ! \wp_doing_ajax() ) {
 			return;
@@ -288,11 +301,11 @@ final class SingleProductPriceHook {
 	}
 
 	/**
-	 * 解析價格三元組
+	 * 解析價格三元組（委派 Domain\Service\OverridePriceResolver）
 	 *
-	 * ⚠️ Fallback 語意必須與 CartPriceOverrideHook::resolve_effective_price() 逐字一致：
-	 * 變體只要有任一覆寫欄位，就整組採用變體層，**不與商品層逐欄混用**。
-	 * 若這裡改成逐欄 fallback，會出現「單品頁顯示 A 價、購物車實收 B 價」。
+	 * ⚠️ Fallback 語意刻意**不**在本類實作：cart 端（CartPriceOverrideHook）與本類必須
+	 * 用同一份規則，兩邊各自複製一份就是價格分歧的成因。要調整取價語意請改
+	 * OverridePriceResolver，兩條路徑會一起變。
 	 *
 	 * @param int|null $variation_id 變體 ID；null 表示父商品 / 一般商品
 	 *
@@ -303,30 +316,7 @@ final class SingleProductPriceHook {
 			return null;
 		}
 
-		if ( null !== $variation_id ) {
-			$variation_override = $this->item->get_variation_override( $variation_id );
-			if (
-				null !== $variation_override
-				&& ( null !== $variation_override->sale_price || null !== $variation_override->regular_price )
-			) {
-				return [
-					'price'   => (string) ( $variation_override->sale_price ?? $variation_override->regular_price ),
-					'regular' => $variation_override->regular_price,
-					'sale'    => $variation_override->sale_price,
-				];
-			}
-		}
-
-		$parent_override = $this->item->override;
-		if ( null !== $parent_override->sale_price || null !== $parent_override->regular_price ) {
-			return [
-				'price'   => (string) ( $parent_override->sale_price ?? $parent_override->regular_price ),
-				'regular' => $parent_override->regular_price,
-				'sale'    => $parent_override->sale_price,
-			];
-		}
-
-		return null;
+		return $this->resolver->resolve( $this->item, $variation_id );
 	}
 
 	/**
