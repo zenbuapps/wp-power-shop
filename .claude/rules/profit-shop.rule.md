@@ -980,7 +980,8 @@ Phase 9 新增測試（賣場商品變體層價格 / 灌水人數覆寫）：
 | Phase 11（賣場前台購物車改自訂 REST：`FrontCartApi`（6 endpoint）取代 `FrontAjax` + WC Store API 雙通道、`$_POST` 橋接維持 `AddToCartHook` 三閘門、REST context `wc_load_cart()` 就緒、nonce 死鎖解法）| commit `ff81dbb`（`issue/L3` 原本的 Phase 10） |
 | Phase 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車：`FrontCartApi` 刪檔 + `AddToCartButton` 改動態建隱藏表單 + template 自印 `wc_print_notices()`）| commit `61dced7` |
 | Phase 13（購物車顯示賣場覆寫後的原價 / 特價：`OverridePriceResolver` 新增 + `CartPriceSignatureService` v1/v2 簽章版本遷移 + `CartPriceOverrideHook` 套用 regular/sale）| commit `e4a45b8` |
-| Phase 14（賣場前台改 PHP + daisyUI + vanilla JS：`js/src/profit-shop-front/` React bundle 整目錄刪除 + `ProfitShopFrontView` 新增 + 卡片 / Modal partials + CSS 統一交給 powerhouse 管理 + 獨立頁面與 shortcode 兩條路徑渲染統一 DOM）| 待 commit（本次改動） |
+| Phase 14（賣場前台改 PHP + daisyUI + vanilla JS：`js/src/profit-shop-front/` React bundle 整目錄刪除 + `ProfitShopFrontView` 新增 + 卡片 / Modal partials + CSS 統一交給 powerhouse 管理 + 獨立頁面與 shortcode 兩條路徑渲染統一 DOM）| `8cb0b05` |
+| Phase 15（商品 Modal 改 AJAX 加購：WooCommerce 原生 `?wc-ajax=add_to_cart` + 按鈕 loading + daisyUI toast；數量 -/+ 按鈕補框線；移除 `CartItemMetaDisplay`，前台不再顯示「來自賣場 XXX」）| `8cb0b05`（與 Phase 14 同一個 commit——兩者在 4 個新檔案內逐行交錯，拆開會產生無法運作的中間 commit）|
 
 設計與決策來源：
 - `specs/2026-05-06-profit-shop-design.md`（含 Q1-Q6 plan 階段決策、§4 endpoint、§6.11 slug 衝突、§7 例外對映）
