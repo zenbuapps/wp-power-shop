@@ -50,20 +50,23 @@ pnpm release:major
 9. **Don't** remove the Enqueue Guard (`General::in_url(['page=power-shop'])`)
 10. **Don't** 在 ProfitShop / ProfitPartner / ProfitMigration 用 `useTable` / `useForm`（後端 `{code, data}` 與 antd-toolkit dataProvider shape 不相容）—— 用 `useCustom` / `useCustomMutation` 並明確指定 `dataProviderName: 'power-shop'`。⚠️ **連帶紀律**：這三個 resource 的快取失效**必須**用 `useInvalidateProfitQueries`（`@/hooks`），**不可**用 Refine 的 `useInvalidate`——後者產生的 queryKey 在 resource 命名空間，`useCustom` 的在 custom 命名空間，兩者前綴對不上、**一次都打不中**；配上 `main.tsx` 全域 `staleTime: 10 分鐘`，症狀是「改完資料回列表頁看到的還是舊內容」且無任何錯誤訊息。詳見 `react.rule.md` §3。
 11. **Partner self-service portal** 是**獨立 SPA bundle**（mount 點 `#profit_partner_portal`，URL `/profit-report/{slug}/`），與 admin SPA 完全隔離。Auth 走 cookie + sessionStorage metadata（永不存 token）；不用 Refine / dataProvider，直接 axios + `useCustom`/`useCustomMutation`；不打包 admin（grep `App1` / `Refine` 0 命中為驗收）。
-12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**，商品 grid 一律由 PHP 印出（SEO 內容必須留在 HTML）。Phase 10 起是**混合式**：PHP 負責內容，另有第三個 React bundle（`js/src/profit-shop-front/`，antd）掛互動層——Phase 12 起這一層**只剩「商品 Modal」**（購物車表格已移除，購物車與結帳一律走 WooCommerce 自己的頁面）。**Don't** 把商品名稱、價格搬離 PHP 輸出。AddToCart 走 **WooCommerce 原生表單送出**（帶 `profit_shop_id`），由 WC `woocommerce_add_cart_item_data` filter 注入分潤標記，再交給 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價；加購結果由 template 自印的 `wc_print_notices()` 呈現（賣場頁不是 WC template，佈景主題的 `woocommerce_output_all_notices` 不會被觸發）。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。**Shortcode 呈現模式**另有 `[power_shop_profit_shop id="{post_id}"]`（`ProfitShopShortcode`，與上述 template 共用同一份，靠 `$is_shortcode_context` 旗標把外層 `<main>` 換成 `<div>`）；⚠️ 但 shortcode 模式的賣場**公開網址仍然開得起來**（`ProfitShopRenderer` 不檢查 `mode`），`BasicTab.tsx` 的據實告知警語不可移除。詳見 `profit-shop.rule.md` §7 / §12.8、`react.rule.md` §6.7 與 `specs/tech-debt.md` TD-13。
+12. **賣場前台**（`/profit-shop/{slug}/`，customer-facing）走 **PHP page template + theme 整合**，商品 grid 與商品 Modal（`<dialog class="pc-modal">`）**全部由 PHP 印出**（SEO 內容必須留在 HTML）。Phase 10-13 曾是「PHP 印內容 + React/antd bundle 掛互動層」的混合式；**Phase 14 起已移除 React / antd**（`js/src/profit-shop-front/` 整目錄與 `vite.config.ts` 第三個 entry 都已刪除），互動層改成**手寫 vanilla JS**（`inc/assets/js/profit-shop-front.js`，不進 Vite build pipeline），只負責五件事：開 Modal、Gallery 縮圖切換、描述展開收合、數量加減、變體選擇（依選中變體重寫 `variation_id` / `attribute_*` hidden input）。**Don't** 把商品名稱、價格搬離 PHP 輸出。AddToCart 是一張 **PHP 直接印出**的 WooCommerce 原生表單（帶 `profit_shop_id`），交給 WC `woocommerce_add_cart_item_data` filter 注入分潤標記，再由 Phase 3-D `CartPriceOverrideHook` 簽章 / 套價；加購結果由 template 自印的 `wc_print_notices()` 呈現（賣場頁不是 WC template，佈景主題的 `woocommerce_output_all_notices` 不會被觸發）。注意這條路與 Partner Portal SPA（`/profit-report/{slug}/`）路線**完全不同**：partner portal 走獨立 SPA + 不走 theme；賣場前台走 PHP template + 走 theme。**Shortcode 呈現模式**另有 `[power_shop_profit_shop id="{post_id}"]`（`ProfitShopShortcode`，與上述 template 共用同一份）；Phase 14 起 `$is_shortcode_context` 旗標已移除，**兩條路徑渲染逐字相同的 DOM**（外層一律 `<div>`，且都會傳 `$front_settings` 並呼叫 `ProfitShopFrontView::enqueue()`——早期 shortcode 路徑漏傳 `$front_settings` 曾讓已結束販售的賣場照樣可加購，見 `profit-shop.rule.md` §7）。⚠️ 但 shortcode 模式的賣場**公開網址仍然開得起來**（`ProfitShopRenderer` 不檢查 `mode`），`BasicTab.tsx` 的據實告知警語不可移除。詳見 `profit-shop.rule.md` §7 / §12.8、`react.rule.md` §6.7 與 `specs/tech-debt.md` TD-13。
 13. **Always** 讓 admin 列表頁遵循 `.claude/rules/admin-list-ui.rule.md` 的「篩選卡片 + 實體列表 & 新增按鈕」標準版型（基準範本 `#/products`）：兩張 `antd-toolkit` 的 `Card`、新增按鈕在列表卡片內 Table 之上、Table 鋪 `defaultTableProps` + `getDefaultPaginationProps({label})`。**Don't** 用 Refine `<List>` 當列表頁外框、**Don't** 用 `antd` 的 `Card`。
 14. **Don't** 假設 `pnpm lint` 存在——實際腳本是 `pnpm lint:ts`（含 `--fix`）與 `pnpm lint:php`（含 `phpcbf`，會改檔案）；CI / agent 唯讀檢查用 `npx eslint "js/src/**/*.{ts,tsx}"`（不加 `--fix`）與 `composer lint`。
 15. **Don't** 把 antd `<Form>`（尤其 `type="submit"` 按鈕）直接放進 `antd-toolkit` 的 `SimpleModal` 而不處理事件冒泡——遮罩對所有冒泡 click 呼叫 `preventDefault()`，會連帶取消表單送出且無任何錯誤訊息。修法與清單見 `react.rule.md` §6.4 與 `admin-list-ui.rule.md` §7。
 16. **Don't** 對 `wc-rest` resource 只設 `pagination.pageSize` 就假設分頁生效——WC REST API 只認 `per_page`，要把它當 **filter** 送才會生效，否則靜默退回每頁 10 筆。詳見 `react.rule.md` §3。
 17. **Don't** 用 `agent-browser` 之類的瀏覽器自動化 CLI 截圖時假設呼叫端 shell 的 `cd` 會影響它的相對路徑——`agent-browser` 是**獨立行程**，相對路徑是相對於它自己的工作目錄（通常是專案根），**不是**呼叫端 shell 當下所在目錄。截圖 / 輸出檔案一律傳**絕對路徑**，否則檔案會落在專案根目錄，混進 `git status` 的 untracked 清單，有被 `git add -A` 誤收進版本庫的風險。
 18. **Don't** 以為 Refine dataProvider 的錯誤物件（`HttpError`）帶有 `error.response.data`——Refine 只保留 `{ message, statusCode }`，原始 response body（含後端 `code` / `data`）已經不見，`statusCode` 甚至可能與真實 HTTP 狀態碼不符。錯誤訊息解析要 fallback 到 `error.message`，不要假設一定讀得到 `response.data.code`。詳見 `react.rule.md` §3。
-19. **Don't** 寫帶 `tw-` prefix 的 Tailwind class——`tailwind.config.js` **沒有設 `prefix`**，class 一律無前綴（`mb-2` / `flex`）。唯一的例外是 config `plugins` 手寫的 6 個（`tw-hidden` / `tw-block` / `tw-inline` / `tw-fixed` / `tw-columns-1` / `tw-columns-2`，因為無前綴版與 WP 衝突被 `blocklist` 擋掉）。寫錯不會有 build 錯誤，樣式只是安靜地不生效。另：**新增 SPA bundle 時不可只 import 共用的 `js/src/assets/styles/tailwind.css`**——它被 admin 與 partner portal 共同 import，Vite 會把它提取成掛在 admin chunk 上的共用 CSS chunk，新 bundle 的 entry `css` 陣列裡根本沒有 Tailwind，所有 utility **靜默失效且 build 無警告**（Phase 10 實測）。正確做法是在該 bundle 自己的 CSS 檔寫 `@tailwind base; @tailwind utilities;`。驗收方式與完整說明詳見 `react.rule.md` §10。
+19. **Don't** 以為 power-shop 自己管 Tailwind / daisyUI——**Phase 14 起本外掛已移除全部自有 CSS**（`tailwind.config.cjs` / `postcss.config.cjs` / `js/src/assets/styles/tailwind.css` / `js/src/profit-shop-front/styles.css` 全數刪除，`package.json` 也拿掉 `tailwindcss` / `daisyui` / `autoprefixer` / `postcss` / `postcss-import` / `postcss-nesting` 六個 devDependencies），樣式**全部改由 powerhouse 統一提供**：admin SPA 吃 powerhouse 的 `admin.min.css`（Tailwind + daisyUI + antd reset），前台（partner portal / 賣場前台）吃 `front.min.css`。powerhouse 的 Tailwind config 是 `important: '#tw'`，utility 一律輸出成 `#tw .flex{}` 這種前綴形式——**沒有 `id="tw"` 的祖先元素時 utility 全部靜默失效**（admin-layout 的 `<body>`、partner portal 自印 HTML 骨架的 `<html>` 都必須帶這個 id；後者由 `PartnerPortalRenderer::render_portal()` 顯式印出，前者是 powerhouse 自己的 admin-layout template，屬跨 plugin 改動）。daisyUI 元件 class 帶 **`pc-` 前綴**（不是 `tw-`）；`tw-` 開頭的只剩 powerhouse `blocklist` 擋下的少數 utility（例如 `tw-hidden`），且 `inline` / `tw-inline` 有專屬陷阱見 Pitfall #27。**跨 repo build 相依**：power-shop 的 class 是否有效，取決於 powerhouse 的 Tailwind build 有沒有掃到（其 `content` 已含兄弟目錄 `power-*` 的 `inc` 與 `js/src`）——**改動 power-shop 的 class 之後，必須到 powerhouse 重跑 `pnpm build-css:admin` / `build-css:front`**，否則新 class 不會出現在任何 CSS 檔裡，且 build 完全無警告。詳見 `react.rule.md` §10。
 20. **Don't** 假設 `<Tooltip>` 包 disabled `<Button>` 會顯示提示——antd v5 拿掉了 v4 的 disabled 相容包裝，瀏覽器又不對 disabled `<button>` 派發滑鼠事件，提示因此永遠不會出現，且沒有任何錯誤訊息。也**不要**只靠 antd 目前會在 `disabled` 時抽掉 `<Button href>` 的 `href` 就假設安全——外開連結按鈕該拆成停用 / 可用兩條 render 分支，別把 `href` 和 `disabled` 一起塞給同一顆 `<Button>`。詳見 `react.rule.md` §2。
 21. **Don't** 想把 antd `<Table>` 的展開圖示放進「某個欄位內」（而非表格最左端）時，還去改 `components.body.row` 或另外處理展開列——用 `showExpandColumn: false` 關掉預設最左展開欄，改在目標欄位自刻按鈕 + 受控 `expandedRowKeys`（非受控點了沒反應）即可；`expandable` 與自訂 `components.body.row`（例如 dnd-kit 拖曳排序）**零衝突**，因為 rc-table 渲染展開列時只傳 `className` / `style` 給自訂 row component、**不傳 `data-row-key`**，會自動落進「先判斷 `data-row-key` 是否存在」這種既有守門的 fallback 分支。`expandedRowRender` 也天然 lazy（沒展開過的列不 render，收合是 `display:none` 不 unmount），查詢可以直接寫在展開列渲染的子元件裡，不需要自己刻快取。詳見 `react.rule.md` §6.5「`ItemsEditor` 變體展開列」。
-22. **Don't** 在賣場前台的加購路徑上漏掉 `profit_shop_id`——後端 `AddToCartHook`（priority 5）**只**從 `$_GET` / `$_POST` 讀它，讀不到就**靜默走商品原價、分潤失效，且沒有任何錯誤訊息**。Phase 12 起前台加購一律走 **WooCommerce 原生表單**：React Modal 的「加入購物車」動態建一張隱藏 `<form method="post">` POST 回本頁（欄位 `add-to-cart` / `quantity` / `variation_id` / `attribute_*` / `profit_shop_id`），`<noscript>` 降級路徑則是 GET query string；兩者都會正常填 `$_GET` / `$_POST`，三道閘門照常驗證。**Don't** 為了「不重新載入頁面」改用 `fetch` / axios 送 JSON body——PHP 不會填 `$_POST`，分潤會靜默失效；真要走 REST 就必須自己在呼叫 `add_to_cart()` 前把值橋接進 `$_POST`。也**不要**改用 `add_to_cart()` 的第 5 個參數 `$cart_item_data` 傳 `profit_shop_id`（`AddToCartHook` 開頭有 short-circuit，那會**跳過全部三道閘門**，變成任何人都能對任意商品套任意賣場的分潤價）。詳見 `react.rule.md` §6.7。（Phase 10 的 admin-ajax `FrontAjax` + WC Store API 雙通道、Phase 11 的自訂 REST `FrontCartApi` 皆已**整條移除**，前台不再有任何購物車 API。）
-23. **Don't** 改動賣場前台的 PHP↔React DOM 契約（`data-ps-product-id` / `.ps-btn` / `.ps-not-ready` / `#profit_shop_front_app`）——改了會讓商品 Modal 開不起來、卡片永久灰階，而且**不會有任何錯誤訊息**。
+22. **Don't** 在賣場前台的加購路徑上漏掉 `profit_shop_id`——後端 `AddToCartHook`（priority 5）**只**從 `$_GET` / `$_POST` 讀它，讀不到就**靜默走商品原價、分潤失效，且沒有任何錯誤訊息**。Phase 14 起商品卡片與商品 Modal（`<dialog>`）都是 **PHP 直接印出**的 WooCommerce 原生表單（`<form method="get">` 或 `<form method="post">`），`profit_shop_id` 印死在 hidden input 裡；Modal 內的 `variation_id` / `attribute_*` 由 `inc/assets/js/profit-shop-front.js` 在使用者選定變體後才填入（鍵一律取自**選中變體自己的** `attributes` 物件，**不要**自行加 `attribute_` 前綴組出來——中文等自訂屬性經 WC `sanitize_title()` 後可能與原始名稱不同，自行組鍵會安靜地對不上）。JS 停用時卡片本身的表單 / 連結就是完整可用的加購路徑（漸進增強，**不需要**任何 `<noscript>` 樣式）。**Phase 15 起 Modal 內的加購改走 AJAX**（不換頁 + loading + 成功 toast），通道是 **WooCommerce 原生的 `?wc-ajax=add_to_cart`**，body 必須是 `application/x-www-form-urlencoded`（PHP 才會填 `$_POST`），只送 `product_id` / `quantity` / `profit_shop_id` 三個欄位；**variable 商品送的 `product_id` 是「選中變體自己的 ID」**（`WC_AJAX::add_to_cart()` 會自己換算回父商品並反查 `attribute_*`，換算**之後**才觸發 `woocommerce_add_cart_item_data`，第三閘門因此仍對得上），這條通道**不送也不需要** `attribute_*`。**Don't** 改送 JSON body——PHP 不會填 `$_POST`，分潤會靜默失效；真要另開通道就必須自己在呼叫 `add_to_cart()` 前把值橋接進 `$_POST`。**Don't** 在任何失敗分支自動重送表單——`wc_add_notice()` 沒有去重，同一則錯誤會顯示兩次，而「伺服器已加購成功但回應異常」時重送會造成**重複加購、顧客被重複收費**；業務失敗一律依 WooCommerce 官方契約導向回應內的 `product_url`。也**不要**改用 `add_to_cart()` 的第 5 個參數 `$cart_item_data` 傳 `profit_shop_id`（`AddToCartHook` 開頭有 short-circuit，那會**跳過全部三道閘門**，變成任何人都能對任意商品套任意賣場的分潤價）。詳見 `react.rule.md` §6.7。（Phase 10 的 admin-ajax `FrontAjax` + WC Store API 雙通道、Phase 11 的自訂 REST `FrontCartApi`、Phase 12 的 React `AddToCartButton.tsx` 皆已**整條移除**，前台不再有任何購物車 API，Phase 14 起也不再有任何 React 程式碼。）
+23. **Don't** 改動賣場前台 PHP↔JS 的 DOM 契約——Phase 14 換成一組新的 `data-ps-*` 屬性：賣場容器 `.ps-profit-shop-front[data-ps-shop]`（多賣場查找邊界，一頁多個 shortcode 賣場靠它天然隔離）、卡片 `[data-ps-product-id]`、對應 Modal `[data-ps-modal-for]`，以及 Modal 內的 `[data-ps-gallery-main]` / `[data-ps-gallery-thumb]` / `[data-ps-content*]` / `[data-ps-qty*]` / `[data-ps-attr-*]` / `[data-ps-variation-id]` / `[data-ps-price]` / `[data-ps-stock]` / `[data-ps-buyer]` / `[data-ps-submit]` / `[data-ps-icon]` 等；**Phase 15 另增** `[data-ps-form]`（AJAX 攔截點）/ `[data-ps-submit-spinner]` / `[data-ps-submit-label]` / `[data-ps-submit-error]` / `[data-ps-submit-error-label]`（Modal 內就地錯誤列）/ `[data-ps-toast]` / `[data-ps-toast-body]` / `[data-ps-toast-label]`（成功通知，印在賣場容器內）（完整清單見 `inc/assets/js/profit-shop-front.js` 檔頭註解）。改了任一項會讓商品 Modal 開不起來、Gallery / 數量 / 變體互動靜默失效，而且**不會有任何錯誤訊息**。JS 查找一律限定在最近的 `.ps-profit-shop-front` 祖先內，**不要**改回全域查詢。舊版 `#profit_shop_front_app` / `.ps-btn` / `.ps-not-ready` / `.ps-nojs-fallback` / `.ps-modal-trigger` / `window.power_shop_front_data`（React 全域 payload）**已隨 React bundle 一併移除，不存在**。
 24. **Don't** 在 cart 只呼叫 `set_price()` 就以為賣場覆寫價格已經完成——Cart Block / Store API 顯示的劃線原價讀的是 `get_regular_price()`（`WooCommerce/src/StoreApi/Schemas/V1/ProductSchema.php`），漏了它顧客會看到**商品原始原價**被劃掉、只有實收價正確，且沒有任何錯誤訊息。改動 cart 價格時 `price` / `regular_price` / `sale_price` **三者必須成套**（`set_price()` + `set_regular_price()` + `set_sale_price()`）；`sale_price` 留空時仍要顯式呼叫 `set_sale_price('')` 清掉商品原本的特價，否則會出現「原價劃掉→特價」但實收卻是覆寫原價的矛盾。詳見 `profit-shop.rule.md` §7 與 Phase 13。
 25. **Don't** 以為分潤夥伴密碼只存雜湊——2026-08 起**雜湊與明文並存**（站長要求能在後台查看 / 複製密碼再轉交夥伴，那在只存雜湊的前提下技術上不可能）。`_partner_password`（雜湊）仍是 `verify_password()` 的**唯一**依據，`_partner_password_plain`（明文）**只供顯示**；驗證路徑永遠不得讀明文。兩者必須在 `PartnerTermRepository::save()`（**密碼寫入的唯一出口**，五條路徑全經過它）內成套寫入，且明文**必須先 `wp_slash()`**——`update_metadata()` 內部會 `wp_unslash()`，不 slash 會靜默吃掉 `\` / `'` / `"`，導致後台顯示的密碼比實際密碼少幾個字元、站長照著複製給夥伴卻登不進去。`PartnerOutput` 因此含明文、**只能用於 admin-only endpoint**（`GET /partner-auth/me` 刻意自行列舉欄位輸出，不用這個 DTO）。另有兩條連帶紀律：`PartnerInput::from_array()` 必須把空密碼正規化為 null（否則站長清空欄位按儲存會把夥伴密碼設成空值、從此登不進去）、Edit 頁只在密碼**真的改動**時才送（`save()` 一收到 password 就 bump `password_changed_at` = 該夥伴所有登入 session 立即失效）。詳見 `profit-shop.rule.md` §6「明文密碼並存」與 `react.rule.md` §6.5「夥伴密碼是一般欄位」。
+26. **Don't** 以為賣場前台的 daisyUI class（`pc-btn-sm` 之類）需要自己再疊一層 Tailwind utility 才會生效——**這個限制已於 2026-08-04 由 powerhouse 的 CSS 建置層系統性修正**，繞過用的常數已全部移除，現在直接寫原生 `pc-btn pc-btn-sm` 就會生效。根因（仍然成立，供理解）：daisyUI v4 的元件 class 以 specificity **(0,1,0)** 輸出，且**沒有** `important` 之類的設定可以提高權重；WordPress 佈景主題常有相同 specificity 的規則（實測 Blocksy 命中 `[type="submit"]` 設定 `min-height` / `font-size` / `padding`），**CSS 同分時由載入順序決勝**，主題排在 plugin CSS 之後 → 永遠贏，`pc-btn-sm` / `pc-btn-ghost` / `pc-btn-circle` / `pc-input-sm` 這類尺寸與變體 class 因此被主題的 40px 蓋掉（原版 32px）。**現行修法**：powerhouse 的 `pnpm build-css:admin` / `build-css:front` 新增一道 PostCSS 步驟（`scripts/postcss-scope-daisyui.cjs`，透過 `--postcss ./postcss.tailwind.cjs` 掛載），把所有 daisyUI 選擇器整批收進 `#tw`——與 Tailwind utility 同一個 scope，specificity 一起拉高到 (1,1,0)，穩定勝過主題、與載入順序無關。原本收斂在 power-shop 這一側的 `ProfitShopFrontView::BTN_SIZE_SM` / `BTN_SIZE_XS` / `INPUT_SIZE` 三個 Tailwind utility 尺寸常數**已全部移除**。**唯一例外**：daisyUI 對某個元素**完全沒出過規則**時（例如 Modal 背景遮罩的 `<button>`——daisyUI 只對 `.pc-modal-backdrop` 這個 form 本身出規則，沒管裡面的 button），沒有規則可以 scope，主題仍會無對手地套用（塗成整片實心色塊、蓋掉整個畫面），這種情況**仍要**使用端自行加 Tailwind utility 壓過去（`templates/partials/profit-shop-modal.php` 的 backdrop button 因此保留 `bg-transparent text-transparent border-0 cursor-default`，是本次修正後唯一僅存的手動 utility 用法）。詳見「Phase 14 補充修正」章節、`profit-shop.rule.md` §12.8、`react.rule.md` §10 與 `specs/tech-debt.md` TD-40；powerhouse 端的完整建置說明見 powerhouse `.claude/CLAUDE.md`。
+27. **Don't** 給賣場前台的 SVG 圖示加任何 display utility（`inline` / `tw-inline` / `tw-block`）——`inline` 在 powerhouse 的 `blocklist` 內（與 WordPress 衝突），寫了不會產出、靜默不生效；替代品 `tw-inline` 更糟：它與 `tw-hidden` 同樣來自 `addUtilities`、權重相同，但 `.tw-inline` 在產出的 CSS 中排在 `.tw-hidden` **之後**，兩者同時存在時 `tw-inline` 會贏，讓「本來要隱藏的元素」永遠顯示（本專案的庫存 / 屬性狀態圖示切換就是靠 `tw-hidden`，踩到會讓三種圖示同時出現）。SVG 瀏覽器預設 display 本來就是 `inline`，本專案 preflight 又是關閉的，**什麼都不加**即可；垂直對齊用 `align-middle`（一般 utility，不影響 display，不在 blocklist）。
+28. **Don't** 以為改完 powerhouse 的 Tailwind build 就會立刻對站台生效——powerhouse 的 CSS enqueue 是 `?ver={Plugin::$version}`，重跑 `pnpm build-css:admin` / `build-css:front` 只改檔案內容、**版本號不變**，瀏覽器會沿用舊快取，樣式壞掉且**沒有任何錯誤訊息**（實測就曾被這樣騙過一次，誤以為某個 class 沒生效，其實是瀏覽器用舊 CSS）。**部署必要條件**：powerhouse 重新 build CSS 之後必須 bump 版本號（或走正常 `pnpm release:patch` 流程），否則既有訪客的瀏覽器會長時間停留在舊樣式。
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -71,7 +74,7 @@ pnpm release:major
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）+ 10（賣場前台 UI 照搬 legacy）+ 11（賣場前台購物車改自訂 REST）+ 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車）+ 13（購物車顯示賣場覆寫後的原價 / 特價）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台混合式 UI + Modal 加購端到端（WooCommerce 原生表單）+ Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式可實際嵌入頁面 + 購物車劃線原價與單品頁 / 賣場卡片三處一致）。Phase 7 / 8 / 9 已 commit（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）；Phase 10 / 11 由 `issue/L3` 分支的 `ff81dbb` 帶入，經本次 merge 併進 `refactor/one-page`。⚠️ Phase 9 與 Phase 10 / 11 是**兩條平行開發的分支**（各自從 Phase 8 之後接續編號、各自都叫 Phase 9），合併時以 `refactor/one-page` 保號、`issue/L3` 順延一位收斂；讀舊 commit message 時請注意 `ff81dbb` 內文的「Phase 9 / 10」即本文件的 Phase 10 / 11。已知問題與技術債見 `specs/tech-debt.md`。
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）+ 10（賣場前台 UI 照搬 legacy）+ 11（賣場前台購物車改自訂 REST）+ 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車）+ 13（購物車顯示賣場覆寫後的原價 / 特價）+ 14（賣場前台改 PHP + daisyUI + vanilla JS，移除 React / antd；CSS 統一交給 powerhouse 管理；獨立頁面與 shortcode 兩條路徑渲染統一 DOM）+ 14 補充（2026-08-04，daisyUI 樣式改由 powerhouse CSS 建置層系統性 scope 進 `#tw`，取代逐檔手動 Tailwind utility 繞過）+ 15（商品 Modal 改 AJAX 加購，走 WooCommerce 原生 `?wc-ajax=add_to_cart`，含 loading 與成功 toast；零新增 endpoint、分潤三閘門零修改）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台**純 PHP + daisyUI + vanilla JS** UI + Modal 加購端到端（WooCommerce 原生表單）+ Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式與獨立頁面渲染完全相同 DOM + 購物車劃線原價與單品頁 / 賣場卡片三處一致 + 樣式統一由 powerhouse 管理、本外掛已無任何自有 CSS）。Phase 7 / 8 / 9 已 commit（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）；Phase 10 / 11 由 `issue/L3` 分支的 `ff81dbb` 帶入，經本次 merge 併進 `refactor/one-page`。⚠️ Phase 9 與 Phase 10 / 11 是**兩條平行開發的分支**（各自從 Phase 8 之後接續編號、各自都叫 Phase 9），合併時以 `refactor/one-page` 保號、`issue/L3` 順延一位收斂；讀舊 commit message 時請注意 `ff81dbb` 內文的「Phase 9 / 10」即本文件的 Phase 10 / 11。已知問題與技術債見 `specs/tech-debt.md`。
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -560,9 +563,191 @@ A/B/C 三組對照同時證明：`$_POST['profit_shop_id']` 確實被 `AddToCart
 
 修復前 `regular_price` 會是商品原始的 18（劃線價顯示錯誤）。負向驗證（不帶 `profit_shop_id`）證明作用範圍精準收斂、零殘留。
 
+### Phase 14（賣場前台改 PHP + daisyUI + vanilla JS，CSS 統一交給 powerhouse 管理）已完工
+
+站長提出三件事：(1) power-shop 不再自己管 CSS，全部交給 powerhouse 統一提供；(2) 賣場前台「獨立頁面」與「shortcode」兩條渲染路徑統一 DOM；(3) 賣場前台移除 React / antd，改回 PHP + daisyUI + 手寫 vanilla JS。三者互相牽動——CSS 收斂到 powerhouse 之後，賣場前台若仍是 antd 元件，會變成「antd 元件外觀 + daisyUI 語意色」的四不像，因此三件事一次做完。
+
+| 需求 | 內容 | 路徑 |
+|---|---|---|
+| 1. 移除自有 CSS | **刪除** `js/src/assets/styles/tailwind.css`（admin + partner portal 原共用 entry）/ `js/src/profit-shop-front/styles.css` / `tailwind.config.cjs` / `postcss.config.cjs`；`package.json` devDependencies 移除 `tailwindcss` / `daisyui` / `autoprefixer` / `postcss` / `postcss-import` / `postcss-nesting`；`App1.tsx` 移除 `@refinedev/antd/dist/reset.css` 與 `@/assets/styles/tailwind.css` 兩個 import；`partner-portal/main.tsx` 移除 tailwind.css import。`pnpm build` 後 `js/dist/` **零 CSS 檔案**（manifest 兩個 entry 的 `css` 皆為 `[]`） | `package.json` + `js/src/App1.tsx` + `js/src/partner-portal/main.tsx` |
+| 配套（跨 plugin，powerhouse） | powerhouse `inc/templates/pages/admin-layout/index.php` 的 `<body>` 補上 `id="tw"`——powerhouse 的 Tailwind config 是 `important: '#tw'`，utility 全輸出成 `#tw .flex{}`；前台由 powerhouse 自己的 `language_attributes` filter 補上 `id="tw"`，但**後台一直沒有**，導致 `admin.min.css` 內約 900 條 utility 從未生效，各 power-* 子外掛才會各自打包一份無 scope 的 Tailwind。補上之後 powerhouse 的 admin CSS 才真的能被子外掛共用 | powerhouse repo（跨 plugin，非本次直接改動範圍） |
+| 配套（partner portal） | `PartnerPortalRenderer::render_portal()` 顯式呼叫 `\J7\Powerhouse\Bootstrap::enqueue_frontend_assets()`——portal 刻意不呼叫 `wp_head()`（避免 theme / admin bar / 其他 plugin 注入污染），powerhouse 掛在 `wp_enqueue_scripts` 的 CSS 因此不會自動印出；且自印的 `<html>` 加上 `id="tw" class="tailwind"` | `Infrastructure/WordPress/PartnerPortalRenderer.php` |
+| 2. 統一渲染 DOM | 移除 `$is_shortcode_context` 旗標，`templates/profit-shop-front.php` 外層**一律 `<div>`**（獨立頁面走 theme 的 header.php 時同樣可能已有 `<main>`，統一 `<div>` 才是唯一安全解）。同時修正一個實質 bug：早期只有 `ProfitShopRenderer` 會傳 `$front_settings`，shortcode 路徑拿到空陣列 → `shopStatus` 一律 fallback 成 `'published'` → **已結束販售的賣場用 shortcode 嵌入時照樣能加購**；現在兩條路徑都傳 `$front_settings` 並都呼叫 `ProfitShopFrontView::enqueue()`（早期 shortcode 完全沒 enqueue，商品 Modal 開不起來） | `ProfitShopRenderer.php` + `ProfitShopShortcode.php` + `templates/profit-shop-front.php` |
+| 3. 賣場前台改 PHP + daisyUI + vanilla JS | **刪除** `js/src/profit-shop-front/` 整目錄（19 檔：`App.tsx` / `ProductModal/` / `components/` / `hooks/` / `atoms.ts` / `env.ts` / `utils.tsx` / `styles.css` / `main.tsx` / `types.ts` 等）+ `vite.config.ts` 第三個 entry。**新增** `inc/assets/js/profit-shop-front.js`（手寫 vanilla JS，**不進 Vite build pipeline**，只負責五件互動：開 Modal、Gallery 縮圖、描述展開收合、數量加減、變體選擇）+ `Infrastructure/WordPress/ProfitShopFrontView.php`（呈現層工具：`currency()` / `number()` / `price_range()` / `embed_youtube()` / `stock_presentation()` / `max_qty()` / `icon()`（內嵌 SVG，取代 `@ant-design/icons`）/ `js_i18n()` / `enqueue()`；當時為繞過主題蓋掉 daisyUI 尺寸的問題加上 `BTN_SIZE_SM` / `BTN_SIZE_XS` / `INPUT_SIZE` 三個 Tailwind utility 尺寸常數，**已於 2026-08-04 隨 powerhouse CSS 建置層系統性修正而移除**，見下方「Phase 14 補充修正」與 Pitfall #26）+ `templates/partials/profit-shop-card.php`（商品卡片）+ `templates/partials/profit-shop-modal.php`（商品 Modal，`<dialog class="pc-modal">`）。`ProfitShopFrontData::build_products()` 改為 **public**（卡片與 Modal 共用同一份 payload，根除「有卡片但 Modal 找不到商品」的同步風險）；`build()` / `build_env()` 隨 React bundle 一併刪除（前台不再有 `wp_localize_script` 的全域 payload） | `inc/assets/js/profit-shop-front.js` + `Infrastructure/WordPress/ProfitShopFrontView.php`（新檔）+ `templates/partials/*`（新檔）+ `ProfitShopFrontData.php` |
+| 測試 | `ProfitShopShortcodeTest` 新增 `test_renderer_and_shortcode_paths_render_identical_dom`（逐字比對兩條路徑完整輸出）+ `test_shortcode_respects_closed_shop_status`（閉店賣場不得印出可送出的加購表單）；移除已失去前提的 `test_template_defaults_to_main_wrapper_without_flag` | `tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php` |
+
+**Phase 14 完工要點**：
+- **資料不再走全域 `wp_localize_script`**：每個商品的變體資料改印在自己 Modal 內的 `<script type="application/json" class="ps-variations-data">`，JS 查找一律限定在最近的 `.ps-profit-shop-front` 祖先內——這讓「一頁放多個 shortcode 賣場」天然可行（早期 React 版的全域物件會互相覆蓋），也讓「獨立頁面」與「shortcode」兩條路徑的 DOM 與行為完全一致
+- **漸進增強，不再需要任何 `<noscript>` CSS**：每張卡片只印**一個**動作元素（simple → `<form method="get">`；其他 → `<a href="{permalink}?profit_shop_id=">`），本身無 JS 即可用；JS 在卡片層攔 click 並 `preventDefault()` 改開 Modal，同時把按鈕文字換成 `data-ps-js-label`。因此不再需要舊版那組 `<noscript>` 樣式、`.ps-not-ready` 灰階、或任何 inline `<style>`
+- **顏色全走 daisyUI 語意色**（`pc-btn-primary` / `text-error` / `text-success` / `text-warning` / `text-base-content/60` / `bg-base-200` / `border-primary`），跟隨站台 daisyUI theme；賣場設定的 `btnColor` 與 `--ps-primary` CSS 變數**不再驅動前台顏色**——`ProfitShopFrontData::settings()` 的 `colorPrimary` 欄位保留（wire 契約穩定 + hex 白名單仍是有效輸入驗證 + 日後接 daisyUI `data-theme` 的天然載體）但**已無消費者**，登記 `specs/tech-debt.md` TD-38
+- **三個實測踩到的新陷阱**（完整說明見 Common Pitfalls #26 / #27 / #28）：(A) 佈景主題會用相同 specificity 蓋掉 daisyUI 按鈕尺寸，**動工當下**靠 power-shop 這一側逐檔補 Tailwind utility（`#tw` 前綴、specificity 較高）釘住——**已於 2026-08-04 由 powerhouse CSS 建置層系統性修正取代**（daisyUI 選擇器整批收進 `#tw`），繞過用的常數已移除，見下方「Phase 14 補充修正」與 Pitfall #26（B、C 仍照舊）；(B) `inline` 在 blocklist 內、替代品 `tw-inline` 又會蓋掉 `tw-hidden` 讓隱藏失效，圖示 display 什麼都不加最安全；(C) powerhouse CSS enqueue 版本號不會因為重跑 build 自動 bump，部署後必須手動升版，否則既有訪客吃舊快取
+- 不引入新 npm 套件（移除 6 個）；不引入新 composer 套件；不動 Domain / Application 層與 `AddToCartHook` / `CartPriceOverrideHook` / `CartItemMetaDisplay` / `SingleProductPriceHook` 四個 hook 檔案——原生表單 `profit_shop_id` 正常進 `$_POST`，分潤鏈路一行未改
+- 技術債異動：新增 TD-37（powerhouse CSS 快取版本號）、TD-38（`colorPrimary` 無消費者）、TD-39（power-shop 樣式跨 repo 建置相依 powerhouse）；TD-26（Modal 992–1079px 版型破碎，antd `Col lg` 992px vs Tailwind `lg` 1080px 兩套斷點不一致）因 antd 整個移除而**結構性消失**，移至「已解決」；TD-29 更新（Phase 12 的 React `AddToCartButton.tsx` 已隨本次刪除，加購表單契約改由 PHP template 承載，理論上比 React 元件更容易補 IT 斷言，但目前仍未補）
+
+**驗證數據**（實測，2026-08-04）：
+
+| 項目 | 結果 |
+|---|---|
+| `vendor/bin/phpcs inc/` | **137/137 全綠** |
+| `php -l` × 10 檔 | 全過 |
+| `pnpm build` | 成功；manifest 剩 2 個 entry，**`css` 陣列皆為空**，`js/dist/assets/*.css` **0 個檔案** |
+| `npx tsc --noEmit` | **127**（= baseline，零回歸） |
+| Unit testsuite | **402 tests / 824 assertions / 1 failure**（failure 為 pre-existing `LoginRateLimiterIpDimensionTest`，見 TD-2） |
+| Integration testsuite | **236 tests / 1001 assertions / 15 failures**（15 條全部 pre-existing：partner auth / CptRegistrar / RewriteRules，沒有一條在本次改動的檔案內） |
+| `ProfitShopShortcodeTest` 單獨跑 | **OK（18 tests / 66 assertions）** 全綠 |
+| `npx eslint` | ⚠ 無法執行（`eslint-import-resolver-typescript` 的 `unrs-resolver` native binding 載入失敗，pre-existing 環境問題，見 TD-31） |
+| Class 覆蓋驗證（自寫腳本比對） | 賣場前台 111 個 class **全數**由 powerhouse `front.min.css` 產出；Admin SPA 214 個 class **全數**由 `admin.min.css` 產出 |
+
+**真實站台端到端驗證**（`https://local-turbo.powerhouse.tw/profit-shop/test-shop-alpha/`，`agent-browser`）：
+
+| 驗證項 | 結果 |
+|---|---|
+| HTML 標記 | `<main class="ps-profit-shop-front` **0**／`<div class="ps-profit-shop-front` **1**；`<dialog` **4**；`--ps-primary` **0**；`ps-btn ps-btn-primary` **0**；`ps-not-ready` **0**；`profit_shop_front_app` **0**；`front.min.css` **1**；`id="tw"` **1**；`profit-shop-front.js` **1** |
+| 計算後樣式 | 卡片按鈕 **32px / min-height 32px / font-size 14px**（與原版 `.ps-btn` 完全一致）；`pc-btn-primary` 背景 = 站台 daisyUI theme 的綠色；`text-error` = 紅色 |
+| Modal 互動 | 點卡片開啟成功；加購表單欄位 `add-to-cart=65` / `profit_shop_id=1932` / `quantity=1`（分潤鏈路完整）；價格「NT$ 300 → NT$ 240」（賣場覆寫價正確）；庫存文案「此商品還有庫存」；數量加減 1→2→3→2→1 且下限守在 1 |
+| backdrop | 修正後為正確的半透明深色遮罩；關閉鈕的綠圈確認是 focus ring（僅聚焦時出現），非 bug——原生 `<dialog>` 自動聚焦第一個可聚焦元素，是正確 a11y 行為 |
+
+### Phase 14 補充修正（daisyUI 樣式系統性修正，powerhouse CSS 建置層）已完工（2026-08-04）
+
+Phase 14 剛完工時，賣場前台的 daisyUI class（`pc-btn-sm` 之類）會被佈景主題整批蓋掉，當時的因應是在 power-shop 這一側逐顆按鈕補 Tailwind utility（`ProfitShopFrontView::BTN_SIZE_SM` / `BTN_SIZE_XS` / `INPUT_SIZE` 三個常數）。**本次改為在 powerhouse 的 CSS 建置階段做系統性修正**，那三個常數已全數移除。
+
+**根因**：
+1. daisyUI v4 的元件 class 以 specificity **(0,1,0)** 輸出，例如 `.pc-btn{}`。
+2. daisyUI v4 **沒有** `important` 之類的設定可以提高權重——config 只有 `styled` / `themes` / `base` / `utils` / `logs` / `darkTheme` / `prefix` / `themeRoot`。
+3. Tailwind 的 `important: '#tw'` **只作用在 utilities**，不會套到外掛用 `addComponents` 加進來的規則。實測：修正前 `front.min.css` 內有 **438 條**未加 scope 的 `.pc-*`，只有 23 條帶 `#tw`（那 23 條是 `js/src/assets/scss/_daisyui.scss` 手寫補的）。
+4. WordPress 佈景主題（實測 Blocksy `main.min.css`）有一條 `.button, .ct-button, .added_to_cart, .ct-button-ghost, [type="submit"], .wp-element-button, …` 的規則，specificity **同樣是 (0,1,0)**。
+5. **CSS 同分時由載入順序決勝**，而佈景主題的 CSS 排在外掛 CSS 之後 → **主題永遠贏**。⇒ `pc-btn-sm` / `pc-btn-ghost` / `pc-btn-circle` / `pc-input-sm` 全部被蓋掉（按鈕變成主題的 40px、ghost 不透明、輸入框 40px/16px）。
+6. Tailwind utility 之所以免疫，正是因為 `#tw .h-8` 是 **(1,1,0)**，嚴格大於主題那條，**與載入順序無關**。
+
+**修正方案**：在 powerhouse 的 CSS 建置階段，把所有 daisyUI 選擇器也收進 `#tw`，與 Tailwind utility 用同一套機制。powerhouse 新增 `scripts/postcss-scope-daisyui.cjs`（PostCSS plugin，從 `tailwind.config.cjs` 的 `important` 讀 scope，避免與 Tailwind 設定漂移）+ `postcss.tailwind.cjs`（給 Tailwind CLI `--postcss` 旗標用的設定，內含上面那個 plugin + `autoprefixer`），並把 `build-css:admin` / `build-css:front` / `watch-css:admin` / `watch-css:front` 四個 script 都加上 `--postcss ./postcss.tailwind.cjs`。
+
+⚠️ **一個必須記住的重要事實**：實測 **Tailwind CLI 不會自動讀取 `postcss.config.cjs`**（在裡面放一個會印字的 probe plugin，跑 `npx tailwindcss ...` 完全沒有輸出；那份設定只有在有人直接呼叫 postcss——例如 Vite 的 CSS pipeline——時才生效）。CSS 建置必須用 `--postcss` 旗標**明確指定** `postcss.tailwind.cjs`，額外的 PostCSS 步驟才會跑。**不要**把 plugin 加進 `postcss.config.cjs` 就以為生效了。
+
+**三個實作細節**：
+
+1. **識別方式**：靠 `daisyui.prefix: 'pc-'`。比對 `.pc-` 與 `\:pc-` 兩種形式（後者是 Tailwind 對響應式變體的轉義寫法，`sm:pc-btn-sm` → `.sm\:pc-btn-sm`）。刻意要求 `pc-` 緊接在 `.` 或 `\:` 之後，才不會誤傷 `.upc-code` 這種剛好含 `pc-` 的第三方 class。
+2. **🔴 根部錨定的選擇器絕對不能加 scope**：`#tw` 本身就掛在 `<html>`（前台）或 `<body>`（後台 admin-layout）。把 `:root .pc-countdown` 變成 `#tw :root .pc-countdown` 之後，會變成「找 `#tw` 底下的 `:root` **後代**」——`:root` 永遠是 `<html>`、不可能是自己的後代，**這條規則從此永遠匹配不到，且沒有任何錯誤訊息**。實際踩到兩條（daisyUI v4.12）：`:root .pc-countdown`（倒數計時元件樣式整個失效）與 `:root:has(:is(.pc-modal-open, .pc-modal:target, .pc-modal-toggle:checked + .pc-modal, .pc-modal[open]))`（**Modal 開啟時鎖住背景捲動的規則失效**）。plugin 因此有一條 `ROOT_ANCHORED` 守門：selector 第一個 compound 若是 `:root` / `html` / `body` / `*` / `[data-theme` 一律跳過（這類規則本來就已經是 (0,2,0) 以上、或根本沒有主題會來競爭，不加也安全）。**改動 daisyUI 版本或 `daisyui.prefix` 時，這條識別規則要跟著檢查**——build log 那行「已把 N 條…」數字掉到 0 就代表保護整個失效。
+3. **不會反過來蓋掉 Tailwind utility**：轉換後 daisyUI 是 `#tw .pc-btn` (1,1,0)、Tailwind utility 是 `#tw .h-8` (1,1,0)，**同分**；但 Tailwind 的輸出順序是 base → components → utilities，utility 排在後面 → utility 仍然勝出。「utility 覆寫元件樣式」這個 Tailwind 基本心智模型完全不變（已實測位置比對確認）。
+
+**涵蓋不到的情況**：本轉換只能讓「**daisyUI 有規則、但輸給主題**」的情況翻盤。若 daisyUI **根本沒有**對某個元素出規則，主題的樣式沒有對手，仍要由使用端自己加 Tailwind utility 壓過去。已知案例：`.pc-modal-backdrop` 內那顆 `<button>`——daisyUI 只對 form 本身（`.pc-modal-backdrop`）出規則、完全沒管 button，於是主題的 `[type="submit"]` 把它塗成整片實心色塊，**把 Modal 以外的畫面全部蓋掉**。`templates/partials/profit-shop-modal.php` 因此保留 `class="bg-transparent text-transparent border-0 cursor-default"`——本次修正後**唯一僅存**的手動 utility 用法，記為 `specs/tech-debt.md` TD-40。
+
+**power-shop 端的連帶變更**：原本為了繞過這個問題加的三個常數 **`ProfitShopFrontView::BTN_SIZE_SM` / `BTN_SIZE_XS` / `INPUT_SIZE`（內容是 `h-8 min-h-8 px-3 text-sm` 這類 utility）已全部移除**，改回原生 daisyUI class：卡片按鈕 `pc-btn pc-btn-primary pc-btn-sm`、Modal 加購鈕 `pc-btn pc-btn-primary pc-btn-sm`、關閉鈕 `pc-btn pc-btn-ghost pc-btn-circle pc-btn-sm`（原本還加了 `bg-transparent border-0 h-8 min-h-8 w-8 p-0`，現已移除）、變體屬性選項 `pc-btn pc-btn-xs`、數量 −/+ `pc-btn pc-btn-sm pc-join-item`、數量輸入框 `pc-input pc-input-bordered pc-input-sm pc-join-item`；backdrop button **保留** `bg-transparent text-transparent border-0 cursor-default`（見上「涵蓋不到的情況」）。`ProfitShopFrontView` 內留了一段註解說明那三個常數為何被移除。
+
+**驗證數據**（實測）：
+
+| 項目 | 結果 |
+|---|---|
+| `pnpm build-css:front`（powerhouse） | `✓ scope-daisyui: 已把 637 條 daisyUI 選擇器收進 "#tw"（另有 4 條已錨定在根部，刻意不加）` |
+| `pnpm build-css:admin`（powerhouse） | `✓ scope-daisyui: 已把 614 條…（另有 4 條…）` |
+| front.min.css | 已 scope **635** / 未 scope **0** / `:root` 誤加 **false** |
+| admin.min.css | 已 scope **604** / 未 scope **0** / `:root` 誤加 **false** |
+| `vendor/bin/phpcs inc/`（power-shop） | 137/137 全綠 |
+| `ProfitShopShortcodeTest` | OK（18 tests, 66 assertions） |
+
+**真實站台計算後樣式**（`local-turbo.powerhouse.tw` 賣場頁，**全部使用純 daisyUI class、零手動 utility**）：
+
+| 元素 | 修正前 | 修正後 |
+|---|---|---|
+| 卡片按鈕 | 40px / 16px（主題的） | **32px / minH 32px / 14px** |
+| Modal 加購鈕 | 40px | **32px / 14px** |
+| 關閉鈕 | 40px + 主題邊框背景 | **32px，ghost 透明生效** |
+| 數量 −/+ | 40px | **32px / 14px** |
+| 數量輸入框 | 40px / minH 40px / 16px | **32px / 14px** |
+| backdrop button | 整片實心主題色 | 透明（靠使用端 `bg-transparent`，daisyUI 無規則） |
+
+**前提**：`#tw` 必須存在於祖先。前台由 powerhouse `Theme\Core\FrontEnd::add_html_attr()` 保證；後台由 powerhouse `inc/templates/pages/admin-layout/index.php` 的 `<body id="tw">` 保證（這個 id 是這次一併補上的，先前後台的 Tailwind utility 從未生效）。任何自印 HTML 骨架的地方（例如本外掛的 `PartnerPortalRenderer`）都必須自帶 `id="tw"`。詳見 powerhouse `.claude/CLAUDE.md` 的 CSS Build Pipeline 章節。
+
+### Phase 15（商品 Modal 改 AJAX 加購 + loading + 成功通知）已完工（2026-08-05）
+
+站長要求：Modal 點開後的「加入購物車」改成 AJAX（不換頁）+ loading 狀態 + 成功通知。這個需求正面撞上 Phase 12 的決定（整條前台購物車 REST `FrontCartApi` 已刪檔）與 Pitfall #22（禁止用 `fetch` 送 JSON body 加購），因此**通道選擇是本 Phase 的核心決策**，不是隨便接一個 endpoint。
+
+| 層 | 內容 | 路徑 |
+|----|------|------|
+| PHP 呈現層 | `ProfitShopFrontView` 新增 `js_config()`（`addToCartUrl` / `cartUrl` / `redirectAfterAdd`）+ 第二個 `wp_localize_script`（`power_shop_front_config`）+ 4 個 AJAX 相關 i18n key | `Infrastructure/WordPress/ProfitShopFrontView.php` |
+| Modal 版型 | `<form method="post" data-ps-form>`；加購按鈕內改為 `spinner span + label span`；按鈕下方新增就地錯誤列 `[data-ps-submit-error]`（含「查看購物車」連結）。**`variation_id` / `attribute_*` hidden input 一行未動**——它們是降級路徑所必需 | `templates/partials/profit-shop-modal.php` |
+| 成功通知 | 賣場容器內印一個 `pc-toast pc-toast-top pc-toast-center` + `pc-alert`，`$is_shop_open` 才印 | `templates/profit-shop-front.php` |
+| 前台 JS | 新增 8 個函式（`hasAnyAttribute` / `buildAddToCartPayload` / `setSubmitBusy` / `freezeSubmit` / `showSubmitError` / `clearSubmitError` / `showToast` / `applyFragments` / `notifyCartUpdated` / `handleResponse` / `bindAddToCart`）+ `CONFIG` / `canAjax()` / `AJAX_TYPES` 白名單；`setSubmitEnabled()` 加上飛行中守門；`refresh()` 記住 `modal.psCurrentVariation` | `inc/assets/js/profit-shop-front.js` |
+| 測試 | `ProfitShopShortcodeTest` 新增 `test_open_shop_renders_ajax_dom_contract`（8 個 `data-ps-*` 屬性 + `name="profit_shop_id"` 全鎖）；`test_shortcode_respects_closed_shop_status` 加一條「閉店不得印 `data-ps-toast`」 | `tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php` |
+
+**通道決策：`?wc-ajax=add_to_cart`（WooCommerce 原生），零新增 endpoint**
+
+五條判準逐一對照（都以原始碼求證，非推測）：
+
+| 判準 | 結論 |
+|---|---|
+| `$_POST` 必須被填充（分潤三閘門的生命線） | ✅ form-urlencoded POST，PHP 自動填 `$_POST`；`AddToCartHook::extract_shop_id_from_request()` 讀得到 |
+| 不新增自訂 endpoint（`FrontCartApi` 不復活） | ✅ `wc_ajax_add_to_cart` 是 WooCommerce 內建 action，power-shop 一行 PHP handler 都不用寫 |
+| 變體商品可用 | ✅ **關鍵發現**：`WC_AJAX::add_to_cart()` 偵測到傳入的是 variation 時，會 `$variation_id = $product_id; $product_id = $product->get_parent_id(); $variation = $product->get_variation_attributes();`，**換算之後**才呼叫 `add_to_cart()`。第三閘門 `has_item($product_id)` 拿到的是父商品 ID，對得上；且這條通道**不需要前端送 `attribute_*`**，順帶消滅 Pitfall #22 記載的組鍵風險 |
+| 未登入訪客可用 | ✅ 在 `$ajax_events_nopriv` 清單內，且**完全沒有 nonce 驗證**（原始碼有 `phpcs:disable WordPress.Security.NonceVerification.Missing` 為證），不需要任何 nonce 基礎設施 |
+| 改動範圍最小 | ✅ 0 個新 endpoint、0 個新 npm / composer 套件、0 行 cart hook 變更 |
+
+三個 cart hook 的 admin guard 都是 `is_admin() && ! wp_doing_ajax()`；`?wc-ajax=` 是前台 URL，`is_admin()` 為 false 直接短路，hook 全數正常掛載。`WC_AJAX` 只傳 4 個參數給 `add_to_cart()`（第 5 個 `$cart_item_data` 是預設空陣列），因此 `AddToCartHook` 開頭的 short-circuit 不會誤觸發，三道閘門完整跑完。
+
+**⚠ 五條「分錯類就會讓顧客被重複收費」的紀律（3 個 lens 對抗驗證抓出 9 條 blocking issue 後定案）**
+
+1. **飛行中必須擋住第二次送出**：`modal.psSubmitting` 旗標 + submit handler 開頭吞掉 + **`setSubmitEnabled()` 也要尊重它**。少了第三點，使用者在請求飛行中改選變體會觸發 `refresh()` → 把按鈕解鎖 → 再按一次 → 兩筆都成功。原生表單沒這個問題（送出後整頁導航，DOM 直接消失）。
+2. **「請求沒送出去」與「送出了但回應異常」必須分開**：先 `res.text()` 再自行 `JSON.parse`，才能區分 `!res.ok` / 解析失敗（**商品很可能已經進購物車**）與 fetch reject（真的沒送出）。直接用 `res.json()` 會把兩者併進同一個 `catch`，而這兩種情況該給的處置完全相反。前者**凍結按鈕**並提示「無法確認加購結果，請重新整理頁面並查看購物車」；後者才允許重試。
+3. **成功後的副作用不得落進失敗分支**：`handleResponse()` 整個包在 try/catch 內。`notifyCartUpdated()` 會同步執行佈景主題 / 其他外掛綁在 `added_to_cart` 上的 jQuery handler，而 jQuery 的 `.trigger()` 不捕捉 handler 例外——任何一個 handler 丟錯就會冒到 `.catch()`，把**已經成功**的加購誤報成連線問題並邀請使用者重按。
+4. **任何失敗都不得自動重送表單**：`wc_add_notice()` 沒有去重，重送會讓同一則錯誤寫進 session 兩次、在畫面上重複顯示；邊界情況（第一次其實成功了）更會變成重複加購。業務失敗（`{error:true}`）一律依 WooCommerce 官方前端契約導向回應內的 `product_url`。
+5. **`added_to_cart` 事件不可傳第三個參數（按鈕元素）**：傳了之後 WooCommerce 的 `updateButton()` 會在我們的表單裡插入一條佈景主題樣式的「檢視購物車」連結，與 toast 內的按鈕重複，而且**每加購一次就永久多一條**。WooCommerce 對「不傳按鈕」有明文守門，省略不會出錯。同理有 jQuery 時**只發事件、不自己套 fragments**（WC 自己會套），否則 mini-cart 會多一次閃爍。
+
+**漸進增強：四道降級關卡，任何一道不成立就走原生表單**
+
+1. JS 停用 → PHP 印出的 `<form method="post">` 本身就是完整加購路徑
+2. `<dialog>` 不支援 → 既有守門讓卡片的原生 form / 連結生效
+3. 能力不足（`canAjax()`：缺 `fetch` / `URLSearchParams` / `Promise` / `addToCartUrl`）→ 不註冊 submit 監聽器
+4. `buildAddToCartPayload()` 回 `null` → **不呼叫 `preventDefault()`**，瀏覽器執行原生送出
+
+第 4 點涵蓋：商品型別不在 `AJAX_TYPES` 白名單（`simple` / `variable` / `subscription`；grouped / external / variable-subscription 走 AJAX 必然失敗，直接不浪費 round trip）、未選變體、**「任意」屬性變體**（`get_variation_attributes()` 對這類屬性回空字串，`WC_Cart::add_to_cart()` 會濾掉空值後判定缺少必填屬性而拒絕；原生表單送的是使用者實際選的值，不受影響）、缺 `profit_shop_id`（寧可換頁，也不送出一筆沒有分潤標記的加購）。
+
+**兩個 CSS 陷阱（都是實測踩到的）**
+
+1. **`pc-alert-success` / `pc-alert-error` 在 `front.min.css` 內不存在**（daisyUI 的語意變體需要被掃到才產出），因此 toast 用中性的 `pc-alert` + 由圖示的 `text-success` / `text-error` 承載語意色，tone 切換直接複用檔內既有的 `applyIconTone()`。
+2. **`whitespace-normal` 單獨使用會讓 toast 文字變直排**：`.pc-toast` 是 `position:fixed`，只加 `whitespace-normal` 會讓 shrink-to-fit 改用 **min-content** 寬度，而中文可在任意字元間斷行 → 整段文字被壓成一字一行。必須 `w-max`（`width:max-content`）配 `max-w-[min(24rem,90vw)]` 才會是正常的單行 / 折行。
+3. `.pc-toast` **沒有** z-index，powerhouse 的 Tailwind 只產出到 `z-50`，佈景主題 sticky header 常在 999 以上 → toast 保留 `style="z-index:9999"` 靜態 inline style（這與 Phase 14 移除的「動態 `<style>` 區塊」是兩回事，那是 CSS injection 面，靜態屬性沒有此風險）。
+
+**成功時先關 Modal 再顯示 toast**：原生 `<dialog>` 開啟時進入 **top layer**，body 層元素不論 z-index 多大都在它與 `::backdrop` 之下且因 inert 不可點。先關 Modal 讓這個問題結構性消失，不需要在每顆 dialog 內各印一份 toast。失敗時 Modal 不關，錯誤改由 Modal **內**的 `[data-ps-submit-error]` 就地顯示。
+
+不引入新 npm / composer 套件；不動 Domain / Application 層與 `AddToCartHook` / `CartPriceOverrideHook` / `CartItemMetaDisplay` / `SingleProductPriceHook` 四個 hook 檔案（`git diff` 對它們完全空白）。
+
+**同批處理：移除 /cart 與 /checkout 的「來自賣場 XXX」標記**
+
+站長要求前台不顯示分潤來源。`Infrastructure/WooCommerce/CartItemMetaDisplay.php` **整檔刪除**（`Loader` 註冊一併移除），不是只拿掉註冊——它是 100% 純顯示（唯一作用是一個 `woocommerce_get_item_data` filter，往 `item_data` append 一筆），留著一個「只為了不執行而存在」的檔案只會讓下一個人困惑；專案先例是 Phase 12 把 `FrontCartApi` 直接刪檔。復原見 git commit `f813e07`。
+
+安全性依據：定價鏈路（`AddToCartHook` 三閘門 / `CartPriceOverrideHook` 的 `_profit_*` meta 與 HMAC 簽章）與結算紀錄都在別的 class，完全不碰這個 filter。訂單頁與訂單 email **不需要另外處理**：line item 的 `_profit_*` meta 以底線開頭，WooCommerce 的 `get_formatted_meta_data()` 預設就會濾掉。實測（未登入訪客）：`/cart/` 與 `/checkout/` 的 HTML 皆 **0 命中**「來自賣場」/ 賣場名稱 / `/profit-shop/` 連結，Store API 的 `item_data` 為 `[]`，而**賣場覆寫價完全不受影響**（NT$300 劃線 → NT$240，總計 NT$240）。
+
+⚠ 連帶讓 `specs/tech-debt.md` **TD-21**（Cart Block 下該標記顯示成 `undefined:`）移入「已解決」——但那是「功能不存在了」而不是「修好了」：**日後若恢復顯示，`undefined:` 問題會一併回來**，屆時要先解決 Store API 的鍵名對映再上線。
+
+**驗證數據**（實測，2026-08-05）：
+
+| 項目 | 結果 |
+|---|---|
+| `vendor/bin/phpcs inc/` | **137/137 全綠** |
+| `php -l` × 4 檔 | 全過 |
+| `node --check inc/assets/js/profit-shop-front.js` | 通過 |
+| powerhouse `pnpm build-css:front` | 成功；新用到的 `w-max` / `max-w-[min(24rem,90vw)]` / `pc-toast*` / `pc-alert` / `pc-loading-spinner` / `pc-btn-xs` / `size-4` / `whitespace-normal` / `shadow-lg` 逐一 grep 確認已產出並 scope 進 `#tw` |
+
+**真實站台端到端驗證**（`local-turbo.powerhouse.tw`，**未登入訪客**身分）：
+
+| 驗證項 | 結果 |
+|---|---|
+| localize `power_shop_front_config` | `{addToCartUrl:"/?wc-ajax=add_to_cart", cartUrl:".../cart/", redirectAfterAdd:""}` |
+| DOM 契約 8 項 | 全部存在；`profit_shop_id=1932`、`add-to-cart=65` |
+| AJAX 加購（simple） | **不換頁**、按鈕 disabled + `aria-busy` + spinner、Modal 自動關閉、toast「已加入購物車」出現 |
+| 購物車實收 | T-Shirt `price=240` / `regular=300` / `sale=240`（賣場覆寫價 + Phase 13 的劃線原價都正確）+ 分潤標記 |
+| **分潤三閘門 A/B/C** | A 帶合法 `1932` → 240/300 + 有標記；B 不帶 → 18/18 + 無標記；C 偽造 `999999` → 18/18 + 無標記 |
+| 併發防護 | 連按 3 次，購物車只 +1 件 |
+| 變體 payload | 注入已選變體後攔截 fetch，送出 `product_id=730&quantity=1&profit_shop_id=2225`（**變體 ID，不是父商品 729**），Content-Type 為 `application/x-www-form-urlencoded` |
+| 降級路徑 | 未選變體 → **不發 AJAX**、交給原生表單送出 |
+| toast 版型 | `position:fixed top=0 left=50% zIndex=9999`，`grid-auto-flow:column`，236×54px 橫向排列，浮在佈景主題 sticky header 之上 |
+
+⚠ **唯一未能端到端驗證的項目：variable 商品的 AJAX 正向路徑**。站上兩個賣場（`test-shop-alpha` / `123`）中唯一的 variable 商品（#729 `TEST`）其變體 730/731 **價格為 0、`is_purchasable: false`**，被 WooCommerce 的 `get_available_variations()` 濾掉，因此該商品在賣場前台**本來就無法加購**（與本次改動無關的測試資料問題）。已改以「攔截 fetch 驗證送出內容」+「讀 WooCommerce 原始碼確認 variation→parent 換算」兩段各自驗證，但**沒有**真的把一個變體商品用 AJAX 加進購物車。要補這一項，需要一個含可購買 variable 商品的賣場。
+
+**新增技術債**：TD-41（業務失敗時仍需離開賣場頁才能看到 WooCommerce 原文訊息）、TD-42（WooCommerce Subscriptions 在 `woocommerce_add_to_cart_fragments` 上掛了不存在的靜態方法）、TD-43（variable AJAX 正向路徑尚未端到端驗證）。
+
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 
-> 本清單於 Phase 9 文件同步時清過一輪：原第 8、9、13 項（賣場前台 IP-based rate-limit / 賣場前台快取效能 / `ProfitShop::has_item` Domain method）核對程式碼後確認**已分別在 Phase 5-A.1（`PageRateLimitService` + `ProfitShopRenderer::maybe_render` 的 429 處理）與 Phase 5-B（`ProfitShopRenderer` publish 不送 `nocache_headers()` 條件化 + `ProfitShop::has_item()`，後者現由 Phase 9 `SingleProductPriceHook` 直接消費）完工**，只是 commit 之後這份清單沒有跟著移除，予以刪除並重新編號；其餘項目核對後仍未完工，維持原樣。
+> 本清單於 Phase 9 文件同步時清過一輪：原第 8、9、13 項（賣場前台 IP-based rate-limit / 賣場前台快取效能 / `ProfitShop::has_item` Domain method）核對程式碼後確認**已分別在 Phase 5-A.1（`PageRateLimitService` + `ProfitShopRenderer::maybe_render` 的 429 處理）與 Phase 5-B（`ProfitShopRenderer` publish 不送 `nocache_headers()` 條件化 + `ProfitShop::has_item()`，後者現由 Phase 9 `SingleProductPriceHook` 直接消費）完工**，只是 commit 之後這份清單沒有跟著移除，予以刪除並重新編號。本清單已於 Phase 14 文件同步時再清過一輪：原第 10 項（賣場前台 inline style 抽 CSS file + `img loading='lazy'`）核對後確認**已分別在 Phase 14（inline style 隨 React bundle 一併移除，樣式全改用 daisyUI / Tailwind class，已無任何 inline `<style>`）與更早的 Phase 10（`img loading='lazy'` 已內建於 `templates/partials/profit-shop-card.php` 的商品圖）完工**，予以刪除並重新編號；其餘項目核對後仍未完工，維持原樣。
 
 優先順序：
 1. **LoginRateLimiter context-aware message provider**（reviewer 順手：audit log + admin email 在 `pwchange:{id}` pseudo-slug 場景目前語意誤導為「登入失敗」，需抽 message provider 區分 login / pwchange context）
@@ -574,9 +759,8 @@ A/B/C 三組對照同時證明：`$_POST['profit_shop_id']` 確實被 `AddToCart
 7. **賣場前台 SEO 強化**：`pre_get_document_title` filter（與 SEO plugin 整合，4-C1 m-3）/ Open Graph / structured data
 8. **rate-limit 5/15min 改 3 次**（reviewer L-3，產品決策層）
 9. **token 三條讀取路徑收斂**（reviewer M-5，目前已 PHPDoc 化但未刪路徑）
-10. **賣場前台 inline style 抽 CSS file**（4-C1 m-10）+ `img loading='lazy'`（m-6）等 NIT 微優化
-11. **變體層 `inflated_count` 前台顯示**（Phase 9 R-2 未竟事項，見 `specs/tech-debt.md` TD-15）：賣場前台目前只渲染父商品卡片，變體選擇整段發生在 WC 單品頁；要顯示變體層灌水人數需另外介入單品頁渲染，範圍大於商品層
-12. **變體查詢改走分頁載入**（Phase 9 R-4，見 `specs/tech-debt.md` TD-16）：`wc-rest` `per_page` 硬上限 100，變體超過 100 個的商品目前只顯示前 100 個
+10. **變體層 `inflated_count` 前台顯示**（Phase 9 R-2 未竟事項，見 `specs/tech-debt.md` TD-15）：賣場前台目前只渲染父商品卡片，變體選擇整段發生在 WC 單品頁；要顯示變體層灌水人數需另外介入單品頁渲染，範圍大於商品層
+11. **變體查詢改走分頁載入**（Phase 9 R-4，見 `specs/tech-debt.md` TD-16）：`wc-rest` `per_page` 硬上限 100，變體超過 100 個的商品目前只顯示前 100 個
 
 ### Reviewer 累積的「未來補強建議」（非 blocking）
 

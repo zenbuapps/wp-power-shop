@@ -19,7 +19,7 @@ applyTo: "**/*.ts,**/*.tsx"
 | 狀態管理 | Jotai + React Context | atom 跨分頁選取；Context 區域共享 |
 | 資料層 | React Query (via Refine) | 搭配 6 個 Data Provider |
 | 路由 | HashRouter (react-router v7) | `#/` 路徑，定義在 App1.tsx |
-| 樣式 | Tailwind CSS（**無 prefix**，見 §10） | 搭配 Ant Design theme token |
+| 樣式 | Tailwind CSS + daisyUI（**Phase 14 起由 powerhouse 統一提供，本外掛已無自有 CSS**，見 §10） | 搭配 Ant Design theme token |
 | 打包 | Vite | HMR port 5178 |
 | 共用套件 | `antd-toolkit` | 子路徑：`antd-toolkit`、`antd-toolkit/refine`、`antd-toolkit/wp` |
 
@@ -74,7 +74,7 @@ antd v5 拿掉了 v4 的 disabled 相容包裝（`node_modules/antd/lib/tooltip/
 </Tooltip>
 ```
 
-`inline-block` / `cursor-not-allowed` / `pointer-events-none` 都是標準 Tailwind utility（見 §10），未列在 `tailwind.config.cjs` 的 `blocklist` 內，直接可用。
+`inline-block` / `cursor-not-allowed` / `pointer-events-none` 都是標準 Tailwind utility（見 §10），未列在 powerhouse `tailwind.config.cjs` 的 `blocklist` 內，直接可用（Phase 14 起 power-shop 已無自己的 Tailwind config，utility 是否可用一律以 powerhouse 那份為準）。
 
 **B. `href` + `disabled` 給同一顆 `<Button>`：能動，但不要只靠這個保證安全**
 
@@ -1097,170 +1097,50 @@ grep -E 'App1|Refine|@refinedev|dataProviderName|wc-rest|wp-rest|X-WP-Nonce' par
 
 ---
 
-## 6.7 賣場前台 profit-shop-front 前端架構（Phase 10 → 11 → 12，第三個 bundle）
+## 6.7 賣場前台 profit-shop-front（Phase 10 → 11 → 12 → 13 為 React bundle，**Phase 14 起已整個移除**）
 
-customer-facing 的分潤賣場前台（`/profit-shop/{slug}/`）。**UI 與行為 1:1 照搬 legacy 一頁商店**
-（舊版 `/power-shop/{slug}/`）——原始 TSX 已從 `legacy/js/dist/assets/*.js.map` 的
-`sourcesContent` 完整還原（76 個檔案），照搬時是逐檔比對，不是憑印象重寫。
+> ⚠️ **本節整段是歷史紀錄**。`js/src/profit-shop-front/` 整目錄（19 檔：`main.tsx` /
+> `App.tsx` / `types.ts` / `atoms.ts` / `env.ts` / `utils.tsx` / `styles.css` /
+> `components/` / `hooks/` / `ProductModal/`）已於 **Phase 14** 全數刪除，
+> `vite.config.ts` 的第三個 Vite entry 也一併移除——**power-shop 現在只有 2 個 Vite entry**
+> （admin SPA + partner portal），賣場前台不再是 React bundle。
+>
+> 賣場前台現在是 **PHP + daisyUI + 手寫 vanilla JS**（不進 Vite build pipeline），本節描述的
+> 元件架構、Jotai atom、antd Modal 版型**全部不存在於現行程式碼**。新架構的完整說明在
+> `.claude/rules/profit-shop.rule.md` §12.8「Phase 14」與 `architecture.rule.md`「賣場前台」
+> 章節，**不在本檔**——那兩層（vanilla JS + PHP template）都不是 React / TypeScript，
+> 不屬於本檔案（`react.rule.md`）的管轄範圍。CSS 規則見 §10。
+>
+> 保留本節的理由：下方「照搬時修掉的 legacy 缺陷」表記錄的是 **legacy 原始碼裡真實存在的
+> bug**（不是 React 特有的問題），任何人日後若又從 `legacy/js/dist/assets/*.js.map` 的
+> `sourcesContent` 照搬同一批邏輯（不論目標是 React 還是任何其他框架），仍會踩到同樣的坑，
+> 因此表格本身的知識價值不隨 bundle 刪除而消失。
 
-### 混合式架構：PHP 印內容，React 只掛互動層
+### 照搬時修掉的 legacy 缺陷（歷史紀錄——目標程式碼已不存在，但坑本身仍會被重踩）
 
-這是**與另外兩個 bundle 最大的不同**，也是 legacy 原本的設計：
-
-```
-PHP（template）                          React（本 bundle）
-├─ 商品 grid（名稱/價格/圖 → SEO）      └─ ProductModal（點卡片開啟）
-├─ div[data-ps-product-id]  ←─ 契約 ───┐     Gallery / 變體 / 庫存 / 購買人數 / 數量
-├─ .ps-btn / .ps-not-ready  ←─ 契約 ───┤     加入購物車 → 動態建隱藏 form POST 回本頁
-├─ #profit_shop_front_app   ←─ mount ──┘     （WooCommerce 原生流程，整頁重新載入）
-├─ window.power_shop_front_data ────────→ 前端唯一資料來源（env / settings / products）
-├─ wc_print_notices()                     加購結果（成功 / 庫存不足 / 缺屬性）
-└─ <noscript> 降級：query string 加購
-```
-
-**不要把商品資訊搬離 HTML**——那是這個頁面的 SEO 全部價值。React 呈現的是同一份資料的互動版本。
-
-**Phase 12 起本 bundle 不再有購物車**：購物車表格、樂觀更新、購物車 API 全部移除，
-購物車與結帳一律走 WooCommerce 自己的頁面。演進脈絡見下方「加入購物車」一節。
-
-### 目錄結構
-
-```
-js/src/profit-shop-front/
-├── main.tsx                    # entry：ConfigProvider → AntdApp → StyleProvider（無 QueryClientProvider）
-├── App.tsx                     # 掃 div[data-ps-product-id]、移除 ps-not-ready、綁 click 開 Modal
-├── types.ts / atoms.ts / env.ts / utils.tsx / styles.css / defaultImage.ts
-├── components/                 # Gallery / Price / PlusMinusInput / StockInfo / BuyerCount
-│                               #   ProductVariationsSelect / ToggleContent
-├── hooks/                      # usePlusMinusInput / useProductModalProps
-└── ProductModal/               # index.tsx + AddToCartButton.tsx
-```
-
-⚠ **本 bundle 沒有 `api.ts`，也不應該有**——所有資料來自 PHP `wp_localize_script`，
-唯一的「寫入」是 WooCommerce 原生表單送出。`main.tsx` 因此也**沒有** `QueryClientProvider`
-（留一個沒有任何 query 的 provider 會誤導後人以為這裡還有非同步資料流）；但
-`<AntdApp component={false}>` **刻意保留**，即使目前沒有任何 notification 呼叫——缺了它
-`App.useApp()` 會回空物件、呼叫當下直接 throw 並中斷後續程式碼且沒有清楚的錯誤訊息（見 §2）。
-
-### 與 admin SPA / partner portal 的三處關鍵差異
-
-| 維度 | 本 bundle | 原因 |
-|------|-----------|------|
-| env 加密 | **不加密**（`window.power_shop_front_data` 是純物件） | payload 含 products 陣列，加密後前端要解一大包；且內容全是本來就公開的商品資訊 |
-| env 讀不到時 | **降級不 throw** | customer-facing，任何 env 缺失都不可白屏（對比 partner portal 的 `readPartnerEnv` 會 throw 給 ErrorBoundary） |
-| `StrictMode` | **不用** | 本 bundle 對 PHP 印出的**外部 DOM** 綁 listener，dev 下雙跑 effect 會多一輪解綁/重綁噪音 |
-
-### 加入購物車：WooCommerce 原生表單送出（Phase 12，取代 Phase 11 的自訂 REST）
-
-演進脈絡（三個 Phase、三種做法，**現在是第三種**）：
-
-| Phase | 做法 | 為何換掉 |
-|-------|------|----------|
-| 10 | 寫入走 admin-ajax（`FrontAjax`）、讀取與運費走 WC Store API | 同一台購物車兩套回應形狀、兩套錯誤碼、兩套 nonce 機制，前端各寫一份 |
-| 11 | 全部收斂到自訂 REST `FrontCartApi`（`/wp-json/power-shop/profit-shop-cart*`） | 站長要求移除前台購物車 UI、加購改用「原本 WordPress 的方式」，整條通道失去存在理由 |
-| **12** | **WooCommerce 原生表單送出**，前台不再有任何購物車 API | — |
-
-`AddToCartButton` 的 `handleClick` 動態建一張隱藏 `<form method="post">`、`action` 設為
-`window.location.href`，append 完隱藏欄位後 `form.submit()`：
-
-| 欄位 | 值 |
-|------|----|
-| `add-to-cart` | **父商品** ID（變體商品也是父 ID，對齊 WC `single-product/add-to-cart/variable.php`） |
-| `quantity` | 數量選擇器的值 |
-| `variation_id` | 已選變體 ID（只有 variable 商品才送） |
-| `attribute_*` | 變體屬性值（只有 variable 商品才送，鍵取自 WC 自己回的 `attributes`，見下方） |
-| `profit_shop_id` | 賣場 post ID（`env.shopId`，`> 0` 才送） |
-
-送出後由 `WC_Form_Handler::add_to_cart_action()`（掛 `wp_loaded`）處理，結果寫進 WC session
-的 notices，再 redirect 回本頁（或購物車頁，看站台的 `woocommerce_cart_redirect_after_add` 設定）。
-notices 由 template 自印的 `wc_print_notices()` 呈現。
-
-**三條紀律：**
-
-1. **`profit_shop_id` 一定要送**：`AddToCartHook`（priority 5）只從 `$_GET` / `$_POST` 讀它，
-   漏送就**靜默走商品原價、分潤失效，且沒有任何錯誤訊息**。表單是 `method="post"`，PHP 會正常
-   填 `$_POST`，三道閘門（賣場存在 / `status=publish` / 商品屬於該賣場）照常驗證——這條路徑與
-   template 的 `<noscript>` 降級加購、Phase 4-C1 的 query string 加購完全同源。
-2. **`attribute_*` 的鍵取自選中變體的 `attributes` 物件**（WC `get_available_variations()`
-   回的原始鍵，形如 `attribute_pa_color`），**不要**從 `selectedAttributesAtom` 的 `name`
-   自行加 `attribute_` 前綴組出來。`selectedAttributes` 的 `name` 沒有前綴（例：`pa_color`），
-   而自訂（非 taxonomy）屬性的名稱經 WC `sanitize_title()` 後可能與原始名稱不同（中文屬性會
-   變成 percent-encoded），自行組鍵會在那些商品上安靜地對不上、被 WC 判為「缺少屬性」。
-   變體本身帶的鍵才是 WC 認得的權威值；只有變體該欄位是空字串（"任意" 變體）時才退回使用者
-   實際選的值。
-3. **不要為了「不重新載入頁面」改回 `fetch` / axios**：送 JSON body 時 PHP **不會**填 `$_POST`，
-   分潤會靜默失效。真要走 REST，就必須在呼叫 `add_to_cart()` **前**自己把 `profit_shop_id`
-   橋接進 `$_POST`（Phase 11 的 `FrontCartApi::add_to_cart_with_shop_context()` 就是這麼做的），
-   而且**絕不能**改用 `add_to_cart()` 第 5 個參數 `$cart_item_data` 傳值——`AddToCartHook` 開頭
-   有 short-circuit（`isset($cart_item_data['profit_shop_id'])` 就 return），那會**跳過全部三道
-   閘門**，變成任何人都能對任意商品套任意賣場的分潤價。
-
-**連帶移除的 UX（已知且刻意）**：整頁會重新載入，所以樂觀更新、彩帶（`showConfetti`）、
-「加入購物車成功」通知在 reload 前都來不及被看到，一併移除。`StockInfo` 的「，已加入購物車
-N 件」與 `useProductModalProps` 的「數量上限扣掉購物車既有數量」同樣失去資料來源——超買改由
-WooCommerce 自己在 `add_to_cart()` 時擋下並顯示 notice，那本來就是庫存判斷的唯一真相，
-前端那層只是體驗優化。**不要**為了補回這些細節就把購物車讀取通道重新接回來。
-
-### 照搬時修掉的 legacy 缺陷（不要「還原」回去）
-
-⚠ 第 3、4、7 條所修正的程式碼（樂觀更新 rollback、樂觀項目欄位、加購成功通知）已隨
-Phase 12 移除購物車而**不再存在於本 bundle**。條目刻意保留：它們記錄的是 legacy 原始碼裡
-真實存在的缺陷，任何人日後再從 `legacy/js/dist/assets/*.js.map` 照搬同一批元件時仍會踩到。
-
-| # | legacy 的問題 | 本 bundle 的處理 |
+| # | legacy 的問題 | Phase 10-13 React bundle 曾經的處理（程式碼已刪除） |
 |---|---------------|------------------|
 | 1 | `useEffect` 內把 `return () => removeEventListener(...)` 寫在 `els.forEach()` callback 裡——那是 forEach 的回傳值，**等於完全沒有 cleanup** | 蒐集 `{el, handler}[]`，在 `useEffect` 的 return 統一解綁 |
 | 2 | `Gallery` 把 `if (images.length === 0) return` 寫在 `useState` / `useEffect` **之前**，違反 hooks 規則 | hooks 全部提到最上方 |
 | 3 | `AddToCartButton` 失敗 rollback 用 `variables.id`（product_id）過濾，但樂觀項目對變體商品的 id 是 `variation_id` → **變體加購失敗後樂觀項目殘留** | 把樂觀項目的 id 放進 mutation context，用同一個值刪除 |
 | 4 | 樂觀項目解構 `short_description`，但商品型別的欄位名是 `shortDescription` → 永遠 undefined | 顯式對映 `short_description: shortDescription` |
-| 5 | variable 卡片價格用 `(int)` 轉型 → `99.5` 顯示成 `99`（PHP 端） | 改 float 比較 + `wc_format_decimal($v, '')` 輸出（整數價輸出完全相同） |
-| 6 | `shopStatus` 在前端用 `dayjs()` 重算 | 由 PHP 依**伺服器**時間算好帶入，免除瀏覽器時鐘偏移 |
-| 7 | antd `notification` / `message` 的預設 `zIndex` 只有 1010，會被佈景主題的 sticky header 蓋掉（例如「加入購物車成功」提示看不到） | `styles.css` 補 `.ant-message, .ant-notification { z-index: 999999 !important }`（照搬 legacy `custom.scss`；與商品 Modal 的 `zIndex: 1000000` 不衝突——加購時 `onMutate` 已先關閉 Modal） |
+| 5 | variable 卡片價格用 `(int)` 轉型 → `99.5` 顯示成 `99`（PHP 端） | 改 float 比較 + `wc_format_decimal($v, '')` 輸出（整數價輸出完全相同）——**這條在 Phase 14 的 PHP 版仍然成立**，見 `ProfitShopFrontView::price_range()` 的同一條 docblock 說明 |
+| 6 | `shopStatus` 在前端用 `dayjs()` 重算 | 由 PHP 依**伺服器**時間算好帶入，免除瀏覽器時鐘偏移——**這條在 Phase 14 仍然成立**（`ProfitShopFrontData::resolve_shop_status()`），只是換了呼叫端 |
+| 7 | antd `notification` / `message` 的預設 `zIndex` 只有 1010，會被佈景主題的 sticky header 蓋掉 | 補 `.ant-message, .ant-notification { z-index: 999999 !important }`——**Phase 14 後不適用**：Modal 改用原生 `<dialog>`，開啟時自動進入 top layer，天然蓋過所有元素，不再需要手動疊 z-index |
 
-### ⚠️ Portal 到 `document.body` 的可互動元素要用 `<div role="button">`，不要用原生 `<button>`（bundle 通則）
+第 3、4、7 條在 Phase 12（移除購物車）與 Phase 14（移除 antd notification）之後已不再適用；
+第 5、6 條的**知識本身**仍然成立，只是實作換到了 PHP 端（`ProfitShopFrontView` /
+`ProfitShopFrontData`），詳見 `profit-shop.rule.md` §12.8。
 
-本專案 Tailwind `preflight: false`（沒有 `button { font: inherit; padding: 0; ... }` reset），
-佈景主題對 `<button>` 設的 `font-weight` / `text-transform` / `letter-spacing` / `padding` /
-`min-height` / `min-width` / `display` / `box-shadow` / `:hover` 會**直接蓋進來**，長相會跟舊版
-不一樣，嚴重時甚至撐壞版面。凡是本 bundle 裡「本來該用 `<button>` 卻會吃到主題樣式」的可互動
-元素，一律改用 `<div role="button" tabIndex={0} onKeyDown={...}>`——算繪結果與 legacy 原本用的
-非按鈕元素（`<p>` / `<img>` 包一層）完全相同，且不會被主題污染。已知踩過的三處：
+### `<div role="button">` 取代原生 `<button>` 的原則（歷史紀錄，Phase 14 後改用 vanilla JS 延續同一原則）
 
-| 元件 | 原本的寫法 | 為什麼會踩雷 |
-|------|-----------|--------------|
-| ~~`ProductModal/AddToCartButton.tsx`~~（Phase 12 已無此程式碼） | 成功通知裡「前往購物車」的可點文字，legacy 用 `<p onClick>` | antd 通知是 **portal 到 `document.body`**，會吃到佈景主題的 CSS；`jsx-a11y` 也不允許 non-interactive element 帶 interactive role，故不能直接用 `<p onClick>` |
-| `components/ToggleContent.tsx` | 展開／收合的漸層遮罩 | 遮罩是 grid/flex 版面裡的一個互動熱區，換成 `<button>` 會被主題的 `padding` / `display` 污染，遮罩形狀跑掉 |
-| `components/Gallery.tsx` | 縮圖（`<img>` 外層的點擊熱區） | 縮圖是 `grid-cols-4` 的**直接子元素**，若外層是帶主題樣式的 `<button>`，`aspect-square` 正方形排列會被主題的 `min-height` / `min-width` 撐歪，focus 時還會多一圈瀏覽器預設 outline |
-
-判斷準則：只要該元素會被 portal 到 `document.body`（如 antd 通知／Modal），或是版面對其外層尺寸
-有嚴格假設（如 grid item 需要精確的 `aspect-square`），就優先用 `<div role="button" tabIndex={0}
-onKeyDown={...}>`，不要為了「語意正確」硬套原生 `<button>`。
-
-### 賣場前台 Bundle Size
-
-| Bundle | size | 備註 |
-|--------|------|------|
-| profit-shop-front entry | **16.7 kB** | 自家程式碼（Phase 11 為 39.7 kB；Phase 12 刪掉 Cart / api.ts / useCart / 樂觀更新後 −58%） |
-| profit-shop-front CSS | **16.2 kB** | `styles.css`（`ps-btn` / `ps-addon` + Tailwind + `.ant-notification` z-index；Phase 12 移除 `ps-cart-table` 全區段後從 19.1 kB 降下來） |
-| 共用 chunk | clsx 610 kB + react 91.2 kB + AntdIcon 15.7 kB | 與 admin / partner portal 共用（Vite 自動 dedup） |
-
-### 隔離驗收（新增或改動本 bundle 時必跑）
-
-```bash
-pnpm build
-# 先從 manifest 取出本 bundle 的 entry chunk 檔名（別直接 glob main-*.js —— admin entry 也叫這個）
-F=$(node -e "console.log(JSON.parse(require('fs').readFileSync('js/dist/manifest.json','utf8'))['js/src/profit-shop-front/main.tsx'].file)")
-
-for p in App1 @refinedev Refine dataProviderName wc-rest wc/store admin-ajax X-WP-Nonce profit-shop-cart axios; do
-  printf "%-18s %s\n" "$p" "$(grep -o "$p" "js/dist/$F" | wc -l)"
-done
-# → Phase 12 起應**全部 0 命中**（本 bundle 已不打任何 API）
-```
-
-⚠ 這份清單的期望值隨 Phase 變過兩次，照舊清單會誤判：Phase 10 要求 `X-WP-Nonce` 0 命中（當時
-不打任何自家 endpoint）→ Phase 11 改成預期命中 1 次（走自訂 REST `FrontCartApi`，nonce 是必要
-header）→ **Phase 12 回到 0 命中**（加購改走 WooCommerce 原生表單，前台不再有任何 API 呼叫，
-連 `axios` 都不再進 bundle）。
+Phase 10-13 的 React 版本曾因「本專案 Tailwind `preflight: false`，佈景主題會直接污染
+`<button>` 的 `padding` / `min-height` / `display`」而把部分互動元素改成
+`<div role="button" tabIndex={0} onKeyDown={...}>`。**這個判斷原則被 Phase 14 的 vanilla JS
+完整延續**（`inc/assets/js/profit-shop-front.js` 的 Gallery 縮圖、描述展開收合把手都是
+`<div role="button">` 而非 `<button>`，理由與寫法在該檔案的行內註解說明），只是換了實作語言。
+判斷準則不變：只要該元素會被 portal 到 `document.body`，或版面對其外層尺寸有嚴格假設
+（如 grid item 需要精確的 `aspect-square`），就優先用非原生 `<button>` 承載互動。
 
 ---
 
@@ -1353,89 +1233,88 @@ const { SITE_URL, API_URL, NONCE, KEBAB, ELEMENTOR_ENABLED } = useEnv()
 
 ## 10. CSS 慣例
 
-- **Tailwind CSS**：class **一律無 prefix**（`mb-2` / `flex` / `text-gray-500`）。只有下面表列的 6 個例外帶 `tw-`。
-- **Ant Design** 遵循 ConfigProvider theme token：`colorPrimary: '#1677ff'`、`borderRadius: 6`。
-- 使用 Ant Design v5 元件。
+> **Phase 14 起本專案已無任何自有 CSS**。本節舊版分別描述過「Tailwind 帶 `tw-` prefix」（錯的）
+> 與「本專案自己 import `@tailwind` directive 產出 utility」（Phase 10 補上、Phase 14 又移除）
+> 兩個版本，讀舊 commit / 舊分支的程式碼時可能還會看到那個階段的殘影，但**現行規則以本節為準**。
 
-### ⚠️ `tw-` prefix：只有 6 個 class 有，其餘全是死 class
+- **本外掛不再有 `tailwind.config.cjs` / `postcss.config.cjs` / 任何 `@tailwind` directive 的 CSS 檔**（Phase 14 全數刪除，`package.json` 也移除了 `tailwindcss` / `daisyui` / `autoprefixer` / `postcss` / `postcss-import` / `postcss-nesting`）。
+- 樣式**全部由 powerhouse 統一提供**：admin SPA 吃 powerhouse 的 `js/dist/css/admin.min.css`（Tailwind + daisyUI + antd reset），賣場前台 / partner portal 吃 `js/dist/css/front.min.css`。
+- **Ant Design** 遵循 ConfigProvider theme token：`colorPrimary: '#1677ff'`、`borderRadius: 6`（僅 admin SPA / partner portal 適用；賣場前台已無 antd，見 §6.7）。
 
-**本檔舊版曾寫「Tailwind 使用 `tw-` prefix」，那是錯的**，照著寫的樣式不會生效、也不會有任何 build 錯誤，只是安靜地不見。實際規則：
+### `#tw` scope：沒有這個 id，utility 全部靜默失效
 
-`tailwind.config.js` **沒有設 `prefix`** → 產出的 utility 一律是標準無前綴名稱。帶 `tw-` 的只有 config `plugins` 區塊手寫的這 6 個：
+powerhouse 的 `tailwind.config.cjs` 設 `important: '#tw'`，所有 Tailwind utility 都輸出成
+`#tw .flex { ... }` 這種前綴選擇器形式——**必須有一個帶 `id="tw"` 的祖先元素，utility 才會生效**，
+且不會有任何錯誤訊息，樣式只是安靜地不出現：
 
-| 帶 `tw-` 的 class | 為什麼不能用無前綴版 |
-|-------------------|---------------------|
-| `tw-hidden` / `tw-block` / `tw-inline` / `tw-fixed` / `tw-columns-1` / `tw-columns-2` | 無前綴版（`hidden` / `block` / …）與 WordPress 既有樣式衝突，已寫進 config 的 `blocklist` 擋掉 |
+| 情境 | `id="tw"` 掛在哪 | 誰負責 |
+|------|-------------------|--------|
+| Admin SPA（`admin.php?page=power-shop`） | powerhouse 的 admin-layout template 的 `<body>` | powerhouse repo（跨 plugin） |
+| 前台一般頁面 | powerhouse 的 `language_attributes` filter 補在 `<html>` | powerhouse repo，自動 |
+| Partner Portal（自印獨立 HTML 骨架，不走 `get_header`） | `PartnerPortalRenderer::render_portal()` 自己印 `<html lang="zh-TW" id="tw" class="tailwind">` | 本外掛，需顯式處理 |
+| 賣場前台（走 theme `get_header()`） | 由 theme 印出的 `<html>` 上，經 powerhouse 的 `language_attributes` filter 補上 | powerhouse repo，自動 |
 
-除這 6 個之外，**任何 `tw-` 開頭的 class 都不會生效**。寫 `tw-flex`、`tw-mb-4`、`tw-text-red-500` 等於什麼都沒寫。
+新增任何「不走標準 WP 頁面渲染流程」的頁面（例如 Partner Portal 那種自印 HTML 骨架），
+**必須**自己確認輸出的 `<html>` 或最外層容器帶有 `id="tw"`，否則整頁 Tailwind 全滅。
 
-### Tailwind entry：`js/src/assets/styles/tailwind.css`
+### daisyUI 元件 class 帶 `pc-` 前綴（不是 `tw-`）
 
-Tailwind 只在 CSS 檔看到 `@tailwind` directive 時才注入 utility。本專案原本雖然 `tailwindcss` 依賴、`postcss.config.cjs`、`tailwind.config.js` 三者齊全，卻**沒有任何 CSS 檔宣告過 directive** —— 整份 config 沒有消費者，本專案產出 0 個 utility。畫面上還能生效的 class 全部是 powerhouse plugin `admin.min.css`（全域 enqueue）順便帶進來的副產品。
+daisyUI 元件（`pc-btn` / `pc-modal` / `pc-alert` / `pc-input` 等）走 powerhouse daisyUI config
+的 `prefix: 'pc-'`，與 Tailwind utility（無前綴，靠 `#tw` scope 而非 class 前綴區隔）是**兩套
+不同的前綴機制**，不要混淆。
 
-這造成一個不可控的外部相依：powerhouse 的 Tailwind build 只掃 powerhouse 自己的原始碼，本專案寫了一個 powerhouse 剛好沒用到的 class 就是死的。實測 `max-w-3xl` / `list-disc` / `pl-5` / `border-b` 都中招。
+### daisyUI class 也被 scope 進 `#tw`（powerhouse CSS 建置層，2026-08-04）
 
-**已修**：新增 `js/src/assets/styles/tailwind.css`（`@tailwind base` + `@tailwind utilities`），由 `App1.tsx`（admin）與 `partner-portal/main.tsx`（前台，拿不到 admin CSS）各自 import。本專案現在自行產出所有實際用到的 utility。
+daisyUI v4 的元件 class 以 specificity **(0,1,0)** 輸出（例如 `.pc-btn{}`），且 daisyUI v4
+**沒有** `important` 設定可以拉高權重。WordPress 佈景主題常有相同 specificity 的規則（實測
+Blocksy 命中 `[type="submit"]`），CSS 同分時由**載入順序**決勝——主題永遠排在 plugin CSS
+之後，因此永遠贏，`pc-btn-sm` / `pc-btn-ghost` / `pc-btn-circle` 這類尺寸與變體 class 會被
+主題悄悄蓋掉，且沒有任何錯誤訊息。
 
-- 沒有 `@tailwind components` —— 那是給 `@apply` 用的，本專案無此用法
-- `@tailwind base` 在 `corePlugins.preflight: false` 下**不輸出 CSS reset**，只留 `--tw-*` 變數宣告（shadow / ring / transform 這類 composite utility 的運作前提）
-- 產出約 12.7 kB（gzip 3.1 kB）獨立 chunk
+powerhouse 的 `pnpm build-css:admin` / `build-css:front` 因此多一道 PostCSS 步驟
+（`scripts/postcss-scope-daisyui.cjs`，透過 `--postcss ./postcss.tailwind.cjs` 掛載），把所有
+`pc-` 開頭的 daisyUI 選擇器整批收進 `#tw`——轉換後變成 `#tw .pc-btn{}`，specificity 拉高到
+(1,1,0)，與 Tailwind utility 同一個量級，穩定勝過主題、與 CSS 載入順序無關。**這代表寫原生
+`pc-btn-sm` / `pc-input-sm` 等 class 現在就能正常生效**，不需要像 Phase 14 剛完工時那樣額外
+疊一層 Tailwind utility 繞過（那批繞過用的常數已刪除，見 CLAUDE.md Common Pitfall #26 與
+`profit-shop.rule.md` §12.8「Phase 14 補充修正」）。
 
-### ⚠️ 新增 bundle 時**不可只 import 共用的 tailwind entry**（Phase 10 實測推翻的舊說法）
+⚠️ **這個修正涵蓋不到「daisyUI 根本沒出過規則」的元素**——`scope-daisyui` 只能把「daisyUI 有
+規則、但輸給主題」的情況翻盤，若 daisyUI 對某個元素完全沒有樣式（例如 `pc-modal-backdrop`
+內的 `<button>`，daisyUI 只對 form 本身出規則、沒管裡面的 button），主題的樣式仍會無對手地
+套用，這種情況仍要**手動**加 Tailwind utility 壓過去（如 `bg-transparent text-transparent
+border-0`）。新增賣場前台元件時，先用瀏覽器 DevTools 檢查 daisyUI 是否真的對它出過規則，
+不要假設所有 `pc-*` class 都自動安全。詳見 `specs/tech-debt.md` TD-40。
 
-本節舊版曾寫「新增 SPA bundle 時記得也 import 這個 entry」——**實測證明那樣做不夠**。
+### `tw-` 開頭的 class：只有 blocklist 擋下的極少數，且有陷阱
 
-`@/assets/styles/tailwind.css` 同時被 `App1.tsx`（admin）與 `partner-portal/main.tsx` import，
-Vite 因此把它提取成「共用 CSS chunk」並掛到 **admin 的 chunk**（實測是 `App1-*.css`）。
-新 bundle 若只是照樣 import 它，manifest 中該 entry 的 `css` 陣列裡**根本沒有 Tailwind**：
+powerhouse 的 Tailwind utility 本身無前綴（`mb-2` / `flex`），只有極少數與 WordPress 既有樣式
+衝突、被 `blocklist` 擋掉的 utility 才會改用 `tw-` 開頭的替代品（例如 `tw-hidden`）。
+**這組替代品不是「全部安全的平行宇宙」**——`inline` 被 blocklist 擋掉，而它的替代品
+`tw-inline` 會因為 CSS 產出順序排在 `tw-hidden` 之後而**蓋掉** `tw-hidden`（同權重、後者勝），
+讓「本來要隱藏的元素」永遠顯示。完整說明與修法見 CLAUDE.md Common Pitfall #27。
 
-```bash
-# Phase 10 實測（修正前）
-node -e "const m=require('./js/dist/manifest.json');
-  console.log(m['js/src/profit-shop-front/main.tsx'].css)"
-# → ['assets/main-Dhj9En9w.css']   ← 只有自家 styles.css，Tailwind 不見了
-```
+### 跨 repo build 相依：改 class 之後要到 powerhouse 重新 build
 
-`Vite\enqueue_asset()` 確實會**遞迴**走 `imports` 收集 CSS（`vite-for-wp.php:300`），
-但新 bundle 不 import admin 的 chunk，所以遞迴也抓不到。結果是**所有 utility 靜默失效**：
-grid 變單欄、`aspect-square` / `text-red-500` / `group-hover:*` 全部不生效，
-而 `pnpm build` 不會有任何警告，`tailwindcss` CLI 單獨跑也完全正常（21 kB，class 全在）。
+powerhouse 的 Tailwind `content` 設定已把兄弟目錄 `power-*` 底下的 `inc` 與 `js/src` 納入掃描，
+所以 power-shop 寫的 class **理論上**會被 powerhouse 的 build 掃到並產出——但這代表：
 
-**正確做法**：把 `@tailwind` directive 寫在該 bundle **自己的** CSS 檔裡：
-
-```css
-/* js/src/profit-shop-front/styles.css */
-@tailwind base;
-@tailwind utilities;
-
-.power-shop-products .ps-btn { /* bundle 專屬樣式 */ }
-```
-
-```tsx
-// main.tsx —— 不要 import 共用的 tailwind.css
-import './styles.css'
-```
-
-產出的 utility 就會併入該 entry 專屬的 `main-*.css`，掛在 manifest 的 `css` 欄位上。
-代價是每個 bundle 各帶一份 utility（約 15–20 kB，gzip 後 ~4 kB）——那正是 bundle 隔離
-該有的行為，且共用 chunk 的做法本來就沒讓它們共用成功。
-
-**驗收方式**（新增 bundle 後必跑）：
-
-```bash
-pnpm build
-node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('js/dist/manifest.json','utf8'));
-  const e=m['js/src/<你的 bundle>/main.tsx'];
-  (e.css||[]).forEach(f=>{const c=fs.readFileSync('js/dist/'+f,'utf8');
-    console.log(f, (c.length/1024).toFixed(1)+'kB', c.includes('.grid-cols-2')?'✓ tailwind':'✗ 缺 tailwind')})"
-```
-
-**驗證某個 class 到底有沒有生效**：
+1. **改動 power-shop 任何檔案裡的 class 之後，必須到 powerhouse 執行 `pnpm build-css:admin` /
+   `build-css:front`**，本專案自己的 `pnpm build` 不會、也不能重新產生 Tailwind CSS
+2. Build 完後**還要 bump powerhouse 的版本號**（其 CSS enqueue 是 `?ver={Plugin::$version}`），
+   否則既有訪客的瀏覽器會沿用舊快取版本，看起來像「新 class 沒生效」，完整說明見 CLAUDE.md
+   Common Pitfall #28
+3. 本專案自己**無法**驗證某個 class 是否真的產出（沒有自己的 CSS 檔可以 grep）——驗證方式改成
+   到 powerhouse 的 `js/dist/css/admin.min.css` / `front.min.css` 內 grep 目標 class：
 
 ```bash
-pnpm build
-grep -c '\.mb-2{' js/dist/assets/index-*.css   # 1 = 有產出；0 = 沒有（class 名稱寫錯或沒被掃到）
+# 在 powerhouse repo 內驗證（不是本專案）
+grep -c '\.mb-2{' ../powerhouse/js/dist/css/admin.min.css   # 1 = 有產出；0 = 沒有（可能沒重跑 build，或 content 掃描沒命中）
 ```
+
+新增賣場前台的 class 時，可先用「反轉義後比對 HTML 實際 class 清單 vs. 目標 CSS 檔內容」的
+方式批次驗證（Phase 14 驗收即採此法：賣場前台 111 個 class 全數比對確認由 `front.min.css`
+產出）。
 
 ---
 

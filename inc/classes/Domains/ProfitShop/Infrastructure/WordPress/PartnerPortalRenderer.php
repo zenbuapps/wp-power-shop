@@ -253,10 +253,33 @@ final class PartnerPortalRenderer {
 
 		\nocache_headers();
 
+		/*
+		* powerhouse 的前台統一樣式（Tailwind + daisyUI + reset）。
+		*
+		* powerhouse 是掛在 `wp_enqueue_scripts` 上 enqueue 的，而那個 hook 由 `wp_head()`
+		* 觸發——portal 刻意不呼叫 `wp_head()`（避免 theme CSS / admin bar / 其他 plugin
+		* 注入污染），所以必須自己顯式呼叫，否則下面的 `wp_print_styles()` 印不出它，
+		* 整個 portal 會**完全沒有樣式**且沒有任何錯誤訊息。
+		*
+		* 本外掛自己不再有任何 CSS 檔（Phase 14），這是 portal 唯一的樣式來源。
+		*/
+		if ( \class_exists( \J7\Powerhouse\Bootstrap::class ) ) {
+			\J7\Powerhouse\Bootstrap::enqueue_frontend_assets();
+		}
+
 		$site_name = (string) \get_bloginfo( 'name' );
 		?>
 <!DOCTYPE html>
-<html lang="zh-TW">
+		<?php
+		/*
+		* `id="tw"` 是 powerhouse Tailwind utility 生效的前提（其 config 是
+		* `important: '#tw'`，所有 utility 都輸出成 `#tw .flex { ... }`）。
+		* 前台一般頁面由 powerhouse 的 `language_attributes` filter 補上，
+		* 但 portal 自印 HTML 骨架、不走那個 filter，必須自己帶。
+		* 少了它，utility 會**靜默全部失效**（版面塌成單欄），且沒有任何錯誤訊息。
+		*/
+		?>
+<html lang="zh-TW" id="tw" class="tailwind">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

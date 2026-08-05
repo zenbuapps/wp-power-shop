@@ -22,7 +22,12 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterf
  *
  * 設計原則：
  * - 與 ProfitShopRenderer 共用同一份 template（templates/profit-shop-front.php），
- *   靠 $is_shortcode_context 旗標讓 template 改用 <div> 外層（宿主頁面已有自己的 <main>）
+ *   且**渲染完全相同的 DOM**：外層一律 `<div>`（宿主頁面已有自己的 `<main>`，而 HTML spec
+ *   規定一份文件內只能有一個非 hidden 的 main；獨立頁面走 theme 的 header.php 時同樣可能
+ *   已經有 `<main>`，所以兩條路徑統一用 `<div>` 才是唯一安全的選擇）。
+ *   Phase 14 起 `$is_shortcode_context` 旗標已移除——它是兩條路徑 DOM 分歧的唯一來源
+ * - 賣場設定（`$front_settings`）與前台互動層（`ProfitShopFrontView::enqueue()`）
+ *   兩條路徑都必須提供，缺一會讓 shortcode 賣場的販售狀態與商品 Modal 失效
  * - status 檢查與 ProfitShopRenderer::maybe_render 同一條紀律：
  *   publish 對外可見；非 publish 僅「對該 post 有 edit 能力」的使用者可預覽
  * - shortcode 一律 return 字串、永不 echo，且任何失敗都不得拋例外把宿主頁面弄壞
@@ -179,12 +184,25 @@ final class ProfitShopShortcode {
 	 * @return string 賣場 HTML；渲染過程拋例外時回空字串（不讓宿主頁面壞掉）
 	 */
 	private function render_template( ProfitShop $shop ): string {
-		// template 靠這兩個變數運作。
-		// $shop_for_template：賣場聚合根（與 ProfitShopRenderer::render_shop 一致）。
-		// $is_shortcode_context：讓外層標籤改用 <div>，因為宿主頁面已經有自己的 <main>，
-		// 而 HTML spec 規定一份文件內只能有一個非 hidden 的 main，巢狀是無效 HTML。
-		$shop_for_template    = $shop;
-		$is_shortcode_context = true;
+		/*
+		* template 靠這兩個變數運作，**兩者都必須與 ProfitShopRenderer::render_shop 一致**。
+		*
+		* $front_settings 早期只有 renderer 會傳，shortcode 路徑因此拿到空陣列，
+		* `shopStatus` 一律 fallback 成 'published'：已結束販售（或尚未開賣）的賣場
+		* 用 shortcode 嵌入時，卡片與 Modal 照樣可以加購。這是實質的商業邏輯漏洞，
+		* 不只是「外觀不一致」。
+		*/
+		$shop_for_template = $shop;
+		$front_settings    = ProfitShopFrontData::settings( $shop );
+
+		/*
+		* 前台互動層。shortcode 在 `the_content` 內渲染，此時 `wp_head` 已跑完但
+		* `wp_footer` 尚未執行，因此 in-footer 的 script 仍然印得出來。
+		*
+		* 早期 shortcode 路徑完全沒有 enqueue，賣場的商品 Modal 根本開不起來——
+		* 使用者只會看到卡片，點下去是直接送出加購（等同無 JS 的降級路徑）。
+		*/
+		ProfitShopFrontView::enqueue();
 
 		\ob_start();
 		try {

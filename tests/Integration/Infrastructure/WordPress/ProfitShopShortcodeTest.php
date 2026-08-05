@@ -13,7 +13,8 @@
  *   5. id 嚴格驗證（非數字 / 負數 / 前導零 / 浮點 / 缺參數）
  *   6. status 可見性與 ProfitShopRenderer 同一條紀律（draft 僅有權限者可預覽）
  *   7. 資訊揭露邊界：一般訪客一律空字串，只有 edit_posts 能力者看得到除錯提示
- *   8. 旗標未定義時 template 仍用 <main>（ProfitShopRenderer 路徑零變化）
+ *   8. **獨立頁面與 shortcode 兩條路徑渲染逐字相同的 DOM**（統一渲染的核心回歸鎖）
+ *   9. shortcode 路徑必須套用販售起訖時間（閉店賣場不得印出可送出的加購表單）
  *
  * @group profit_shop
  * @group infrastructure
@@ -31,6 +32,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PriceOverride;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ProfitRate;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ShopMode;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopFrontData;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopShortcode;
 use Tests\Integration\TestCase;
 
@@ -180,12 +182,12 @@ final class ProfitShopShortcodeTest extends TestCase {
 
 		$this->assertNotSame( '', $html, '防空斷言：publish 賣場應有輸出，否則下面兩條會假綠燈' );
 		$this->assertStringContainsString(
-			'<div class="ps-profit-shop-front"',
+			'<div class="ps-profit-shop-front',
 			$html,
-			'shortcode 情境外層應為 <div>'
+			'外層應為 <div>'
 		);
-		$this->assertStringNotContainsString( '<main', $html, 'shortcode 輸出不得含 <main>（巢狀 main 是無效 HTML）' );
-		$this->assertStringNotContainsString( '</main>', $html, 'shortcode 輸出不得含 </main>' );
+		$this->assertStringNotContainsString( '<main', $html, '輸出不得含 <main>（巢狀 main 是無效 HTML）' );
+		$this->assertStringNotContainsString( '</main>', $html, '輸出不得含 </main>' );
 	}
 
 	/**
@@ -206,29 +208,132 @@ final class ProfitShopShortcodeTest extends TestCase {
 	}
 
 	/**
-	 * 【回歸鎖】$is_shortcode_context 未定義時，template 仍必須用 <main>
+	 * 【回歸鎖】獨立頁面路徑與 shortcode 路徑必須渲染**完全相同**的 DOM
 	 *
-	 * 這條保護 ProfitShopRenderer（獨立頁面路徑）的輸出不因 shortcode 旗標而改變。
-	 * 刻意直接 require template、不設旗標，模擬 renderer 的變數環境。
+	 * 這是「統一渲染 DOM」的核心斷言。兩條路徑歷史上分歧過兩次，且兩次都不是外觀問題：
+	 *
+	 *   1. `$is_shortcode_context` 旗標讓外層標籤在 `<main>` / `<div>` 之間切換
+	 *   2. **更嚴重**：早期只有 ProfitShopRenderer 會傳 `$front_settings`，shortcode
+	 *      路徑因此拿到空陣列，`shopStatus` 一律 fallback 成 `'published'`——
+	 *      已結束販售（或尚未開賣）的賣場用 shortcode 嵌入時**照樣能加購**，
+	 *      這是商業邏輯漏洞而不只是版型不一致
+	 *
+	 * 因此這裡不只比對外層標籤，而是逐字比對整份輸出：任何一邊多傳 / 少傳變數，
+	 * 或 template 又長出情境分支，都會在這裡被抓到。
 	 *
 	 * @test
 	 * @group edge
+	 * @group smoke
 	 */
-	public function test_template_defaults_to_main_wrapper_without_flag(): void {
-		$product = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+	public function test_renderer_and_shortcode_paths_render_identical_dom(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '雙路徑一致性商品',
+				'regular_price' => '1000',
+			]
+		);
 		$shop_id = $this->create_shop( [ $this->item_for( $product->get_id() ) ] );
 		$shop    = $this->repo->find( $shop_id );
 		$this->assertInstanceOf( ProfitShop::class, $shop, '測試前置：賣場應可讀回' );
 
-		$html = $this->render_template_without_flag( $shop );
+		$shortcode_html = $this->render( $shop_id );
+		$renderer_html  = $this->render_template_as_renderer( $shop );
+
+		$this->assertNotSame( '', $shortcode_html, '防空斷言：shortcode 應有輸出' );
+		$this->assertNotSame( '', $renderer_html, '防空斷言：renderer 路徑應有輸出' );
+
+		$this->assertSame(
+			$renderer_html,
+			$shortcode_html,
+			'兩條渲染路徑的 DOM 必須完全相同；不同代表 template 又長出情境分支，或某一邊漏傳變數'
+		);
+
+		// 外層一律 <div>：獨立頁面走 theme 的 header.php 時同樣可能已經有 <main>，
+		// 兩條路徑統一用 <div> 才是唯一安全的選擇。
+		$this->assertStringContainsString( '<div class="ps-profit-shop-front', $renderer_html );
+		$this->assertStringNotContainsString( '<main', $renderer_html );
+	}
+
+	/**
+	 * 【回歸鎖】shortcode 路徑必須套用賣場的販售狀態
+	 *
+	 * 早期 shortcode 路徑不傳 `$front_settings`，`shopStatus` 永遠 fallback 成
+	 * `'published'`——已結束販售的賣場嵌進頁面後照樣能加購。這條直接鎖住那個漏洞。
+	 *
+	 * @test
+	 * @group security
+	 * @group edge
+	 */
+	public function test_shortcode_respects_closed_shop_status(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+
+		// endTime 設在過去 → resolve_shop_status() 回 'closed'
+		$shop_id = $this->create_shop(
+			[ $this->item_for( $product->get_id() ) ],
+			'publish',
+			[ 'endTime' => ( \time() - 86400 ) * 1000 ]
+		);
+
+		$html = $this->render( $shop_id );
+
+		$this->assertNotSame( '', $html, '防空斷言：賣場應有輸出' );
+		$this->assertStringContainsString( '商店已關閉', $html, '已結束販售的賣場必須顯示狀態文案' );
+		$this->assertStringContainsString( 'disabled', $html, '已結束販售時加購按鈕必須停用' );
+		$this->assertStringNotContainsString(
+			'name="add-to-cart"',
+			$html,
+			'已結束販售時不得印出任何可送出的加購表單欄位'
+		);
+		$this->assertStringNotContainsString(
+			'data-ps-toast',
+			$html,
+			'閉店賣場不會有 AJAX 加購，成功通知容器同樣不該印出'
+		);
+	}
+
+	/**
+	 * 【回歸鎖】開放中的賣場必須印出 AJAX 加購所需的完整 DOM 契約
+	 *
+	 * `inc/assets/js/profit-shop-front.js` 靠這幾個屬性找元素；任一被改名或刪除，
+	 * AJAX 加購會**靜默退回整頁送出、loading 與成功通知完全不出現**，而且不會有
+	 * 任何錯誤訊息。同時鎖住 `profit_shop_id` 仍在表單內——那是分潤三閘門的生命線。
+	 *
+	 * @test
+	 * @group smoke
+	 * @group happy
+	 */
+	public function test_open_shop_renders_ajax_dom_contract(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+		$shop_id = $this->create_shop( [ $this->item_for( $product->get_id() ) ] );
+
+		$html = $this->render( $shop_id );
+
+		$this->assertNotSame( '', $html, '防空斷言：賣場應有輸出' );
+
+		$contract = [
+			'data-ps-form'              => 'JS 攔截 submit 的錨點',
+			'data-ps-submit-spinner'    => '加購按鈕內的 loading 圈',
+			'data-ps-submit-label'      => '加購按鈕文字',
+			'data-ps-submit-error'      => 'Modal 內就地錯誤列',
+			'data-ps-submit-error-label' => '錯誤文字容器',
+			'data-ps-toast'             => '成功通知容器',
+			'data-ps-toast-body'        => '通知本體（圖示切換的 host）',
+			'data-ps-toast-label'       => '通知文字容器',
+		];
+
+		foreach ( $contract as $attribute => $why ) {
+			$this->assertStringContainsString(
+				$attribute,
+				$html,
+				\sprintf( '缺少 %s（%s）——AJAX 加購會靜默失效', $attribute, $why )
+			);
+		}
 
 		$this->assertStringContainsString(
-			'<main class="ps-profit-shop-front"',
+			'name="profit_shop_id"',
 			$html,
-			'旗標未定義時（ProfitShopRenderer 路徑）外層必須維持 <main>'
+			'分潤三閘門只從 \$_GET / \$_POST 讀 profit_shop_id，漏印會靜默走商品原價'
 		);
-		$this->assertStringContainsString( '</main>', $html, '關閉標籤也必須是 </main>' );
-		$this->assertStringNotContainsString( '<div class="ps-profit-shop-front"', $html );
 	}
 
 	// ========== Error：id 參數嚴格驗證 ==========
@@ -450,12 +555,13 @@ final class ProfitShopShortcodeTest extends TestCase {
 	/**
 	 * 建立一個含指定 items 的賣場並回傳 ID
 	 *
-	 * @param OverrideItem[] $items  商品覆寫項目
-	 * @param string         $status 賣場狀態
+	 * @param OverrideItem[]       $items    商品覆寫項目
+	 * @param string               $status   賣場狀態
+	 * @param array<string, mixed> $settings 前台顯示設定（`startTime` / `endTime` / `showStock`…）
 	 *
 	 * @return int 賣場 ID
 	 */
-	private function create_shop( array $items, string $status = 'publish' ): int {
+	private function create_shop( array $items, string $status = 'publish', array $settings = [] ): int {
 		++self::$slug_seq;
 
 		$shop = new ProfitShop(
@@ -467,7 +573,7 @@ final class ProfitShopShortcodeTest extends TestCase {
 			partner_term_id: 1,
 			rate: new ProfitRate( 10 ),
 			items: $items,
-			settings: []
+			settings: $settings
 		);
 
 		$id = $this->repo->save( $shop );
@@ -492,14 +598,20 @@ final class ProfitShopShortcodeTest extends TestCase {
 	}
 
 	/**
-	 * 直接 require template 但不設 $is_shortcode_context，模擬 ProfitShopRenderer 的變數環境
+	 * 以 ProfitShopRenderer 的變數環境直接 require template（獨立頁面路徑）
+	 *
+	 * 刻意複製 `ProfitShopRenderer::render_shop()` 傳給 template 的**完整**變數集合
+	 * （`$shop_for_template` + `$front_settings`）。若日後 renderer 多傳了什麼而這裡
+	 * 沒跟上，`test_renderer_and_shortcode_paths_render_identical_dom` 會直接紅燈，
+	 * 正好提醒兩條路徑又分歧了。
 	 *
 	 * @param ProfitShop $shop 賣場聚合根
 	 *
 	 * @return string template 輸出
 	 */
-	private function render_template_without_flag( ProfitShop $shop ): string {
+	private function render_template_as_renderer( ProfitShop $shop ): string {
 		$shop_for_template = $shop;
+		$front_settings    = ProfitShopFrontData::settings( $shop );
 
 		// 以 class 檔案位置反推 template 路徑，避免寫死相對層數（測試檔搬家就會壞）
 		$class_dir = \dirname( (string) ( new \ReflectionClass( ProfitShopShortcode::class ) )->getFileName() );

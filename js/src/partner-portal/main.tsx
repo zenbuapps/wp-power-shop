@@ -20,9 +20,15 @@ import { ConfigProvider } from 'antd'
 import { createRoot } from 'react-dom/client'
 import { HashRouter } from 'react-router'
 
-// portal 跑在前台，拿不到 admin 的 CSS；自帶 Tailwind utility 才不依賴其他 plugin
-import '@/assets/styles/tailwind.css'
-
+/*
+ * ⚠ 本檔刻意**不 import 任何 CSS**。portal 的 Tailwind utility 與 daisyUI 由 powerhouse
+ * 的 `js/dist/css/front.min.css` 提供——因為 portal 不呼叫 `wp_head()`，那支 CSS 不會
+ * 自動被印出來，改由 `PartnerPortalRenderer::render_portal()` 顯式呼叫
+ * `\J7\Powerhouse\Bootstrap::enqueue_frontend_assets()` 之後再 `wp_print_styles()`。
+ *
+ * ⚠ powerhouse 的 utility 帶 `#tw` 前綴（`important: '#tw'`），因此 portal 自印的
+ * HTML 骨架必須在 `<html>` 上帶 `id="tw"`，否則所有 utility 靜默失效。
+ */
 import App from './App'
 import { AuthProvider } from './auth/AuthContext'
 import { ErrorBoundary } from './components/ErrorBoundary'

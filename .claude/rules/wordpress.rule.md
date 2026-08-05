@@ -134,15 +134,16 @@ JSON body **不會**填 `$_POST`，漏了橋接就是靜默走原價、分潤失
 
 兩條 URL 路線**完全不同**，不要混用渲染策略。query var：`profit_partner_report` vs `profit_shop_slug`，由 `RewriteRules` 同檔註冊但互斥。
 
-**AddToCart 整合（Phase 4-C2 起是 WC filter hook；Phase 12 起三條路徑全部走 WooCommerce 原生表單 / query string）：**
+**AddToCart 整合（Phase 4-C2 起是 WC filter hook；Phase 12 起三條路徑全部走 WooCommerce 原生表單 / query string；Phase 14 起連互動層也改回 PHP 直接印出）：**
 
-加購商品需要讓 `AddToCartHook` 讀到 `profit_shop_id` 才會啟用分潤定價，目前有三條可達路徑：
+加購商品需要讓 `AddToCartHook` 讀到 `profit_shop_id` 才會啟用分潤定價，目前有三條可達路徑，
+**三條都是 PHP 直接印出的 HTML（漸進增強），不是「JS 啟用才有、JS 停用要降級」的兩套並存版本**：
 
 | 通道 | 帶法 |
 |------|------|
-| simple product（`<noscript>` 降級） | template 內 `<form action="<?php echo esc_url( home_url( '/' ) ); ?>" method="post">` 放 `<input type="hidden" name="profit_shop_id" value="...">` 與 WC `add-to-cart` |
-| variable / grouped（`<noscript>` 降級） | template 用 `permalink + add_query_arg('profit_shop_id', $shop_id)` 連到單品頁，由 WC 既有變體選購流程帶入 |
-| **商品 Modal（JS 啟用時，Phase 12 起）** | React 動態建一張隱藏 `<form method="post">` POST 回本頁（`add-to-cart` / `quantity` / `variation_id` / `attribute_*` / `profit_shop_id`），由 `WC_Form_Handler::add_to_cart_action()` 處理。`method="post"` → PHP 正常填 `$_POST`，**不需要**任何橋接手段（Phase 11 走 REST JSON body 時才需要） |
+| simple product 卡片 | template 內 `<form action="<?php echo esc_url( home_url( '/' ) ); ?>" method="get">` 放 `<input type="hidden" name="profit_shop_id" value="...">` 與 WC `add-to-cart`。這是卡片**唯一**的動作元素，本身無 JS 即可加購；JS 載入後在卡片層攔截 click 改開 Modal（見下） |
+| variable / grouped 卡片 | template 用 `permalink + add_query_arg('profit_shop_id', $shop_id)` 連到單品頁，由 WC 既有變體選購流程帶入 |
+| **商品 Modal（`<dialog>`，PHP 直接印出）** | `templates/partials/profit-shop-modal.php` 直接印出 `<form method="post">`（不是動態建立），欄位 `add-to-cart` / `quantity` / `variation_id` / `attribute_*` / `profit_shop_id` 皆由 PHP 印死；`inc/assets/js/profit-shop-front.js`（手寫 vanilla JS，Phase 14）只在使用者選定變體後**重寫** `variation_id` / `attribute_*` 兩個 hidden input 的值。送出交給 `WC_Form_Handler::add_to_cart_action()` 處理，`method="post"` → PHP 正常填 `$_POST`，**不需要**任何橋接手段（Phase 11 走 REST JSON body 時才需要，該通道已刪除） |
 
 後端 `AddToCartHook`（priority 5）只讀 `$_GET + $_POST`（**不讀 `$_COOKIE`**），三道閘門驗證後注入 cart_item_data，再由 Phase 3-D `CartPriceOverrideHook`（priority 10 / 999）簽章與套價。詳細 hook 串聯流程見 `architecture.rule.md`「Add-to-Cart 端到端流程」與「加購通道相容性」表。
 

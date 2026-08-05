@@ -35,25 +35,20 @@ final class ProfitShopFrontData {
 	/**
 	 * 主色預設值（對齊 legacy `btnColor` 的預設）
 	 *
-	 * 同時供 template 印出 CSS 變數 `--ps-primary`（`.ps-btn-primary` 的背景色）
-	 * 與 React `ConfigProvider` 的 `colorPrimary`，兩邊必須是同一個值。
+	 * ⚠ **前台已不再消費這個值**（Phase 14）。賣場前台的顏色一律跟隨 powerhouse 的
+	 * daisyUI theme（`pc-btn-primary` / `text-error` / `bg-base-200` 等語意色），
+	 * 不再由賣場設定的 `btnColor` 決定，也不再印出 `--ps-primary` 這個 CSS 變數。
+	 *
+	 * 欄位刻意保留而非刪除：
+	 *   1. wire 契約（`ProfitShop::$settings`）維持穩定，既有站台存的值不會變成孤兒
+	 *   2. `to_color()` 的 hex 白名單本身是有效的輸入驗證，刪掉等於少一道防線
+	 *   3. 日後若要支援「每個賣場各自的 daisyUI theme」，這個欄位是天然的載體
+	 *      （daisyUI 支援 `data-theme` 巢狀覆蓋）
+	 *
+	 * 在那之前它是**沒有消費者的設定值**，已登記技術債；不要因為「看起來該用」
+	 * 就把它接回前台顏色——那會讓賣場顏色脫離站台 theme，與需求相反。
 	 */
 	public const DEFAULT_COLOR_PRIMARY = '#1677ff';
-
-	/**
-	 * 組出前台 bundle 的完整 payload
-	 *
-	 * @param ProfitShop $shop 已驗證的賣場聚合根。
-	 *
-	 * @return array{env: array<string, mixed>, settings: array<string, mixed>, products: array<int, array<string, mixed>>}
-	 */
-	public static function build( ProfitShop $shop ): array {
-		return [
-			'env'      => self::build_env( $shop ),
-			'settings' => self::settings( $shop ),
-			'products' => self::build_products( $shop ),
-		];
-	}
 
 	/**
 	 * 前台顯示設定（供 template 與 localize 共用）
@@ -158,8 +153,10 @@ final class ProfitShopFrontData {
 	/**
 	 * 主色正規化（只接受 #RGB / #RRGGBB，否則回預設）
 	 *
-	 * 這個值會直接進 CSS 變數與 inline `<style>`，因此用白名單而非 escape，
-	 * 避免任何 CSS injection 的可能。
+	 * 白名單而非 escape：這個值**曾經**被直接印進 template 的 inline `<style>`
+	 * （`--ps-primary`），是實打實的 CSS injection 面。Phase 14 移除了那段 inline
+	 * `<style>`（顏色改跟隨 daisyUI theme），但白名單刻意保留——一旦日後有人把這個值
+	 * 接回任何樣式輸出，防線必須已經在原地，而不是那時才想起要加。
 	 *
 	 * @param mixed $value 原始值。
 	 *
@@ -174,45 +171,28 @@ final class ProfitShopFrontData {
 	}
 
 	/**
-	 * 環境資訊
-	 *
-	 * Phase 12：賣場前台不再自行管理購物車，加購改走 WooCommerce 原生表單送出
-	 * （`WC_Form_Handler::add_to_cart_action()`），因此
-	 *   - 移除 `cartApiUrl` / `nonce`（自訂購物車 REST `FrontCartApi` 已整個刪除）
-	 *   - 移除 `checkoutUrl`（結帳一律走 WooCommerce 自己的頁面，前台不需要這個連結）
-	 *   - 之前 Phase 11 就已移除的 `ajaxUrl`（admin-ajax）與 `restUrl`（WC Store API）維持不存在
-	 *
-	 * `shopId` 是唯一**必須**送到前端的欄位：加購表單要以 `profit_shop_id` 送回後端，
-	 * `AddToCartHook` 只從 `$_GET` / `$_POST` 讀它，漏送就靜默走商品原價、分潤失效。
-	 *
-	 * ⚠ 本陣列的欄位必須與前端 `js/src/profit-shop-front/types.ts` 的 `TFrontEnv`
-	 * **完全一致**。多送的欄位在 TypeScript 端不會有任何編譯錯誤，只會變成沒人讀的
-	 * payload，日後容易被誤認為「還有人在用」而不敢刪。
-	 *
-	 * @param ProfitShop $shop 賣場聚合根。
-	 *
-	 * @return array{siteUrl: string, shopId: int, shopSlug: string}
-	 */
-	private static function build_env( ProfitShop $shop ): array {
-		return [
-			'siteUrl'  => \untrailingslashit( (string) \site_url() ),
-			'shopId'   => $shop->id,
-			'shopSlug' => $shop->slug,
-		];
-	}
-
-	/**
 	 * 商品清單
 	 *
 	 * 保序：依 `$shop->items()` 的陣列順序輸出（賣場商品排序是 business
 	 * data，見 .claude/rules/profit-shop.rule.md §7）。查不到的商品會被
 	 * 跳過而非留下空洞。
 	 *
+	 * Phase 14 起改為 **public**：賣場前台 template 的商品卡片與商品 Modal 都直接
+	 * 消費這份資料。早期卡片自己跑一次 `wc_get_product()` + 過濾條件、Modal 的資料
+	 * 另外由本方法組一次，兩邊的「非 publish 商品要跳過」必須靠人維持同步——
+	 * 不同步就會出現「有卡片但 Modal 找不到商品」的破 Modal。收斂成單一來源後，
+	 * 那種分歧在結構上不可能發生。
+	 *
+	 * ⚠ `env`（`build()` / `build_env()`）已隨 React bundle 一併移除：前台不再有
+	 * `wp_localize_script` 的全域 payload，賣場 ID 由 PHP 直接印進加購表單，
+	 * 商品資料由 PHP 直接印成 HTML。留著沒有消費者的組裝方法，正是
+	 * `.claude/rules/profit-shop.rule.md` §7 警告的「存得進去、讀得出來、沒人用」反模式。
+	 *
 	 * @param ProfitShop $shop 賣場聚合根。
 	 *
 	 * @return array<int, array<string, mixed>>
 	 */
-	private static function build_products( ProfitShop $shop ): array {
+	public static function build_products( ProfitShop $shop ): array {
 		if ( ! \function_exists( 'wc_get_product' ) ) {
 			return [];
 		}

@@ -151,8 +151,11 @@ applyTo: "**/*.{php,ts,tsx}"
 │  │  │      （走 theme，與 partner portal 完全脫離 theme 不同）│
 │  │  └───────────────────────────────────────────────────┘  │ │
 │  │  ┌───────────────────────────────────────────────────┐  │ │
-│  │  │  templates/profit-shop-front.php（純 PHP，無 React） │  │ │
+│  │  │  templates/profit-shop-front.php（純 PHP + daisyUI +     │  │ │
+│  │  │  vanilla JS，Phase 14 起無 React）                  │  │ │
 │  │  │   ├─ 商品 grid（responsive 240px auto-fill）        │  │ │
+│  │  │   ├─ 每商品一個 <dialog class="pc-modal">           │  │ │
+│  │  │   │   （partials/profit-shop-modal.php，PHP 印出）  │  │ │
 │  │  │   ├─ simple → form action=home_url('/') + hidden    │  │ │
 │  │  │   │   <input name="profit_shop_id" value="...">     │  │ │
 │  │  │   ├─ variable / grouped → permalink                 │  │ │
@@ -182,12 +185,9 @@ applyTo: "**/*.{php,ts,tsx}"
 │  │   │   - 寫 4 筆 _profit_* meta + HMAC SHA-256 簽章    │ │ │
 │  │   │   - status='publish' 限定（draft 不注入）         │ │ │
 │  │   ├──────────────────────────────────────────────────┤ │ │
-│  │   │ ③ CartItemMetaDisplay（4-C2）                     │ │ │
-│  │   │   woocommerce_get_item_data filter               │ │ │
-│  │   │   - 一個 filter 同時涵蓋：                         │ │ │
-│  │   │     mini-cart / cart page / checkout             │ │ │
-│  │   │   - 顯示「來自賣場 XXX」連結（target=_blank        │ │ │
-│  │   │     rel=noopener，shop 已刪靜默不顯示）            │ │ │
+│  │   │ ③（Phase 15 移除）CartItemMetaDisplay             │ │ │
+│  │   │   前台不再顯示「來自賣場 XXX」——站長要求。         │ │ │
+│  │   │   它是純顯示 filter，移除不影響定價與結算。         │ │ │
 │  │   ├──────────────────────────────────────────────────┤ │ │
 │  │   │ ④ CartPriceOverrideHook::before_calculate_totals  │ │ │
 │  │   │     （3-D，priority 999）                         │ │ │
@@ -209,42 +209,47 @@ applyTo: "**/*.{php,ts,tsx}"
 | Query var | `profit_shop_slug` | `profit_partner_report` |
 | 對象 | 終端買家（unauthenticated） | partner 本人（cookie auth） |
 | 渲染 | PHP page template + `get_header` / `get_footer`（**走 theme**） | 獨立 HTML 骨架（**不走 theme**） |
-| 框架 | **混合式**：PHP 印商品 grid（SEO 內容）+ React/antd 掛互動層（Phase 12 起只剩商品 Modal） | React SPA + axios + react-query |
+| 框架 | **PHP + daisyUI + 手寫 vanilla JS**（Phase 14 起）：商品 grid 與商品 Modal（`<dialog>`）全由 PHP 印出，JS 只負責開 Modal / Gallery / 展開收合 / 數量 / 變體選擇；Phase 10-13 曾是「PHP 印內容 + React/antd 掛互動層」的混合式，已整條移除 | React SPA + axios + react-query |
 | SEO | `<title>` / canonical 注入（防 plugin 衝突）+ 商品名稱／價格留在 HTML | 無 SEO 需求（partner-only） |
 | 加購流程 | Modal → **WooCommerce 原生表單 POST** → WC hook 串聯（JS 停用時降級為 query string） | 無加購（純報表） |
 | 為何分流 | customer-facing + SEO + 不破壞 WC cart 流程 | partner-only + 完整 SPA 體驗 + 隔離 admin bar / theme CSS |
 
-### 賣場前台的混合式架構（Phase 10，照搬 legacy）
+### 賣場前台的架構演進（Phase 4-C 純 PHP → Phase 10-13 PHP + React 混合式 → Phase 14 PHP + daisyUI + vanilla JS）
 
-**Phase 4-C 的「純 PHP、無 React」在 Phase 10 演進為混合式**——這不是推翻原決策，而是精確化：
-Pitfall #12 訂下「賣場前台走 PHP template」的三個理由（SEO / 不破壞 WC cart / customer-facing）
-指的是**內容渲染**，不是「禁止任何 JS」。legacy 一頁商店本身就是這個混合式架構，
-照搬它同時滿足那三個理由與「UI 與舊版完全一致」。
+**Phase 4-C 的「純 PHP、無 React」在 Phase 10 演進為混合式**（PHP 印內容 + React/antd 掛互動層），
+**Phase 14 又把 React/antd 整條移除**，回到「純 PHP」——但這次連互動層（商品 Modal、Gallery、
+變體選擇）也一併由 PHP 印出，只用一支**手寫 vanilla JS**（不進 Vite build）補上跟伺服器渲染
+HTML 互動所需的行為。三個階段共同的原則沒有變：Pitfall #12 訂下「賣場前台走 PHP template」
+的三個理由（SEO / 不破壞 WC cart / customer-facing）指的是**內容渲染**，不是「禁止任何 JS」；
+現行 vanilla JS 與曾經的 React 一樣，只負責互動，不負責產出 SEO 內容。
 
 ```
-PHP（ProfitShopRenderer + template）                React（profit-shop-front bundle）
-├─ 商品 grid（名稱／價格／圖片留在 HTML → SEO）     ├─ 商品 Modal（antd Modal，點卡片開啟）
-├─ div[data-ps-product-id]  ← DOM 契約 ─────────────┤   Gallery / 變體選擇 / 庫存 / 購買人數
-├─ .ps-btn / .ps-not-ready  ← DOM 契約 ─────────────┤   數量選擇器 / 加入購物車
-├─ <div id="profit_shop_front_app">  ← mount 點 ────┤
-├─ window.power_shop_front_data（env/settings/products）→ 前端唯一資料來源
-└─ <noscript> 降級：query string 加購（JS 停用仍可買）
+PHP（ProfitShopRenderer + template + partials）      vanilla JS（inc/assets/js/profit-shop-front.js）
+├─ 商品 grid（名稱／價格／圖片留在 HTML → SEO）     ├─ 開 Modal（<dialog>.showModal()）
+├─ 每商品一個 <dialog class="pc-modal">  ──────────┤   Gallery 縮圖切換 / 描述展開收合
+│   （partials/profit-shop-modal.php 印出）         │   數量 -/+ / 變體選擇（重寫 hidden input）
+├─ [data-ps-product-id] / [data-ps-modal-for]       │
+│   ← DOM 契約（見 CLAUDE.md Pitfall #23）──────────┤
+├─ .ps-profit-shop-front[data-ps-shop]  ← 多賣場邊界┤   （JS 查找一律限定在最近的這個祖先內）
+├─ <script class="ps-variations-data">（每 Modal 各自一份，取代全域 payload）
+└─ 卡片只印一個動作元素（漸進增強，無 JS 即可加購）
 ```
 
-**職責分界的三條紀律：**
+**職責分界的三條紀律（Phase 14 沿用，只是「互動層」從 React 換成 vanilla JS）：**
 
 | # | 紀律 | 為什麼 |
 |---|------|--------|
 | 1 | 商品的**名稱／價格／圖片**必須留在 PHP 印出的 HTML 內 | 那是 SEO 的全部價值；Modal 只是同一份資料的互動呈現 |
-| 2 | `data-ps-product-id` / `.ps-btn` / `.ps-not-ready` / `#profit_shop_front_app` 是**跨語言 DOM 契約** | 改 PHP 的 class 或 attribute 會讓 React 靜默失效（Modal 開不起來、卡片永久灰階），且不會有任何錯誤訊息 |
+| 2 | `data-ps-*` 屬性群是**跨語言 DOM 契約**（完整清單見 CLAUDE.md Pitfall #23） | 改 PHP 的 class 或 attribute 會讓 JS 靜默失效（Modal 開不起來、Gallery / 數量 / 變體互動失效），且不會有任何錯誤訊息 |
 | 3 | 加購一律經過 `woocommerce_add_cart_item_data` filter 鏈 | `AddToCartHook`(5) 的三道閘門 + `CartPriceOverrideHook`(10/999) 的 HMAC 簽章是分潤價格的唯一守門；自建 endpoint 直接塞 `cart_item_data['profit_shop_id']` 會**跳過全部閘門** |
 
 **加購通道相容性**（`AddToCartHook::extract_shop_id_from_request()` 只讀 `$_GET` / `$_POST`）：
 
 | 通道 | 三閘門 | 說明 |
 |------|--------|------|
-| GET `?add-to-cart=X&profit_shop_id=Y` | ✅ | Phase 4-C1 原路徑，`<noscript>` 降級也走這條 |
-| **POST form（hidden input）** | ✅ | **Phase 12 起商品 Modal 走這條**：React 動態建隱藏 `<form method="post">` POST 回本頁，交給 `WC_Form_Handler::add_to_cart_action()`。PHP 正常填 `$_POST`，**不需要任何橋接** |
+| GET `?add-to-cart=X&profit_shop_id=Y` | ✅ | Phase 4-C1 原路徑，variable / grouped 商品的卡片連結、JS 停用時的降級路徑皆走這條 |
+| **`?wc-ajax=add_to_cart`（form-urlencoded POST）** | ✅ | **Phase 15 起商品 Modal 的預設路徑**：WooCommerce 原生 AJAX 端點，power-shop 不寫任何 handler。form-urlencoded → PHP 正常填 `$_POST`，**不需要橋接**。只送 `product_id` / `quantity` / `profit_shop_id`；variable 商品送的是**選中變體的 ID**，`WC_AJAX::add_to_cart()` 會先換算成父商品 ID 與 `attribute_*`，**換算之後**才觸發 `woocommerce_add_cart_item_data`，因此第三閘門的 `has_item($product_id)` 仍然對得上。無 nonce（`nopriv` 且原始碼明文停用 nonce 檢查），未登入訪客可用 |
+| **POST form（hidden input，PHP 直接印出）** | ✅ | **Phase 14 起商品卡片與商品 Modal 都走這條**：`<form method="post">` 由 PHP 直接印在 HTML 內（不是動態建立），交給 `WC_Form_Handler::add_to_cart_action()`。PHP 正常填 `$_POST`，**不需要任何橋接**；vanilla JS 只在使用者選定變體後重寫 `variation_id` / `attribute_*` hidden input 的值 |
 | ~~admin-ajax（`FrontAjax`，Phase 10 採用）~~ | ✅ | **Phase 11 已移除**。原本 `$_POST` 分支天然帶 `profit_shop_id`，handler 只呼叫 `WC()->cart->add_to_cart()`、不自帶 `cart_item_data` |
 | `fetch` / axios + `Content-Type: application/json`（不橋接） | ❌ | PHP 不填 `$_POST` → shop_id 取不到 → 靜默走原價 |
 | ~~自訂 REST（`FrontCartApi`，Phase 11 採用）~~ | ✅ | **Phase 12 已刪檔**。它送 JSON body（PHP 不會填 `$_POST`），靠 `add_to_cart_with_shop_context()` 在呼叫 `add_to_cart()` **前**主動橋接 `$_POST`、呼叫後（`finally`）還原，才通得過三道閘門 |
@@ -252,7 +257,8 @@ PHP（ProfitShopRenderer + template）                React（profit-shop-front 
 
 ⚠ **Phase 12 起前台完全沒有購物車 API**：加購一律走 WooCommerce 原生表單 / query string，
 購物車與結帳交給 WooCommerce 自己的頁面。這也讓「JSON body 不會填 `$_POST`」這個坑
-自然消失——退回原生表單後不需要任何補償手段。
+自然消失——退回原生表單後不需要任何補償手段。**Phase 14 起前台也完全沒有任何 React / antd
+程式碼**，`profit-shop-front.js` 是不經 Vite 打包的手寫 vanilla JS。
 
 若未來又要為前台補上非同步加購，記住三閘門只認 `$_GET` / `$_POST`：新 endpoint 必須**自己**
 在呼叫 `add_to_cart()` 前把 `profit_shop_id` 橋接進 `$_POST`（Phase 11 的做法），或走既有的
@@ -300,13 +306,16 @@ inc/classes/Domains/ProfitShop/
 │   │                                #     版本比對式 flush，掛 init 自動觸發）/
 │   │                                #   WpProductLookup / WpSlugConflictLookup /
 │   │                                #   WpTransientStore / SystemClock / WpAdminEmailNotifier /
-│   │                                #   WpSaltProvider（Phase 3-D，context 白名單防 silent salt rotation）
+│   │                                #   WpSaltProvider（Phase 3-D，context 白名單防 silent salt rotation）/
+│   │                                #   ProfitShopRenderer / ProfitShopShortcode / PartnerPortalRenderer /
+│   │                                #   ProfitShopFrontData（賣場前台 payload）/ ProfitShopFrontView
+│   │                                #   （Phase 14 新增，呈現層工具：currency / price_range / icon 等，
+│   │                                #     見 profit-shop.rule.md §12.8）+ templates/、templates/partials/
 │   ├── WooCommerce/                 # AddToCartHook（Phase 4-C2，priority 5，注入 profit_shop_id，
 │   │                                #   三道閘門防偽造）/ CartPriceOverrideHook（Phase 3-D，前台 cart
 │   │                                #   價格防竄改，add_cart_item_data + get_cart_item_from_session +
 │   │                                #   before_calculate_totals priority 999 + draft shop fallback）/
-│   │                                #   CartItemMetaDisplay（Phase 4-C2，cart UI「來自賣場 XXX」，
-│   │                                #   woocommerce_get_item_data filter）/ SingleProductPriceHook
+│   │                                #   （CartItemMetaDisplay 已於 Phase 15 刪檔——前台不顯示分潤標記）/
 │   │                                #   （Phase 9，WC 單品頁套用賣場覆寫價含變體，template_redirect
 │   │                                #   priority 20，改寫 variation prices hash 隔離跨賣場快取污染）
 │   └── Rest/                        # ExceptionMapper（Domain Exception → HTTP，Phase 3-E：+filter test seam；
@@ -338,12 +347,11 @@ plugin.php
                       ├→ PageRateLimitService + WpClientIpProvider::instance() # Phase 5-A.1，前台頁面 rate-limit 共用基礎設施
                       ├→ Infrastructure/WordPress/PartnerPortalRenderer::instance(...) # Phase 4-B，partner portal mount 點；Phase 5-A.1 起注入 rate-limit + ip provider
                       ├→ Infrastructure/WordPress/ProfitShopRenderer::instance(...) # Phase 4-C1，賣場前台 PHP renderer，DI ProfitShopRepositoryInterface；Phase 5-A.1 起注入 rate-limit + ip provider
-                      ├→ Infrastructure/WordPress/ProfitShopShortcode::instance(...) # TD-13（前半），[power_shop_profit_shop id="..."]，與 ProfitShopRenderer 共用同一份 template（外層改 <div>、不注入 SEO meta）
+                      ├→ Infrastructure/WordPress/ProfitShopShortcode::instance(...) # TD-13（前半），[power_shop_profit_shop id="..."]，與 ProfitShopRenderer 共用同一份 template（Phase 14 起兩條路徑渲染逐字相同的 DOM，外層一律 <div>、不注入 SEO meta）
                       ├→ Infrastructure/Rest/V2Api::instance() # 27+ 個 endpoint（Phase 6-A1 +partner-auth/change-password）
                       │  （Phase 11 的 FrontCartApi 已於 Phase 12 刪檔——前台改走 WooCommerce 原生表單加購，不再有自訂購物車 REST）
                       ├→ Infrastructure/WooCommerce/AddToCartHook::instance(...)   # Phase 4-C2，priority 5（早於 CartPriceOverrideHook 的 10），DI ProfitShopRepositoryInterface
                       ├→ Infrastructure/WooCommerce/CartPriceOverrideHook::instance() # Phase 3-D，priority 10 / 999，admin context guard
-                      ├→ Infrastructure/WooCommerce/CartItemMetaDisplay::instance(...) # Phase 4-C2，woocommerce_get_item_data filter，涵蓋 mini-cart / cart / checkout
                       └→ Infrastructure/WooCommerce/SingleProductPriceHook::instance(...) # Phase 9，template_redirect priority 20，WC 單品頁套用賣場覆寫價（含變體），DI ProfitShopRepositoryInterface
 ```
 
@@ -393,7 +401,7 @@ partner-portal/main.tsx (DOMContentLoaded)
                           └→ unmount：setTimeout cleanup ref 防 race
 ```
 
-### 賣場前台載入流程（Phase 4-C）
+### 賣場前台載入流程（Phase 4-C，Phase 14 更新）
 
 ```
 HTTP request: /profit-shop/{slug}/
@@ -415,66 +423,65 @@ HTTP request: /profit-shop/{slug}/
                   ├→ wp_head SEO meta 注入（add_action 'wp_head'）：
                   │   ├→ <title>{shop_name}｜{partner_name} 的分潤賣場 - {site_name}</title>
                   │   └→ <link rel='canonical' href='{site_url}/profit-shop/{slug}/'>
-                  ├→ [Phase 10] ProfitShopFrontData::settings($shop)     # 主色 / 販售狀態（便宜，不組 products）
-                  ├→ [Phase 10] enqueue_front_bundle($shop)：
-                  │   ├→ Vite\enqueue_asset(js/dist, 'js/src/profit-shop-front/main.tsx')
-                  │   ├→ manifest 缺 entry → 回 false → template 降級為 4-C1 的表單加購（不白頁）
-                  │   └→ wp_localize_script('power_shop_front_data',
-                  │        ProfitShopFrontData::build($shop))           # env / settings / products
+                  ├→ $front_settings = ProfitShopFrontData::settings($shop)   # 主色（Phase 14 起無消費者，見 TD-38）/ 販售狀態；便宜，不組 products
+                  ├→ [Phase 14] ProfitShopFrontView::enqueue()：
+                  │   ├→ wp_enqueue_script(inc/assets/js/profit-shop-front.js)   # 手寫 vanilla JS，不進 Vite
+                  │   └→ wp_localize_script('power_shop_front_i18n', js_i18n())  # 只有文案，無 env/settings/products
                   ├→ get_header()                                       # 走 theme（與 partner portal 不同！）
-                  ├→ require templates/profit-shop-front.php            # PHP 印商品 grid（SEO 內容）
-                  │   ├→ inline <style>：--ps-primary + .ps-nojs-fallback{display:none}
-                  │   ├→ <noscript><style>：取消灰階 + 顯示降級加購 + 隱藏 Modal 觸發鈕
+                  ├→ require templates/profit-shop-front.php            # 把 $shop_for_template / $front_settings 傳入
+                  │   ├→ $ps_products = ProfitShopFrontData::build_products($shop)   # 卡片與 Modal 共用同一份 payload
                   │   ├→ post_content（apply_filters('the_content')，站長自訂文案）
-                  │   └→ foreach OverrideItem（照搬 legacy 卡片版型）：
-                  │       ├→ div[data-ps-product-id].group.relative.pb-12[.ps-not-ready]
-                  │       ├→ aspect-square 圖 + group-hover:scale-125
-                  │       ├→ del 原價 + text-red-500 特價（variable 走 min–max 區間邏輯）
-                  │       ├→ button.ps-modal-trigger.ps-btn.ps-btn-primary  ← React 用
-                  │       └→ .ps-nojs-fallback form / link                 ← JS 停用時用
-                  ├→ [Phase 10] <div id="profit_shop_front_app">          # React mount 點
-                  └→ get_footer()                                        # wp_footer 印出 bundle
+                  │   ├→ foreach $ps_products → require partials/profit-shop-card.php：
+                  │   │   ├→ div[data-ps-product-id][data-ps-disabled]
+                  │   │   ├→ aspect-square 圖 + group-hover:scale-125
+                  │   │   ├→ del 原價 + text-error 特價（variable 走 min–max 區間邏輯）
+                  │   │   └→ 唯一動作元素（漸進增強）：simple → <form method="get">；其他 → <a href>
+                  │   └→ $is_shop_open 時 foreach $ps_products → require partials/profit-shop-modal.php：
+                  │       └→ 每商品一個 <dialog class="pc-modal" data-ps-modal-for>（含加購 <form method="post">）
+                  │           非販售期間**整段不印**（Modal 內的 form 即使 disabled 仍在 DOM 內）
+                  └→ get_footer()                                        # wp_footer 印出 <script src=".../profit-shop-front.js">
 ```
 
-### 賣場前台 React 互動層載入流程（Phase 10 → 11 → 12）
+⚠ **`$front_settings` 兩條渲染路徑都必須傳入**：`ProfitShopShortcode::render_template()`
+與 `ProfitShopRenderer::render_shop()` 都會計算並傳入同一組 `$front_settings` / 呼叫同一個
+`ProfitShopFrontView::enqueue()`——早期只有 renderer 會傳，shortcode 路徑因此拿到空陣列，
+`shopStatus` fallback 成 `'published'`，讓已結束販售的賣場照樣可加購（Phase 14 已修，詳見
+`profit-shop.rule.md` §7 與 §12.8）。
+
+### 賣場前台 JS 互動層載入流程（Phase 14：vanilla JS，取代 Phase 10-13 的 React bundle）
 
 ```
-wp_footer → profit-shop-front/main.tsx
-  └→ readyState 判斷 → init()
-      └→ document.getElementById('profit_shop_front_app')（找不到就靜默 return）
-          └→ createRoot().render(
-               ConfigProvider（token.colorPrimary ← settings）
-                 → AntdApp component={false}   ← 目前無消費者，但保留：缺了它 App.useApp()
-                 │                                回空物件、未來加 notification 會直接 throw
-                   → StyleProvider hashPriority="high"   ← 提高 antd CSS 權重，防 theme 蓋掉
-                     → <App />
-             )
-             ⚠ Phase 12 移除 QueryClientProvider —— 本 bundle 已無任何非同步查詢
-              └→ App.tsx useEffect：
-                  ├→ querySelectorAll('div[data-ps-product-id]')
-                  ├→ classList.remove('ps-not-ready')      # 解鎖灰階
-                  ├→ addEventListener('click', 開 Modal)    # 整張卡片都是熱區
-                  └→ cleanup：統一 removeEventListener（修正 legacy 在 forEach 內 return 的無效 cleanup）
-              └→ 渲染 <ProductModal>（modalProductId 命中才渲染）
+wp_footer → <script src=".../inc/assets/js/profit-shop-front.js">（手寫，不經 Vite / React 打包）
+  └→ DOMContentLoaded（或已 loaded 時立即執行）→ init()
+      └→ document.querySelectorAll('.ps-profit-shop-front')      # 支援一頁多個 shortcode 賣場
+          └→ 對每個賣場容器 initShop(shop)：
+              ├→ 對容器內每個 [data-ps-modal-for] Modal 綁定：
+              │   ├→ bindGallery()         # 縮圖 click / keydown 切換主圖
+              │   ├→ bindToggleContent()   # 描述展開/收合（scrollHeight 只能在 dialog 開啟後量測準）
+              │   ├→ bindQuantity()        # 數量 -/+，夾住 [1, max]
+              │   └→ bindVariations()      # 讀該 Modal 自己的 <script class="ps-variations-data"> JSON
+              │       ├→ 屬性按鈕 click → matchVariation() 比對出對應變體
+              │       ├→ 重寫 variation_id / attribute_* hidden input（鍵取自變體自己的 attributes）
+              │       ├→ 重繪價格 / 庫存 / 購買人數 / 數量上限 / 加購按鈕 disabled
+              │       └→ 有變體圖時呼叫 modal.psSelectImage() 換圖
+              └→ 對容器內每個 [data-ps-product-id] 卡片：
+                  ├→ data-ps-disabled="1" → 不綁 click（賣場已關閉，卡片本身已是停用狀態）
+                  ├→ 查找對應 Modal（限定在同一個 .ps-profit-shop-front 內，多賣場才不會開錯）
+                  ├→ <dialog> 不被支援 → 不攔截，卡片原生 form / 連結就是完整加購路徑（漸進增強）
+                  └→ click → preventDefault + stopPropagation → psResetVariations() → modal.showModal()
+                              → psMeasureContent()（此時 dialog 已開，量測才準）
 
-資料來源：window.power_shop_front_data（PHP localize，未加密）
-  ├→ env      : siteUrl / shopId / shopSlug
-  │              （Phase 12 移除 cartApiUrl / nonce / checkoutUrl；ajaxUrl / restUrl 更早就沒了）
-  ├→ settings : colorPrimary / showConfetti / showStock / showBuyerCount / startTime / endTime / shopStatus
-  │              （showConfetti 目前無消費者：頁面會 reload，彩帶來不及被看到）
-  └→ products : TFrontProduct[]（含 description / images / stock / total_sales / extraBuyerCount / variations）
-
-加入購物車（Phase 12 起，前台已無任何購物車 API）：
-  └→ ProductModal 的「加入購物車」→ 動態建隱藏 <form method="post"> POST 回本頁
-       ├→ 欄位：add-to-cart（父商品 ID）/ quantity / variation_id / attribute_* / profit_shop_id
-       │    （attribute_* 的鍵取自選中變體的 attributes 物件，不可自行加前綴組出來）
+加入購物車（PHP 直接印出的 WooCommerce 原生表單，JS 只負責在送出前填好變體欄位）：
+  └→ Modal 內 <form method="post">（無 action，送回當前網址）
+       ├→ profit_shop_id 由 PHP 印死；quantity / variation_id / attribute_* 由 JS 維護
        ├→ WC_Form_Handler::add_to_cart_action()（掛 wp_loaded）處理
        │    → $_POST 天然帶 profit_shop_id → AddToCartHook 三道閘門照常驗證
        ├→ 結果寫進 WC session notices → redirect 回本頁（或購物車頁，看站台 WC 設定）
        └→ template 自印的 wc_print_notices() 呈現結果
 
-Phase 10 的 admin-ajax（FrontAjax）+ WC Store API 雙通道、Phase 11 的自訂 REST（FrontCartApi）
-皆已整條移除且刪檔，前台不再有任何購物車 API。
+Phase 10 的 admin-ajax（FrontAjax）+ WC Store API 雙通道、Phase 11 的自訂 REST（FrontCartApi）、
+Phase 12-13 的 React 元件（`AddToCartButton.tsx` 等，`js/src/profit-shop-front/` 整目錄）
+皆已整條移除且刪檔，前台不再有任何購物車 API，也不再有任何 React / antd 程式碼。
 ```
 
 ### Add-to-Cart 端到端流程（Phase 4-C2 串聯 Phase 3-D）
@@ -509,17 +516,15 @@ filter: woocommerce_add_cart_item_data
    └─────────────────────────────────────────────────┘
       │
       ▼
-filter: woocommerce_get_item_data（顯示用，不影響定價）
+（Phase 15 起前台不再有任何分潤顯示 filter）
    ┌─────────────────────────────────────────────────┐
-   │ CartItemMetaDisplay（4-C2）                      │
-   │   ├─ 一個 filter 同時涵蓋 mini-cart / cart /       │
-   │   │     checkout（不需重複 hook）                  │
-   │   ├─ shop 已刪 → 靜默不顯示（cart 仍可結帳）        │
-   │   └─ 顯示「來自賣場 XXX」連結                       │
-   │       ├─ esc_url(home_url('/' . SHOP_REWRITE_PREFIX  │
-   │       │       . '/' . $slug . '/'))                │
-   │       │   （DRY：用 RewriteRules::SHOP_REWRITE_PREFIX）│
-   │       └─ target='_blank' rel='noopener'            │
+   │ CartItemMetaDisplay（4-C2）已刪檔                 │
+   │   站長要求 /cart 與 /checkout 不顯示「來自賣場」。 │
+   │   它唯一的作用是 woocommerce_get_item_data，      │
+   │   移除後定價 / 簽章 / 結算完全不受影響。           │
+   │   訂單 line item 的 _profit_* meta 因底線前綴      │
+   │   本來就被 WooCommerce 隱藏，不需另外處理。        │
+   │   復原見 git commit f813e07。                     │
    └─────────────────────────────────────────────────┘
       │
       ▼
