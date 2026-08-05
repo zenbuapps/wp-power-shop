@@ -336,6 +336,242 @@ final class ProfitShopShortcodeTest extends TestCase {
 		);
 	}
 
+	// ========== 開啟 / 關閉時間的呈現區塊組合 ==========
+
+	/**
+	 * 【回歸鎖】沒設定呈現區塊的閉店賣場 = 功能上線前的既有行為
+	 *
+	 * `beforeDisplay` / `afterDisplay` 是後加的欄位，既有賣場的 settings 裡沒有它們。
+	 * 預設若不是「只顯示商品」，全站已排程的賣場會在時間外突然變空白——這條鎖住那個方向。
+	 *
+	 * @test
+	 * @group smoke
+	 * @group edge
+	 */
+	public function test_closed_shop_without_display_setting_keeps_browse_behaviour(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '預設呈現商品',
+				'regular_price' => '1000',
+			]
+		);
+		$shop_id = $this->create_shop(
+			[ $this->item_for( $product->get_id() ) ],
+			'publish',
+			[ 'endTime' => ( \time() - 86400 ) * 1000 ]
+		);
+
+		$html = $this->render( $shop_id );
+
+		$this->assertStringContainsString( '預設呈現商品', $html, '預設應照常顯示商品（browse）' );
+		$this->assertStringContainsString( '商店已關閉', $html, '按鈕仍應顯示關閉文案' );
+		$this->assertStringNotContainsString(
+			'data-ps-schedule',
+			$html,
+			'browse 且未填自訂文字時不得多印排程區塊，否則既有賣場的 DOM 會被改動'
+		);
+		$this->assertStringNotContainsString( 'data-ps-countdown', $html, 'browse 模式不印倒數盤' );
+	}
+
+	/**
+	 * 全部不勾：閉店後整個商品區不印，連空狀態訊息也不印
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_closed_shop_with_no_parts_renders_nothing(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '應被藏起來的商品',
+				'regular_price' => '1000',
+			]
+		);
+		$shop_id = $this->create_shop(
+			[ $this->item_for( $product->get_id() ) ],
+			'publish',
+			[
+				'endTime'      => ( \time() - 86400 ) * 1000,
+				'afterDisplay' => [],
+				'afterText'    => '這段文字沒有勾選顯示，不該出現',
+			]
+		);
+
+		$html = $this->render( $shop_id );
+
+		$this->assertNotSame( '', $html, '防空斷言：賣場容器與標題仍應輸出' );
+		$this->assertStringContainsString( 'ps-profit-shop-front', $html, '賣場容器仍在' );
+
+		$this->assertStringNotContainsString( '應被藏起來的商品', $html, '沒勾商品就不得印出商品' );
+		$this->assertStringNotContainsString( 'data-ps-product-id', $html, '不得印出任何商品卡片' );
+		$this->assertStringNotContainsString( 'data-ps-schedule', $html, '沒勾任何區塊時連排程容器都不該印' );
+		$this->assertStringNotContainsString(
+			'這段文字沒有勾選顯示',
+			$html,
+			'沒勾「顯示自訂文字」時，即使文字有填也不得印出'
+		);
+		$this->assertStringNotContainsString(
+			'此賣場暫無商品',
+			$html,
+			'刻意藏起來與「真的沒商品」是兩件事，跳空狀態訊息會誤導成資料出錯'
+		);
+		$this->assertStringNotContainsString( 'name="add-to-cart"', $html, '不得印出任何可送出的加購欄位' );
+	}
+
+	/**
+	 * 只勾倒數計時 + 自訂文字：未開賣時印出倒數盤與文字，且不印商品
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_coming_shop_with_countdown_renders_countdown_block(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '尚未開賣商品',
+				'regular_price' => '1000',
+			]
+		);
+		$start   = ( \time() + 7200 ) * 1000;
+		$shop_id = $this->create_shop(
+			[ $this->item_for( $product->get_id() ) ],
+			'publish',
+			[
+				'startTime'     => $start,
+				'beforeDisplay' => [
+					ProfitShopFrontData::PART_COUNTDOWN,
+					ProfitShopFrontData::PART_TEXT,
+				],
+				'beforeText'    => '8/10 中午 12:00 準時開賣',
+			]
+		);
+
+		$html = $this->render( $shop_id );
+
+		$this->assertStringContainsString( 'data-ps-schedule', $html, '應印出排程區塊' );
+		$this->assertStringContainsString( 'data-ps-countdown', $html, '應印出倒數容器（JS 每秒遞減的錨點）' );
+		$this->assertStringContainsString(
+			'data-ps-countdown-target="' . $start . '"',
+			$html,
+			'倒數目標必須是開啟時間，JS 才算得出正確剩餘秒數'
+		);
+		$this->assertStringContainsString( 'pc-countdown', $html, '應使用 daisyUI countdown 元件' );
+		$this->assertStringContainsString( 'data-ps-cd-unit="days"', $html, '四個時間單位都要印出來' );
+		$this->assertStringContainsString( 'data-ps-cd-plain="days"', $html, '> 99 天時的純文字退路必須一起印出' );
+		$this->assertStringContainsString( '8/10 中午 12:00 準時開賣', $html, '自訂文字應顯示' );
+
+		$this->assertStringNotContainsString( '尚未開賣商品', $html, '沒勾商品就不得印出商品' );
+		$this->assertStringNotContainsString( 'name="add-to-cart"', $html, '不得印出任何可送出的加購欄位' );
+	}
+
+	/**
+	 * 倒數計時 + 商品並存：三個區塊互相獨立，可任意組合
+	 *
+	 * @test
+	 * @group happy
+	 * @group edge
+	 */
+	public function test_countdown_and_products_can_coexist(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '預熱曝光商品',
+				'regular_price' => '1000',
+			]
+		);
+		$shop_id = $this->create_shop(
+			[ $this->item_for( $product->get_id() ) ],
+			'publish',
+			[
+				'startTime'     => ( \time() + 7200 ) * 1000,
+				'beforeDisplay' => [
+					ProfitShopFrontData::PART_COUNTDOWN,
+					ProfitShopFrontData::PART_PRODUCTS,
+				],
+				'beforeText'    => '沒勾顯示，不該出現',
+			]
+		);
+
+		$html = $this->render( $shop_id );
+
+		$this->assertStringContainsString( 'data-ps-countdown', $html, '倒數盤應印出' );
+		$this->assertStringContainsString( '預熱曝光商品', $html, '商品應同時印出（利於 SEO 預熱）' );
+		$this->assertStringContainsString( '尚未開始販售', $html, '按鈕仍應停用並顯示狀態文案' );
+		$this->assertStringNotContainsString( '沒勾顯示，不該出現', $html, '未勾選的自訂文字不得印出' );
+		$this->assertStringNotContainsString( 'name="add-to-cart"', $html, '仍不得印出可送出的加購欄位' );
+	}
+
+	/**
+	 * 已結束 + 倒數：盤面歸零（沒有未來目標可倒數）
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_closed_shop_with_countdown_renders_zeroed_board(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+		$shop_id = $this->create_shop(
+			[ $this->item_for( $product->get_id() ) ],
+			'publish',
+			[
+				'endTime'      => ( \time() - 86400 ) * 1000,
+				'afterDisplay' => [ ProfitShopFrontData::PART_COUNTDOWN ],
+			]
+		);
+
+		$html = $this->render( $shop_id );
+
+		$this->assertStringContainsString( 'data-ps-countdown-target="0"', $html, '已結束時倒數目標為 0（全零盤面）' );
+		$this->assertStringContainsString( '--value:0;', $html, '盤面數值應全部歸零' );
+	}
+
+	/**
+	 * 【安全】任何呈現區塊組合都不得印出商品 Modal
+	 *
+	 * Modal 內含一張真正的 `<form method="post">`，`AddToCartHook` 的三道閘門
+	 * **不檢查販售起訖時間**，接不住「把 disabled 拔掉再送出」。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_no_display_combination_ever_renders_modal_when_closed(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+
+		$combinations = [
+			[],
+			[ ProfitShopFrontData::PART_COUNTDOWN ],
+			[ ProfitShopFrontData::PART_TEXT ],
+			[ ProfitShopFrontData::PART_PRODUCTS ],
+			[
+				ProfitShopFrontData::PART_COUNTDOWN,
+				ProfitShopFrontData::PART_TEXT,
+				ProfitShopFrontData::PART_PRODUCTS,
+			],
+		];
+
+		foreach ( $combinations as $parts ) {
+			$shop_id = $this->create_shop(
+				[ $this->item_for( $product->get_id() ) ],
+				'publish',
+				[
+					'endTime'      => ( \time() - 86400 ) * 1000,
+					'afterDisplay' => $parts,
+					'afterText'    => '已結束',
+				]
+			);
+
+			$html  = $this->render( $shop_id );
+			$label = '[' . \implode( ',', $parts ) . ']';
+
+			$this->assertStringNotContainsString(
+				'data-ps-modal-for',
+				$html,
+				\sprintf( '%s 組合在閉店時仍印出了商品 Modal', $label )
+			);
+			$this->assertStringNotContainsString(
+				'name="add-to-cart"',
+				$html,
+				\sprintf( '%s 組合在閉店時印出了可送出的加購欄位', $label )
+			);
+		}
+	}
+
 	// ========== Error：id 參數嚴格驗證 ==========
 
 	/**

@@ -76,6 +76,44 @@ $closed_label = ( 'coming' === $shop_status )
 ? \__( '尚未開始販售', 'power_shop' )
 : \__( '商店已關閉', 'power_shop' );
 
+/*
+* 非販售期間的呈現方式（站長在後台「開啟 / 關閉時間」分頁設定）。
+*
+* `display` 已由 ProfitShopFrontData::settings() 把「站長的意圖（beforeDisplay /
+* afterDisplay）」與「當下的 shopStatus」合併成結論，template 只讀結論——
+* 兩條渲染路徑（獨立頁面 / shortcode）因此不可能各自配對出不同結果。
+*
+* 三個區塊（倒數計時 / 自訂文字 / 商品列表）**互相獨立**，可以任意組合；
+* 全部關閉就是「什麼都不顯示」。販售中（published）一律等同「只顯示商品」，
+* 排程設定不影響開賣期間。
+*
+* ⚠ **任何組合都不印商品 Modal**（下方 `$is_shop_open` 的 gate 不變）。Modal 內含一張
+* 真正的 `<form method="post">`，而 `AddToCartHook` 的三道閘門不檢查販售起訖時間，
+* 接不住「把 disabled 屬性拔掉再送出」。不印出來才是唯一可靠的做法。
+*/
+$ps_show_countdown   = ! empty( $settings['showCountdown'] );
+$ps_show_text        = ! empty( $settings['showDisplayText'] );
+$ps_schedule_text    = isset( $settings['displayText'] ) && \is_string( $settings['displayText'] )
+? $settings['displayText']
+: '';
+$ps_countdown_target = isset( $settings['countdownTarget'] ) ? (int) $settings['countdownTarget'] : 0;
+
+/*
+* 商品區。既有賣場沒有這個設定時 `settings()` 會回 true，等於本功能上線前的行為：
+* 非販售期間照樣印商品卡片、只是按鈕停用。販售中也一定為 true。
+*/
+$ps_show_products = ! empty( $settings['showProducts'] );
+
+/*
+* 排程說明區塊要不要印。
+*
+* 兩個都沒開時**刻意什麼都不印**——那正是本功能上線前的畫面（只有卡片上停用的
+* 按鈕寫著「尚未開始販售」）。多印一段文字會讓所有既有賣場的前台 DOM 產生非預期變動。
+*
+* 「勾了顯示自訂文字但文字是空的」已在 `settings()` 收斂成 false，這裡不必再判一次。
+*/
+$ps_show_schedule_note = $ps_show_countdown || $ps_show_text;
+
 // 卡片「已售 N 件」與 Modal「已有 N 人購買」共用同一個開關（都是購買人數的呈現）。
 $show_buyer_count = ! isset( $settings['showBuyerCount'] ) || (bool) $settings['showBuyerCount'];
 
@@ -215,7 +253,38 @@ $templates  = __DIR__;
 		<?php
 	endif;
 
-	if ( empty( $ps_products ) ) :
+	/*
+	* 排程說明區塊（倒數計時 / 自訂文字）。
+	*
+	* 印在站長自訂內容之後、商品區之前——非販售期間它就站在商品原本的位置上。
+	*/
+	if ( $ps_show_schedule_note ) :
+		?>
+		<?php // ⚠ class 必須是 powerhouse front.min.css 已產出的（`my-12` / `max-w-2xl` 目前沒有），見 Pitfall #19。 ?>
+		<section class="my-8 flex flex-col items-center gap-6 text-center" data-ps-schedule>
+		<?php
+		if ( $ps_show_countdown ) {
+			// countdown() 內部已逐項 escape（數值走 esc_attr / esc_html，標籤走 esc_html）。
+			echo ProfitShopFrontView::countdown( $ps_countdown_target ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		}
+
+		if ( $ps_show_text ) :
+			?>
+			<p class="mb-0 text-lg text-base-content/60"><?php echo \esc_html( $ps_schedule_text ); ?></p>
+			<?php
+			endif;
+		?>
+		</section>
+		<?php
+	endif;
+
+	if ( ! $ps_show_products ) :
+		/*
+		* 「不顯示」與「倒數計時」模式：整個商品區不印，連空狀態訊息也不印
+		* （站長刻意要把商品藏起來，跳一句「此賣場暫無商品」會誤導成資料出錯）。
+		*/
+		echo '';
+	elseif ( empty( $ps_products ) ) :
 		?>
 		<p class="py-16 text-center text-base-content/60">
 		<?php echo \esc_html__( '此賣場暫無商品', 'power_shop' ); ?>

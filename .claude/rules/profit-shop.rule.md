@@ -1699,6 +1699,103 @@ pc-input-bordered pc-input-sm pc-join-item`）。`ProfitShopFrontView` 內留了
 不引入新 npm / composer 套件。回歸鎖：`ProfitShopShortcodeTest::test_open_shop_renders_ajax_dom_contract`
 （8 個 `data-ps-*` 屬性 + `name="profit_shop_id"`）。
 
+#### Phase 16：賣場開啟 / 關閉時間 + 期間外呈現方式
+
+賣場編輯頁新增「開啟 / 關閉時間」Tab，可設定販售期間，並針對「尚未開賣」與「已結束販售」
+各自選擇前台呈現方式。**後端 Domain / Application 層零修改**——`settings` 是自由 array，
+`startTime` / `endTime` 端到端本來就通（TD-22 記載的「存得進去、讀得出來、沒人設定」），
+本 Phase 只補了呈現層正規化、template 分支、vanilla JS 與後台 Tab。
+
+**呈現方式是三個互相獨立的區塊（多選），不是三選一：**
+
+| 區塊常數 | 值 | 前台效果 |
+|---|---|---|
+| `PART_COUNTDOWN` | `countdown` | daisyUI 倒數盤 |
+| `PART_TEXT` | `text` | 站長自訂文字（空字串時不印） |
+| `PART_PRODUCTS` | `products` | 商品卡片（按鈕停用、不可購買） |
+
+任意組合皆可；**全部不勾（`[]`）＝什麼都不顯示**，只剩賣場標題與站長自訂內容。
+
+**`settings()` 的「意圖」與「結論」分兩組輸出，template 只讀結論：**
+
+| 欄位 | 語意 |
+|---|---|
+| `beforeDisplay` / `beforeText` | 站長設定的**原始意圖**：尚未開賣時顯示哪些區塊（`string[]`） |
+| `afterDisplay` / `afterText` | 同上，已結束販售時 |
+| `showCountdown` / `showProducts` | 與當下 `shopStatus` 合併後的**結論**（`published` 等同只有 `products`） |
+| `showDisplayText` / `displayText` | 同上；勾了 `text` 但文字為空時 `showDisplayText` 為 `false`，`displayText` 為 `''` |
+| `countdownTarget` | `coming` → `startTime`；其餘 → `0`（全零盤面） |
+
+分工是刻意的：`shopStatus` 有三態、呈現設定有兩組，若讓 template 自己配對，
+獨立頁面與 shortcode 兩條路徑就各有一份配對邏輯要維持一致——這個 codebase 已經因為
+「靠人維持兩份邏輯逐字一致」吃過虧（見上方 `OverridePriceResolver` 一節）。
+
+**七條紀律：**
+
+1. **預設值必須是 `[products]`**（`ProfitShopFrontData::DEFAULT_DISPLAY_PARTS`）。既有賣場的
+   `settings` 裡沒有 `beforeDisplay` / `afterDisplay`，預設若不是「只顯示商品」（＝本功能
+   上線前的既有行為），全站已排程的賣場會在時間外突然變成空白頁。
+2. **🔴「沒設定」與「設定為空」必須用 `is_array()` 區分，不可用 `empty()`。**
+   空陣列是**合法值**（站長刻意全部取消勾選），而 `empty([])` 為 true——用它判斷會讓
+   站長的取消勾選被靜默還原成「顯示商品」，改了設定卻沒有反應、也沒有任何錯誤訊息。
+   前端 `toDisplayParts()` 同理：用 `Array.isArray()`，不可用 `value?.length`。
+   `test_empty_display_parts_means_show_nothing` 鎖住這條。
+3. **陣列內的未知值由白名單過濾掉**（`to_display_parts()` 逐一比對 `DISPLAY_PARTS` 常數，
+   順序也取自常數，讓序列化結果穩定、不受前端送來的順序影響）。這個值決定「商品要不要
+   印出來」，是實質的可見性開關，不可原樣帶到 template 再用字串比對。
+4. **任何組合都不印商品 Modal**，`$is_shop_open` 那道 gate 一行未改。Modal 內含一張真正的
+   `<form method="post">`，而 `AddToCartHook` 的三道閘門**不檢查販售起訖時間**，接不住
+   「把 `disabled` 拔掉再送出」。`test_no_display_combination_ever_renders_modal_when_closed`
+   對 5 種組合逐一鎖死。
+5. **沒勾倒數也沒有可顯示的文字時，輸出必須與功能上線前逐字相同**——排程說明區塊整段不印。
+   多印一段文字（或一個空的 `<section>`）會讓所有既有賣場的前台 DOM 產生非預期變動
+   （`test_closed_shop_without_display_setting_keeps_browse_behaviour` 鎖住）。
+6. **自訂文字經 `WP::sanitize_text_field_deep()`**（`read_json_body()`），換行會被吃掉，
+   所以後台用單行 `Input` 而非 `TextArea`——用 `TextArea` 會讓站長打的換行**靜默消失**。
+   長度上限 200（`TEXT_MAX_LENGTH`）以 codepoint 計，避免中文被切成半個字。
+7. **「全部不勾」只藏內容，不等於關閉存取**。`ProfitShopRenderer` 只檢查 slug 與 `status`，
+   公開網址仍回 200（賣場標題 + 站長自訂內容）。改成 404 會讓兩條渲染路徑的輸出分歧，
+   直接打破 `test_renderer_and_shortcode_paths_render_identical_dom`（shortcode 情境不可能
+   對宿主頁面回 404）。與 TD-13 是同一類問題：呈現設定不是存取控制。已登記 TD-46。
+
+**「已結束 + 倒數」的盤面一律歸零**（`countdownTarget = 0`）：已結束的賣場沒有未來目標可
+倒數，真正傳達訊息的是搭配的自訂文字。若要「下一檔期開賣倒數」，必須新增獨立的
+`nextStartTime` 欄位——**不可**讓後端猜測，猜錯的成本是顧客看到一個永遠不會到來的時間。
+已登記 TD-45。
+
+⚠️ `to_display_parts()` 另有一條**舊格式相容分支**：本設定最初實作成單選字串
+（`hidden` / `countdown` / `browse`），同一天內改成多選，開發中的資料庫可能還留著字串值，
+因此對映成等價的區塊組合（`hidden` → `[]`、`countdown` → `[countdown, text]`、其餘 → 預設）
+而不是丟掉——丟掉會讓站長已設好的倒數安靜消失。前端 `toDisplayParts()` 有同款分支。
+這批相容碼**沒有正式發版過**，確認所有開發環境都已重新存檔後可移除。
+
+**倒數盤（daisyUI `pc-countdown`）的三個實作細節：**
+
+- **🔴 字級 utility 掛在外層 `<div>`，不可掛在 `.pc-countdown` 本身**（即使 daisyUI 官方
+  範例寫的就是 `class="countdown font-mono text-5xl"`）。powerhouse 的 Tailwind 是
+  `important: '#tw'`，`#tw .text-3xl{font-size:1.875rem;line-height:2.25rem}` 的 (1,1,0)
+  會蓋掉 daisyUI 根部錨定的 `:root .pc-countdown{line-height:1em}` (0,2,0)——而倒數盤
+  正是靠「行高恰等於 `1em`」在運作（`::before` 以 `top: calc(var(--value) * -1em)` 捲動，
+  每行高度卻是 line-height）。兩者不等就每格累積偏移，畫面上是「上下兩個數字各露一半」，
+  **沒有任何錯誤訊息**。修法是讓 daisyUI 的規則**直接命中**元件本身：直接命中的宣告永遠
+  優先於繼承值，與 specificity / CSS 順序無關，因此是決定性的（**不要**改用 `leading-none`
+  對打，那是同分靠順序決勝；何況它在 `front.min.css` 沒產出）。完整推導見 CLAUDE.md
+  Pitfall #29 與 `ProfitShopFrontView::countdown_unit()` 的 docblock。
+- **只支援 0–99**：`.pc-countdown > *:before` 的 content 是 `"00\A 01\A … 99"` 這串字面值，
+  靠 `top: calc(var(--value) * -1em)` 捲到對應那一行；`--value` 超過 99 會捲過字串
+  結尾、**顯示成空白**（不是報錯）。天數欄位因此同時印出 `.pc-countdown` 與純文字兩格，
+  用 `tw-hidden` 切換（**不可**改用 `tw-inline`，見 CLAUDE.md Pitfall #27）。
+- **首屏數字由 PHP 用伺服器時間印出**，之後每秒遞減才交給 JS——與 `resolve_shop_status()`
+  同一條理由（避免瀏覽器時鐘偏移造成「後台已開賣、前台仍在倒數」）。JS 停用時畫面是一個
+  靜止但正確的快照。倒數歸零後 JS 會重新載入頁面，但**只有初始 remaining > 0 才排程**，
+  否則臨界秒數會變成「載入 → 立刻歸零 → reload」的迴圈。
+
+**後台送出 `settings` 的兩條紀律**（實作見 `utils.ts` 的 `mergeScheduleSettings()`）：
+以既有 `record.settings` 展開為底（否則 `btnColor` / `showStock` / `showBuyerCount` /
+`showConfetti` 與 legacy 未知 key 會被整批清掉）、清空的時間寫 `0` 而非刪 key
+（`base` 裡的舊值不會被覆蓋，症狀是「時間清掉了，存檔後又跑回來」）。前端細節見
+`react.rule.md` §6.5。
+
 #### DRY：URL prefix 統一用 `RewriteRules::SHOP_REWRITE_PREFIX`
 
 凡是要組 `/profit-shop/{slug}/` URL 的地方（`ProfitShopRenderer` 的 canonical、`ProfitShopShortcode` 的提示文案等），**必須**從 `RewriteRules::SHOP_REWRITE_PREFIX` 取，不要 hardcode 字串 `'profit-shop'`，避免日後改前綴時遺漏。

@@ -273,10 +273,291 @@ final class ProfitShopFrontDataSettingsTest extends TestCase {
 		);
 
 		$this->assertSame(
-			[ 'colorPrimary', 'showConfetti', 'showStock', 'showBuyerCount', 'startTime', 'endTime', 'shopStatus' ],
+			[
+				'colorPrimary',
+				'showConfetti',
+				'showStock',
+				'showBuyerCount',
+				'startTime',
+				'endTime',
+				'shopStatus',
+				'beforeDisplay',
+				'beforeText',
+				'afterDisplay',
+				'afterText',
+				'showCountdown',
+				'showDisplayText',
+				'displayText',
+				'showProducts',
+				'countdownTarget',
+			],
 			\array_keys( $result ),
 			'輸出的 key 集合必須穩定，前端型別才靠得住'
 		);
+	}
+
+	/* ------------------------------------------------------------------ *
+	 * 開啟 / 關閉時間的呈現方式
+	 * ------------------------------------------------------------------ */
+
+	/**
+	 * smoke：沒設定呈現區塊時只顯示商品（＝功能上線前的既有行為）
+	 *
+	 * 這是本功能最重要的一條回歸鎖：既有賣場的 settings 裡沒有 beforeDisplay /
+	 * afterDisplay 兩個 key，預設若不是「只顯示商品」，全站已排程的賣場會在
+	 * 時間外突然變成空白頁。
+	 *
+	 * @group smoke
+	 */
+	public function test_display_parts_default_to_products_only(): void {
+		$result = ProfitShopFrontData::settings(
+			$this->build_shop( [ 'startTime' => $this->ms_from_now( 3600 ) ] )
+		);
+
+		$this->assertSame( ProfitShopFrontData::DEFAULT_DISPLAY_PARTS, $result['beforeDisplay'] );
+		$this->assertSame( ProfitShopFrontData::DEFAULT_DISPLAY_PARTS, $result['afterDisplay'] );
+		$this->assertTrue( $result['showProducts'] );
+		$this->assertFalse( $result['showCountdown'] );
+		$this->assertFalse( $result['showDisplayText'] );
+	}
+
+	/**
+	 * happy：三個區塊互相獨立，可任意組合
+	 *
+	 * @group happy
+	 */
+	public function test_display_parts_are_independent(): void {
+		$start  = $this->ms_from_now( 3600 );
+		$result = ProfitShopFrontData::settings(
+			$this->build_shop(
+				[
+					'startTime'     => $start,
+					'beforeDisplay' => [
+						ProfitShopFrontData::PART_COUNTDOWN,
+						ProfitShopFrontData::PART_PRODUCTS,
+					],
+					'beforeText'    => '8/10 中午 12:00 開賣',
+				]
+			)
+		);
+
+		$this->assertSame( 'coming', $result['shopStatus'] );
+		$this->assertTrue( $result['showCountdown'], '勾了倒數就要顯示倒數' );
+		$this->assertTrue( $result['showProducts'], '倒數與商品可以同時顯示' );
+		$this->assertFalse( $result['showDisplayText'], '沒勾自訂文字就不顯示，即使文字有填' );
+		$this->assertSame( '', $result['displayText'] );
+		$this->assertSame( $start, $result['countdownTarget'], '尚未開賣時應倒數到開啟時間' );
+	}
+
+	/**
+	 * happy：全部不勾＝什麼都不顯示（空陣列是合法值，不可被預設值蓋掉）
+	 *
+	 * 這條與上面的「缺 key 退回預設」是一體兩面：`empty([])` 為 true，若用它
+	 * 判斷就會讓站長刻意取消的全部勾選被靜默還原成「顯示商品」。
+	 *
+	 * @group happy
+	 * @group edge
+	 */
+	public function test_empty_display_parts_means_show_nothing(): void {
+		$result = ProfitShopFrontData::settings(
+			$this->build_shop(
+				[
+					'startTime'     => $this->ms_from_now( 3600 ),
+					'beforeDisplay' => [],
+					'beforeText'    => '不會顯示的文字',
+				]
+			)
+		);
+
+		$this->assertSame( [], $result['beforeDisplay'] );
+		$this->assertFalse( $result['showCountdown'] );
+		$this->assertFalse( $result['showDisplayText'] );
+		$this->assertFalse( $result['showProducts'] );
+	}
+
+	/**
+	 * happy：已結束時採用 afterDisplay / afterText，倒數目標歸零
+	 *
+	 * 已結束的賣場沒有「未來的目標時間」可倒數，盤面刻意全部歸零；
+	 * 真正傳達訊息的是搭配的自訂文字。若日後要支援「下一檔期開賣倒數」，
+	 * 必須新增獨立的設定欄位，而不是在這裡猜。
+	 *
+	 * @group happy
+	 */
+	public function test_closed_state_uses_after_settings_with_zero_countdown(): void {
+		$result = ProfitShopFrontData::settings(
+			$this->build_shop(
+				[
+					'startTime'     => $this->ms_from_now( -7200 ),
+					'endTime'       => $this->ms_from_now( -3600 ),
+					'beforeDisplay' => [ ProfitShopFrontData::PART_COUNTDOWN ],
+					'beforeText'    => '即將開賣',
+					'afterDisplay'  => [ ProfitShopFrontData::PART_TEXT ],
+					'afterText'     => '活動已結束',
+				]
+			)
+		);
+
+		$this->assertSame( 'closed', $result['shopStatus'] );
+		$this->assertFalse( $result['showCountdown'], '已結束時應採用 afterDisplay，不是 beforeDisplay' );
+		$this->assertTrue( $result['showDisplayText'] );
+		$this->assertFalse( $result['showProducts'] );
+		$this->assertSame( '活動已結束', $result['displayText'] );
+		$this->assertSame( 0, $result['countdownTarget'] );
+	}
+
+	/**
+	 * edge：勾了「顯示自訂文字」但文字是空的 → 不顯示（避免印出空的 <p>）
+	 *
+	 * @group edge
+	 */
+	public function test_text_part_without_content_is_not_shown(): void {
+		$result = ProfitShopFrontData::settings(
+			$this->build_shop(
+				[
+					'startTime'     => $this->ms_from_now( 3600 ),
+					'beforeDisplay' => [ ProfitShopFrontData::PART_TEXT ],
+					'beforeText'    => '   ',
+				]
+			)
+		);
+
+		$this->assertFalse( $result['showDisplayText'] );
+		$this->assertSame( '', $result['displayText'] );
+	}
+
+	/**
+	 * happy：販售中一律只顯示商品，且不帶任何排程文字
+	 *
+	 * beforeDisplay / afterDisplay 只描述「時間區間之外」，不該影響開賣期間。
+	 *
+	 * @group happy
+	 */
+	public function test_published_state_always_shows_products_only(): void {
+		$result = ProfitShopFrontData::settings(
+			$this->build_shop(
+				[
+					'beforeDisplay' => [],
+					'afterDisplay'  => [ ProfitShopFrontData::PART_COUNTDOWN ],
+					'beforeText'    => '即將開賣',
+					'afterText'     => '活動已結束',
+				]
+			)
+		);
+
+		$this->assertSame( 'published', $result['shopStatus'] );
+		$this->assertTrue( $result['showProducts'], '販售中不受排程呈現設定影響' );
+		$this->assertFalse( $result['showCountdown'] );
+		$this->assertFalse( $result['showDisplayText'] );
+		$this->assertSame( '', $result['displayText'] );
+		$this->assertSame( 0, $result['countdownTarget'] );
+	}
+
+	/**
+	 * security：未知 / 惡意的呈現區塊值一律被白名單濾掉
+	 *
+	 * 這個值決定「商品要不要印出來」，是實質的可見性開關。
+	 * 非陣列（缺 key / 壞型別）退回預設；陣列內的未知字串直接丟棄。
+	 *
+	 * @group security
+	 */
+	public function test_unknown_display_parts_are_filtered(): void {
+		// 非陣列 → 退回預設（只顯示商品）
+		foreach ( [ null, 0, true, 1.5 ] as $value ) {
+			$result = ProfitShopFrontData::settings(
+				$this->build_shop(
+					[
+						'startTime'     => $this->ms_from_now( 3600 ),
+						'beforeDisplay' => $value,
+					]
+				)
+			);
+
+			$this->assertSame(
+				ProfitShopFrontData::DEFAULT_DISPLAY_PARTS,
+				$result['beforeDisplay'],
+				\sprintf( '非陣列值 %s 必須退回預設', \var_export( $value, true ) )
+			);
+		}
+
+		// 陣列內的未知值 → 丟棄，只留白名單內的
+		$mixed = ProfitShopFrontData::settings(
+			$this->build_shop(
+				[
+					'startTime'     => $this->ms_from_now( 3600 ),
+					'beforeDisplay' => [ 'PRODUCTS', 'hidden', '<script>', ProfitShopFrontData::PART_COUNTDOWN, 1 ],
+				]
+			)
+		);
+
+		$this->assertSame( [ ProfitShopFrontData::PART_COUNTDOWN ], $mixed['beforeDisplay'] );
+		$this->assertFalse( $mixed['showProducts'], "'PRODUCTS' 大小寫不符，不可被當成 products" );
+	}
+
+	/**
+	 * edge：舊版單選字串格式（開發過渡期資料）要能對映成等價的區塊組合
+	 *
+	 * 本設定最初是單選 `hidden` / `countdown` / `browse`；直接丟掉會讓站長
+	 * 已經設好的倒數計時安靜消失。
+	 *
+	 * @group edge
+	 */
+	public function test_legacy_string_display_mode_is_migrated(): void {
+		$cases = [
+			'hidden'    => [],
+			'countdown' => [ ProfitShopFrontData::PART_COUNTDOWN, ProfitShopFrontData::PART_TEXT ],
+			'browse'    => ProfitShopFrontData::DEFAULT_DISPLAY_PARTS,
+			'unknown'   => ProfitShopFrontData::DEFAULT_DISPLAY_PARTS,
+		];
+
+		foreach ( $cases as $legacy => $expected ) {
+			$result = ProfitShopFrontData::settings(
+				$this->build_shop(
+					[
+						'startTime'     => $this->ms_from_now( 3600 ),
+						'beforeDisplay' => $legacy,
+					]
+				)
+			);
+
+			$this->assertSame(
+				$expected,
+				$result['beforeDisplay'],
+				\sprintf( "舊格式 '%s' 未正確對映", $legacy )
+			);
+		}
+	}
+
+	/**
+	 * edge：自訂文字非字串 → 空字串；超長 → 截斷；前後空白 → trim
+	 *
+	 * @group edge
+	 */
+	public function test_display_text_is_normalised(): void {
+		$long   = \str_repeat( '長', ProfitShopFrontData::TEXT_MAX_LENGTH + 50 );
+		$result = ProfitShopFrontData::settings(
+			$this->build_shop(
+				[
+					'startTime'  => $this->ms_from_now( 3600 ),
+					'beforeText' => '  即將開賣  ',
+					'afterText'  => $long,
+				]
+			)
+		);
+
+		$this->assertSame( '即將開賣', $result['beforeText'], '前後空白應被 trim' );
+		$this->assertSame(
+			ProfitShopFrontData::TEXT_MAX_LENGTH,
+			\mb_strlen( $result['afterText'], 'UTF-8' ),
+			'超長文字應以 codepoint 為單位截斷，不可把中文切成半個字'
+		);
+
+		foreach ( [ null, [], true, new \stdClass() ] as $value ) {
+			$normalised = ProfitShopFrontData::settings(
+				$this->build_shop( [ 'beforeText' => $value ] )
+			);
+			$this->assertSame( '', $normalised['beforeText'] );
+		}
 	}
 
 	/**

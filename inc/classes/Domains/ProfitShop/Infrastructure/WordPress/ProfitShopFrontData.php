@@ -51,6 +51,55 @@ final class ProfitShopFrontData {
 	public const DEFAULT_COLOR_PRIMARY = '#1677ff';
 
 	/**
+	 * 非販售期間可顯示的區塊：倒數計時盤
+	 */
+	public const PART_COUNTDOWN = 'countdown';
+
+	/**
+	 * 非販售期間可顯示的區塊：站長自訂文字
+	 */
+	public const PART_TEXT = 'text';
+
+	/**
+	 * 非販售期間可顯示的區塊：商品列表（按鈕停用、不可購買）
+	 */
+	public const PART_PRODUCTS = 'products';
+
+	/**
+	 * 呈現區塊預設值
+	 *
+	 * ⚠ **必須是 `[products]`**：這個設定是後加的，既有賣場的 `settings` 裡沒有
+	 * `beforeDisplay` / `afterDisplay` 這兩個 key。只顯示商品（按鈕停用）正是本功能
+	 * 上線前的既有行為，選它才能讓所有既有賣場的前台外觀零變化。預設成空陣列
+	 * 會讓全站已排程的賣場在時間外突然變空白。
+	 *
+	 * ⚠ 與**空陣列**（`[]`，站長刻意全部取消勾選＝什麼都不顯示）是兩件事，
+	 * 正規化時必須用 `is_array()` 而不是 `empty()` 區分「沒設定」與「設定為空」。
+	 *
+	 * @var array<int, string>
+	 */
+	public const DEFAULT_DISPLAY_PARTS = [ self::PART_PRODUCTS ];
+
+	/**
+	 * 自訂文字長度上限（字元）
+	 *
+	 * 這段文字由站長輸入、直接印進前台（`esc_html`）。設上限不是為了防 XSS
+	 * （escape 才是），而是防止一段失控的長字串把版面撐爛。
+	 */
+	public const TEXT_MAX_LENGTH = 200;
+
+	/**
+	 * 合法的呈現區塊白名單（順序即輸出順序，讓序列化結果穩定）
+	 *
+	 * @var array<int, string>
+	 */
+	private const DISPLAY_PARTS = [
+		self::PART_COUNTDOWN,
+		self::PART_TEXT,
+		self::PART_PRODUCTS,
+	];
+
+	/**
 	 * 前台顯示設定（供 template 與 localize 共用）
 	 *
 	 * 刻意獨立成 public：template 即使在 React bundle 不可用時也需要
@@ -60,27 +109,151 @@ final class ProfitShopFrontData {
 	 * 資料來源是 `ProfitShop::$settings`（persist 於 `_profit_shop_settings`
 	 * post meta，端到端已通 Repository / Hydrator / DTO / V2Api），欄位名與
 	 * legacy 的 `power_shop_settings` 完全對齊，缺值時 fallback 到 legacy 預設。
-	 * 這樣後台一旦補上設定 UI，前台無需再改一行就會生效。
+	 *
+	 * ## 排程呈現（`beforeDisplay` / `afterDisplay` → `showCountdown` / `showDisplayText` / `showProducts`）
+	 *
+	 * `beforeDisplay` / `afterDisplay` 是站長設定的**原始意圖**：一組**互相獨立**的
+	 * 呈現區塊（`countdown` / `text` / `products`），對應後台三個各自獨立的勾選框，
+	 * 全部不勾就是「什麼都不顯示」。`showCountdown` / `showDisplayText` /
+	 * `showProducts` / `displayText` / `countdownTarget` 是把它們與當下的
+	 * `shopStatus` 合併後的**結論**，template 只該讀後者。
+	 *
+	 * 這個分工是刻意的：`shopStatus` 有三態、呈現設定有兩組，若讓 template 自己
+	 * 配對，兩條渲染路徑（獨立頁面 / shortcode）就各有一份配對邏輯要維持一致——
+	 * 這個 codebase 已經因為「靠人維持兩份邏輯逐字一致」吃過虧（見
+	 * `.claude/rules/profit-shop.rule.md` §7 的 `OverridePriceResolver`）。
 	 *
 	 * @param ProfitShop $shop 賣場聚合根。
 	 *
-	 * @return array{colorPrimary: string, showConfetti: bool, showStock: bool, showBuyerCount: bool, startTime: int, endTime: int, shopStatus: string}
+	 * @return array{colorPrimary: string, showConfetti: bool, showStock: bool, showBuyerCount: bool, startTime: int, endTime: int, shopStatus: string, beforeDisplay: array<int, string>, beforeText: string, afterDisplay: array<int, string>, afterText: string, showCountdown: bool, showDisplayText: bool, displayText: string, showProducts: bool, countdownTarget: int}
 	 */
 	public static function settings( ProfitShop $shop ): array {
 		$raw = $shop->settings;
 
 		$start_time = self::to_timestamp_ms( $raw['startTime'] ?? null );
 		$end_time   = self::to_timestamp_ms( $raw['endTime'] ?? null );
+		$status     = self::resolve_shop_status( $start_time, $end_time );
+
+		$before_display = self::to_display_parts( $raw['beforeDisplay'] ?? null );
+		$before_text    = self::to_text( $raw['beforeText'] ?? null );
+		$after_display  = self::to_display_parts( $raw['afterDisplay'] ?? null );
+		$after_text     = self::to_text( $raw['afterText'] ?? null );
+
+		$is_published = ( 'published' === $status );
+
+		// 販售中不受排程呈現設定影響：一律只顯示商品、不顯示倒數與排程文字。
+		if ( $is_published ) {
+			$active_parts = self::DEFAULT_DISPLAY_PARTS;
+			$active_text  = '';
+		} elseif ( 'coming' === $status ) {
+			$active_parts = $before_display;
+			$active_text  = $before_text;
+		} else {
+			$active_parts = $after_display;
+			$active_text  = $after_text;
+		}
+
+		$show_text = \in_array( self::PART_TEXT, $active_parts, true ) && '' !== $active_text;
 
 		return [
-			'colorPrimary'   => self::to_color( $raw['btnColor'] ?? null ),
-			'showConfetti'   => self::to_bool( $raw['showConfetti'] ?? null ),
-			'showStock'      => self::to_bool( $raw['showStock'] ?? null ),
-			'showBuyerCount' => self::to_bool( $raw['showBuyerCount'] ?? null ),
-			'startTime'      => $start_time,
-			'endTime'        => $end_time,
-			'shopStatus'     => self::resolve_shop_status( $start_time, $end_time ),
+			'colorPrimary'    => self::to_color( $raw['btnColor'] ?? null ),
+			'showConfetti'    => self::to_bool( $raw['showConfetti'] ?? null ),
+			'showStock'       => self::to_bool( $raw['showStock'] ?? null ),
+			'showBuyerCount'  => self::to_bool( $raw['showBuyerCount'] ?? null ),
+			'startTime'       => $start_time,
+			'endTime'         => $end_time,
+			'shopStatus'      => $status,
+			'beforeDisplay'   => $before_display,
+			'beforeText'      => $before_text,
+			'afterDisplay'    => $after_display,
+			'afterText'       => $after_text,
+			'showCountdown'   => \in_array( self::PART_COUNTDOWN, $active_parts, true ),
+
+			// 勾了「顯示自訂文字」但文字是空的 → 不印（否則會多出一個空的 <p>）。
+			'showDisplayText' => $show_text,
+			'displayText'     => $show_text ? $active_text : '',
+			'showProducts'    => \in_array( self::PART_PRODUCTS, $active_parts, true ),
+			'countdownTarget' => ( 'coming' === $status ) ? $start_time : 0,
 		];
+	}
+
+	/**
+	 * 呈現區塊正規化（白名單過濾，缺 key / 壞型別退回預設）
+	 *
+	 * 三個區塊互相獨立，因此值是**陣列**而非單一字串。
+	 *
+	 * ⚠ **空陣列是合法值**（站長把三個勾選框全部取消＝什麼都不顯示），
+	 * 與「這個 key 根本不存在」（既有賣場，應退回預設的「只顯示商品」）是兩件事。
+	 * 判斷一定要用 `is_array()`，**不可**用 `empty()`——`empty([])` 為 true，
+	 * 會讓「刻意全部取消勾選」被靜默還原成「顯示商品」，站長改了設定卻沒有反應。
+	 *
+	 * 白名單過濾而非原樣帶出：這個值決定「商品要不要印出來」，是實質的可見性開關。
+	 * 未知字串一律丟掉，`in_array()` 的判斷因此只會落在三個已知區塊上。
+	 *
+	 * @param mixed $value 原始值。
+	 *
+	 * @return array<int, string>
+	 */
+	private static function to_display_parts( $value ): array {
+		/*
+		* 過渡相容：本設定最初的版本是單選字串（`hidden` / `countdown` / `browse`），
+		* 改成多選之後仍可能在開發中的資料庫裡遇到舊格式。對映成等價的區塊組合，
+		* 而不是丟掉——後者會讓站長已經設好的倒數計時安靜消失。
+		*/
+		if ( \is_string( $value ) ) {
+			switch ( $value ) {
+				case 'hidden':
+					return [];
+				case 'countdown':
+					return [ self::PART_COUNTDOWN, self::PART_TEXT ];
+				case 'browse':
+					return self::DEFAULT_DISPLAY_PARTS;
+			}
+
+			return self::DEFAULT_DISPLAY_PARTS;
+		}
+
+		if ( ! \is_array( $value ) ) {
+			return self::DEFAULT_DISPLAY_PARTS;
+		}
+
+		// 依常數順序輸出，序列化結果才穩定（前端送來的順序不影響 DB 內容）。
+		$parts = [];
+		foreach ( self::DISPLAY_PARTS as $part ) {
+			if ( \in_array( $part, $value, true ) ) {
+				$parts[] = $part;
+			}
+		}
+
+		return $parts;
+	}
+
+	/**
+	 * 自訂文字正規化（非字串 → 空字串；截斷至上限）
+	 *
+	 * 不在此處 escape——輸出時機在 template，escape 必須發生在輸出點
+	 * （`esc_html`），提前 escape 會讓長度計算與實際顯示對不上。
+	 *
+	 * @param mixed $value 原始值。
+	 *
+	 * @return string
+	 */
+	private static function to_text( $value ): string {
+		if ( ! \is_string( $value ) && ! \is_numeric( $value ) ) {
+			return '';
+		}
+
+		$text = \trim( (string) $value );
+		if ( '' === $text ) {
+			return '';
+		}
+
+		// 以 codepoint 計算，避免中文被從中間切成半個字（mb_substr 對無效位元組安全）。
+		if ( \function_exists( 'mb_substr' ) ) {
+			return (string) \mb_substr( $text, 0, self::TEXT_MAX_LENGTH, 'UTF-8' );
+		}
+
+		return \substr( $text, 0, self::TEXT_MAX_LENGTH );
 	}
 
 	/**

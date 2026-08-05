@@ -26,6 +26,61 @@ export type TProfitShopMode =
 	(typeof PROFIT_SHOP_MODE)[keyof typeof PROFIT_SHOP_MODE]
 
 /**
+ * 非販售期間（尚未開賣 / 已結束）前台可顯示的區塊
+ *
+ * 三者**互相獨立**，可任意組合；全部不選＝什麼都不顯示。
+ *
+ * ⚠️ 值必須與 PHP `ProfitShopFrontData::PART_*` 常數逐字一致
+ * （`inc/classes/Domains/ProfitShop/Infrastructure/WordPress/ProfitShopFrontData.php`）。
+ * 後端會用白名單過濾掉未知值，所以拼錯不會噴錯 —— 只會讓站長「勾了沒反應」。
+ */
+export const PROFIT_SHOP_DISPLAY_PART = {
+	/** 倒數計時盤（daisyUI countdown） */
+	COUNTDOWN: 'countdown',
+	/** 站長自訂文字 */
+	TEXT: 'text',
+	/** 商品列表（按鈕停用、不可購買） */
+	PRODUCTS: 'products',
+} as const
+
+export type TProfitShopDisplayPart =
+	(typeof PROFIT_SHOP_DISPLAY_PART)[keyof typeof PROFIT_SHOP_DISPLAY_PART]
+
+/**
+ * 呈現區塊預設值；必須與 PHP `ProfitShopFrontData::DEFAULT_DISPLAY_PARTS` 一致
+ *
+ * ⚠️ 這是「這個 key 不存在時」的預設（＝本功能上線前的既有行為：非販售期間照樣
+ * 印商品、只是按鈕停用），與**空陣列**（站長刻意全部取消勾選＝什麼都不顯示）
+ * 是兩件事。前後端都必須用「是不是陣列」而非「陣列是不是空的」來區分。
+ */
+export const PROFIT_SHOP_DEFAULT_DISPLAY_PARTS: TProfitShopDisplayPart[] = [
+	PROFIT_SHOP_DISPLAY_PART.PRODUCTS,
+]
+
+/** 自訂文字長度上限；必須與 PHP `ProfitShopFrontData::TEXT_MAX_LENGTH` 一致 */
+export const PROFIT_SHOP_SCHEDULE_TEXT_MAX = 200
+
+/**
+ * 賣場前台設定中「開啟 / 關閉時間」相關的欄位
+ *
+ * `settings` 在後端是自由 array（`Record<string, unknown>`），本型別只描述本頁會
+ * 讀寫的那幾個 key —— 其餘 key（`btnColor` / `showStock` / `showBuyerCount` /
+ * `showConfetti` 等）**必須原樣保留**，送出時以展開既有 settings 的方式合併，
+ * 否則站長在別處設定的值會被這一頁靜默清掉。
+ *
+ * 時間為**毫秒 epoch**（與 PHP `ProfitShopFrontData::to_timestamp_ms()` 對齊），
+ * 0 / 未設定代表「沒有這個界線」。
+ */
+export type TProfitShopScheduleSettings = {
+	startTime?: number
+	endTime?: number
+	beforeDisplay?: TProfitShopDisplayPart[]
+	beforeText?: string
+	afterDisplay?: TProfitShopDisplayPart[]
+	afterText?: string
+}
+
+/**
  * 賣場前台 URL 前綴（永久連結用）
  *
  * ⚠️ 必須與 PHP `RewriteRules::SHOP_REWRITE_PREFIX` 一致

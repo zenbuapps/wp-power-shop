@@ -305,6 +305,146 @@ final class ProfitShopFrontView {
 	}
 
 	/**
+	 * DaisyUI countdown 元件能顯示的最大值
+	 *
+	 * `.pc-countdown > *:before` 的 content 是 `"00\A 01\A … 99"` 這串字面值，
+	 * 靠 `translateY(calc(var(--value) * -1em))` 捲到對應那一行。`--value` 超過 99
+	 * 會捲過字串結尾，**顯示成空白**——不是報錯，是安靜地什麼都不顯示。
+	 * 因此「天」這一格必須有純文字的退路（見 `countdown_unit()`）。
+	 */
+	private const COUNTDOWN_MAX_VALUE = 99;
+
+	/**
+	 * 倒數計時盤（daisyUI countdown，large text with labels under）
+	 *
+	 * 用於「尚未開賣」與「已結束」兩種非販售狀態，由賣場設定的呈現方式決定要不要印。
+	 *
+	 * ## 兩層職責分工
+	 *
+	 * PHP 只負責印出**首屏的正確數字**（用伺服器時間算，避免瀏覽器時鐘偏移造成
+	 * 「後台已開賣、前台仍在倒數」）；之後每秒的遞減由
+	 * `inc/assets/js/profit-shop-front.js` 接手。JS 停用時畫面會是一個靜止但正確的
+	 * 時間快照——這比顯示 `--:--:--` 或整塊消失都好。
+	 *
+	 * ## 已結束的賣場為什麼還印倒數盤
+	 *
+	 * `$target_ms` 為 0（或已過期）時四格全部歸零，語意是「倒數已結束」。
+	 * 站長選了「顯示倒數計時」就是要這個視覺元件，真正傳達訊息的是搭配的自訂文字。
+	 * 若日後要支援「下一檔期開賣倒數」，需要新增一個 `nextStartTime` 設定，
+	 * 而不是把這裡改成猜測——猜錯的成本是顧客看到一個永遠不會到來的時間。
+	 *
+	 * ⚠ DOM 契約（改動任一項會讓每秒遞減靜默失效）：
+	 *   - `[data-ps-countdown][data-ps-countdown-target]` 外層容器與目標毫秒數
+	 *   - `[data-ps-cd-unit="days|hours|minutes|seconds"]`  daisyUI 的 `.pc-countdown` 外層
+	 *   - `[data-ps-cd-plain="…"]`                          > 99 時的純文字退路
+	 *
+	 * @param int      $target_ms 目標毫秒時間戳（0 或已過期 → 全部歸零）。
+	 * @param int|null $now_ms    現在時間（毫秒）；null 時取伺服器時間。測試用。
+	 *
+	 * @return string
+	 */
+	public static function countdown( int $target_ms, ?int $now_ms = null ): string {
+		$now       = null === $now_ms ? (int) ( \time() * 1000 ) : $now_ms;
+		$remaining = (int) \max( 0, \intdiv( \max( 0, $target_ms - $now ), 1000 ) );
+
+		$days    = \intdiv( $remaining, 86400 );
+		$hours   = \intdiv( $remaining % 86400, 3600 );
+		$minutes = \intdiv( $remaining % 3600, 60 );
+		$seconds = $remaining % 60;
+
+		$units = [
+			[ 'days', $days, \__( '天', 'power_shop' ) ],
+			[ 'hours', $hours, \__( '時', 'power_shop' ) ],
+			[ 'minutes', $minutes, \__( '分', 'power_shop' ) ],
+			[ 'seconds', $seconds, \__( '秒', 'power_shop' ) ],
+		];
+
+		$cells = '';
+		foreach ( $units as [ $key, $value, $label ] ) {
+			$cells .= self::countdown_unit( $key, $value, $label );
+		}
+
+		return \sprintf(
+			'<div class="flex justify-center" data-ps-countdown data-ps-countdown-target="%1$s">'
+				. '<div class="grid auto-cols-max grid-flow-col gap-5 text-center" role="timer" aria-label="%2$s">%3$s</div>'
+			. '</div>',
+			\esc_attr( (string) $target_ms ),
+			\esc_attr__( '倒數計時', 'power_shop' ),
+			$cells // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- countdown_unit() 內部已逐項 escape
+		);
+	}
+
+	/**
+	 * 倒數計時的單一格（數字 + 單位標籤）
+	 *
+	 * 同時印出兩種數字表示，用 `tw-hidden` 切換：
+	 *   - `.pc-countdown`：daisyUI 的捲動動畫，只在 0–99 有效
+	 *   - `[data-ps-cd-plain]`：純文字，> 99 時才顯示（「天」超過 99 是真的會發生的）
+	 *
+	 * 兩者都印出來（而非由 JS 動態建立）是刻意的：JS 停用時仍必須顯示正確的數字，
+	 * 而 100 天以上的賣場若只有 daisyUI 那一格，畫面上會是一片空白。
+	 *
+	 * ## 🔴 字級 utility 必須掛在**外層 div**，不可掛在 `.pc-countdown` 上
+	 *
+	 * daisyUI 官方範例寫的是 `class="countdown font-mono text-5xl"`（字級與元件同一個
+	 * 元素），**在 daisyUI 自己的網站可以動，在本專案會壞掉**——差別在 powerhouse 的
+	 * Tailwind `important: '#tw'`：
+	 *
+	 * | 規則 | specificity | 在哪一邊 |
+	 * |---|---|---|
+	 * | `:root .pc-countdown{line-height:1em}` | (0,2,0) | daisyUI（root-anchored，不會被 scope 進 `#tw`）|
+	 * | `#tw .text-3xl{font-size:1.875rem;line-height:2.25rem}` | (1,1,0) | powerhouse Tailwind |
+	 *
+	 * 官方站上 `.text-5xl` 只有 (0,1,0)，輸給 daisyUI 的 (0,2,0)，`line-height:1em` 生效；
+	 * 本專案的 utility 多了 `#tw` 這個 ID，**反過來蓋掉 daisyUI**，line-height 從
+	 * `1em`（= font-size）變成 Tailwind 的行高（例：1.875rem 的字配 2.25rem 行高）。
+	 *
+	 * 這會直接打壞倒數盤的運作原理：`::before` 是一整串 `"00\A 01\A … 99"`，靠
+	 * `top: calc(var(--value) * -1em)` 捲到對應那一行，而每一行的高度是 **line-height**。
+	 * 兩者一旦不相等就會每往下一格累積偏移 `line-height - 1em`，畫面上看到的是
+	 * 「上下兩個數字各露一半」的錯位；`.pc-countdown > *{height:1em}` 也會比一行還矮，
+	 * 於是連 `--value:0` 都被切到。**症狀是純視覺的，沒有任何錯誤訊息。**
+	 *
+	 * 修法是把 `font-mono` / `text-*` 移到外層 `<div>`：`.pc-countdown` 的 font-size
+	 * 用繼承的，line-height 則由 `:root .pc-countdown` **直接命中**——直接命中的宣告
+	 * 永遠優先於繼承值，與 specificity 或 CSS 順序無關，因此這個修法是決定性的、
+	 * 不會因為 powerhouse 日後調整輸出順序而再度失效。
+	 *
+	 * ⚠ 另外 `md:text-4xl` / `md:text-5xl` 在 `front.min.css` **沒有產出**（前台只有
+	 * 無前綴的 `text-3xl` / `text-4xl` / `text-5xl`），寫了不會報錯、只會安靜不生效。
+	 * 改字級前先到 powerhouse 的 `js/dist/css/front.min.css` grep 確認（Pitfall #19 / #28）。
+	 *
+	 * ⚠ 數字由 CSS `::before` 產生，螢幕閱讀器讀不到，因此 `.pc-countdown` 上掛
+	 * `aria-label` 帶實際數值（JS 每秒同步更新）。**不要**改用 `tw-inline` 之類的
+	 * display utility 來切換顯示，它會蓋掉 `tw-hidden`（見 CLAUDE.md Pitfall #27）。
+	 *
+	 * @param string $key   單位鍵：days | hours | minutes | seconds。
+	 * @param int    $value 數值。
+	 * @param string $label 單位標籤（天 / 時 / 分 / 秒）。
+	 *
+	 * @return string
+	 */
+	private static function countdown_unit( string $key, int $value, string $label ): string {
+		$overflow = ( $value > self::COUNTDOWN_MAX_VALUE );
+
+		return \sprintf(
+			'<div class="flex flex-col items-center font-mono text-4xl">'
+				. '<span class="pc-countdown%1$s" data-ps-cd-unit="%2$s" aria-label="%3$s">'
+					. '<span style="--value:%4$s;"></span>'
+				. '</span>'
+				. '<span class="%5$s" data-ps-cd-plain="%2$s">%3$s</span>'
+				. '<span class="text-sm text-base-content/60">%6$s</span>'
+			. '</div>',
+			$overflow ? ' tw-hidden' : '',
+			\esc_attr( $key ),
+			\esc_html( (string) $value ),
+			\esc_attr( (string) \min( $value, self::COUNTDOWN_MAX_VALUE ) ),
+			$overflow ? '' : 'tw-hidden',
+			\esc_html( $label )
+		);
+	}
+
+	/**
 	 * 內嵌 SVG 圖示
 	 *
 	 * 取代舊版的 `@ant-design/icons`（那是 React 元件，隨 antd 一併移除）。

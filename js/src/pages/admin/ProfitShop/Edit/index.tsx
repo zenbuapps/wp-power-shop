@@ -20,6 +20,11 @@ import {
 	type TProfitShopInput,
 	type TShopItemRow,
 } from '@/pages/admin/ProfitShop/types'
+import {
+	mergeScheduleSettings,
+	toScheduleFormValues,
+	type TScheduleFormValues,
+} from '@/pages/admin/ProfitShop/utils'
 import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
 
 /**
@@ -28,8 +33,12 @@ import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
  * 用 `TShopItemRow` 而非 `TOverrideItemInput`，因為表單值會多帶 `_name` / `_sku`
  * 等 UI-only 欄位；這些欄位在 handleSubmit 會被 strip 掉才送出。
  */
-type TProfitShopEditFormValues = Omit<TProfitShopInput, 'items'> & {
+type TProfitShopEditFormValues = Omit<TProfitShopInput, 'items' | 'settings'> & {
 	items?: TShopItemRow[]
+
+	// ScheduleTab 的時間欄位是 Dayjs（DatePicker 的值），送出前才換算回毫秒；
+	// 其餘 settings key 不進表單，合併時直接從 record.settings 帶回（見 mergeScheduleSettings）。
+	settings?: TScheduleFormValues
 }
 
 const EditComponent = () => {
@@ -76,6 +85,9 @@ const EditComponent = () => {
 			partner_term_id: record.partner_term_id,
 			rate: record.rate,
 
+			// 排程欄位：毫秒 → Dayjs；0 / 壞資料 → null（DatePicker 顯示 placeholder）。
+			settings: toScheduleFormValues(record.settings),
+
 			// 巢狀契約（BUG-A 修補）：override / variations 帶入表單。
 			// 對 override 逐欄取值而非整包帶，是為了讓「後端曾回傳缺欄位的舊資料」
 			// 也能收斂成三欄齊全的形狀，避免 ItemsEditor 讀到 undefined。
@@ -114,8 +126,7 @@ const EditComponent = () => {
 		try {
 			const values = await form.validateFields()
 
-			// items 由 ItemsEditor 受控編輯；提交時把表單值送上，
-			// 後端會以 PUT 整體覆寫。settings 仍沿用後端既有資料（4-A3 才開放編輯）。
+			// items 由 ItemsEditor 受控編輯；提交時把表單值送上，後端會以 PUT 整體覆寫。
 			//
 			// ⚠️ 這裡是 BUG-A 的注入點：只挑後端契約定義的 4 個欄位送出，
 			// 順帶 strip 掉 `_name` / `_sku` / `_enrichState` 等 UI-only 欄位。
@@ -134,7 +145,14 @@ const EditComponent = () => {
 				partner_term_id: values.partner_term_id,
 				rate: values.rate,
 				items,
-				settings: record.settings,
+
+				/*
+				 * ⚠️ 一定要用 record.settings 當底展開合併：`settings` 是自由欄位，
+				 * 裡面還有 `btnColor` / `showStock` / `showBuyerCount` / `showConfetti`
+				 * 等本頁不管的 key（以及 legacy 匯入帶進來的未知 key）。
+				 * 只送排程欄位會把它們整批清掉，而且不會有任何錯誤訊息。
+				 */
+				settings: mergeScheduleSettings(record.settings, values.settings),
 			})
 			notification.success({
 				message: '已更新賣場',
@@ -166,7 +184,14 @@ const EditComponent = () => {
 						errors: [msg],
 					})
 				)
-				form.setFields(fields)
+
+				/*
+				 * `mapped.fieldErrors` 的 key 是後端回的欄位名（純字串），
+				 * 而 antd 依表單值型別把 `FieldData['name']` 收斂成具名 union，
+				 * 兩者對不上。這個 cast 只是把「後端字串 → 表單欄位路徑」這件事
+				 * 明講出來，不改變任何執行期行為（antd 本來就吃字串路徑）。
+				 */
+				form.setFields(fields as Parameters<typeof form.setFields>[0])
 			}
 
 			/*

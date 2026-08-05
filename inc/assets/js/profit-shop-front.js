@@ -28,6 +28,8 @@
  *   - `[data-ps-submit-label]`               加購按鈕文字
  *   - `[data-ps-submit-error]` / `[data-ps-submit-error-label]`  Modal 內就地錯誤列
  *   - `[data-ps-toast]` / `[data-ps-toast-body]` / `[data-ps-toast-label]`  成功通知
+ *   - `[data-ps-countdown][data-ps-countdown-target]`  倒數計時容器與目標毫秒數
+ *   - `[data-ps-cd-unit="days|hours|minutes|seconds"]` / `[data-ps-cd-plain="…"]`  倒數的數字格
  *   - `[data-ps-*]`                          Modal 內各區塊的更新目標（見下方常數）
  *
  * ⚠ 加入購物車：PHP 直接印出 WooCommerce 原生表單（`<form method="post" data-ps-form>`），
@@ -1182,6 +1184,105 @@
 	}
 
 	/* ------------------------------------------------------------------ *
+	 * 倒數計時（尚未開賣 / 已結束）
+	 * ------------------------------------------------------------------ */
+
+	/** daisyUI countdown 的 `--value` 上限；超過只會捲出字串範圍、顯示空白 */
+	var COUNTDOWN_MAX_VALUE = 99;
+
+	/** 倒數計時的四個單位（順序須與 PHP `ProfitShopFrontView::countdown()` 一致） */
+	var COUNTDOWN_UNITS = [ 'days', 'hours', 'minutes', 'seconds' ];
+
+	/**
+	 * 更新單一時間單位的顯示
+	 *
+	 * daisyUI 的捲動數字只在 0–99 有效，超過就改用純文字那一格（PHP 已把兩者都印好，
+	 * 這裡只切換 `tw-hidden`）。**不要**改用 `tw-inline` 之類的 display utility 來做
+	 * 切換——它與 `tw-hidden` 同權重但排在後面，會讓該藏的永遠藏不住（Pitfall #27）。
+	 *
+	 * @param {HTMLElement} root  倒數容器
+	 * @param {string}      key   單位鍵
+	 * @param {number}      value 數值
+	 * @return {void}
+	 */
+	function renderCountdownUnit( root, key, value ) {
+		var unit = root.querySelector( '[data-ps-cd-unit="' + key + '"]' );
+		var plain = root.querySelector( '[data-ps-cd-plain="' + key + '"]' );
+		if ( ! unit || ! plain ) {
+			return;
+		}
+
+		var overflow = value > COUNTDOWN_MAX_VALUE;
+
+		unit.classList.toggle( 'tw-hidden', overflow );
+		plain.classList.toggle( 'tw-hidden', ! overflow );
+
+		// 數字由 CSS ::before 產生，螢幕閱讀器讀不到，靠 aria-label 補。
+		unit.setAttribute( 'aria-label', String( value ) );
+		plain.textContent = String( value );
+
+		var digit = unit.firstElementChild;
+		if ( digit ) {
+			digit.style.setProperty( '--value', String( Math.min( value, COUNTDOWN_MAX_VALUE ) ) );
+		}
+	}
+
+	/**
+	 * 綁定賣場內的倒數計時
+	 *
+	 * PHP 已用**伺服器時間**印好首屏數字（避免瀏覽器時鐘偏移造成「後台已開賣、
+	 * 前台仍在倒數」），這裡只負責之後每秒遞減。JS 停用時畫面是一個靜止但正確的快照。
+	 *
+	 * ⚠ 歸零後重新載入頁面的守門：**只有初始 remaining > 0 才排程 reload**。
+	 * 少了這個條件，「伺服器判定 coming、但剩餘時間已經是 0」的臨界秒數會變成
+	 * 載入 → 立刻歸零 → reload → 又載入的迴圈。有了它，最壞情況是使用者多等一秒。
+	 *
+	 * @param {HTMLElement} shop `.ps-profit-shop-front` 容器
+	 * @return {void}
+	 */
+	function bindCountdown( shop ) {
+		var root = shop.querySelector( '[data-ps-countdown]' );
+		if ( ! root ) {
+			return;
+		}
+
+		var target = parseInt( root.getAttribute( 'data-ps-countdown-target' ), 10 );
+		if ( ! isFinite( target ) || target <= 0 ) {
+			// 已結束的賣場（target = 0）是刻意的全零盤面，不需要每秒重繪。
+			return;
+		}
+
+		var startedPositive = ( target - Date.now() ) > 0;
+		var reloaded = false;
+
+		function tick() {
+			var remaining = Math.max( 0, Math.floor( ( target - Date.now() ) / 1000 ) );
+
+			renderCountdownUnit( root, 'days', Math.floor( remaining / 86400 ) );
+			renderCountdownUnit( root, 'hours', Math.floor( ( remaining % 86400 ) / 3600 ) );
+			renderCountdownUnit( root, 'minutes', Math.floor( ( remaining % 3600 ) / 60 ) );
+			renderCountdownUnit( root, 'seconds', remaining % 60 );
+
+			if ( remaining > 0 ) {
+				return;
+			}
+
+			window.clearInterval( timer );
+
+			// 倒數結束＝賣場應該開賣了，重新載入讓伺服器重新判定並印出商品。
+			if ( startedPositive && ! reloaded ) {
+				reloaded = true;
+				window.setTimeout( function () {
+					window.location.reload();
+				}, 1000 );
+			}
+		}
+
+		var timer = window.setInterval( tick, 1000 );
+		tick();
+	}
+
+	/* ------------------------------------------------------------------ *
 	 * 初始化
 	 * ------------------------------------------------------------------ */
 
@@ -1192,6 +1293,8 @@
 	 * @return {void}
 	 */
 	function initShop( shop ) {
+		bindCountdown( shop );
+
 		var modals = shop.querySelectorAll( '[data-ps-modal-for]' );
 		Array.prototype.forEach.call( modals, function ( modal ) {
 			bindGallery( modal );

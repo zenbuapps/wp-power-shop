@@ -14,12 +14,25 @@ import {
 	PROFIT_SHOP_STATUS,
 	type TProfitShopInput,
 } from '@/pages/admin/ProfitShop/types'
+import {
+	mergeScheduleSettings,
+	type TScheduleFormValues,
+} from '@/pages/admin/ProfitShop/utils'
 import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
+
+/**
+ * 表單型別：settings 只承載 ScheduleTab 的排程欄位（時間為 Dayjs）
+ *
+ * 建立時後端還沒有既有的 settings 可合併，因此 base 傳 undefined。
+ */
+type TProfitShopCreateFormValues = Omit<TProfitShopInput, 'settings'> & {
+	settings?: TScheduleFormValues
+}
 
 const CreateComponent = () => {
 	const go = useGo()
 	const { notification } = App.useApp()
-	const [form] = Form.useForm<TProfitShopInput>()
+	const [form] = Form.useForm<TProfitShopCreateFormValues>()
 	const creator = useProfitShopCreate()
 
 	// 受控 Tab：驗證失敗時要能主動切到出錯的那一頁（見 ProfitShopForm 的 resolveValidationFeedback）
@@ -36,7 +49,9 @@ const CreateComponent = () => {
 				status: values.status ?? PROFIT_SHOP_STATUS.DRAFT,
 				mode: values.mode ?? PROFIT_SHOP_MODE.PAGE,
 				items: [],
-				settings: {},
+
+				// 排程欄位的 Dayjs → 毫秒；建立時沒有既有 settings 可合併。
+				settings: mergeScheduleSettings(undefined, values.settings),
 			})
 			const newId = result?.data?.data?.id
 			notification.success({
@@ -75,7 +90,8 @@ const CreateComponent = () => {
 						errors: [msg],
 					})
 				)
-				form.setFields(fields)
+				// 見 Edit/index.tsx 的同一段註解：後端字串欄位名 → antd 具名 union 的橋接。
+				form.setFields(fields as Parameters<typeof form.setFields>[0])
 			}
 			notification.error({
 				message: '建立失敗',

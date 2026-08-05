@@ -431,6 +431,11 @@ HTTP request: /profit-shop/{slug}/
                   ├→ require templates/profit-shop-front.php            # 把 $shop_for_template / $front_settings 傳入
                   │   ├→ $ps_products = ProfitShopFrontData::build_products($shop)   # 卡片與 Modal 共用同一份 payload
                   │   ├→ post_content（apply_filters('the_content')，站長自訂文案）
+                  │   ├→ [Phase 16] 非販售期間依三個獨立旗標分流（任何組合都不印 Modal）：
+                  │   │   showCountdown   → 印 [data-ps-schedule] 內的 daisyUI 倒數盤
+                  │   │   showDisplayText → 印 [data-ps-schedule] 內的自訂文字（空字串時已收斂為 false）
+                  │   │   showProducts    → 照印卡片但按鈕停用（**預設值**＝Phase 16 之前的既有行為）
+                  │   │   三者皆 false → 商品區與排程區塊整段不印（連「此賣場暫無商品」也不印）
                   │   ├→ foreach $ps_products → require partials/profit-shop-card.php：
                   │   │   ├→ div[data-ps-product-id][data-ps-disabled]
                   │   │   ├→ aspect-square 圖 + group-hover:scale-125

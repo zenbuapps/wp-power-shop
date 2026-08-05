@@ -698,6 +698,47 @@ const { data } = useCustom({
    `name` / `slug` 欄位 + 自訂 `filterOption`——移掉自訂 `filterOption` 會讓
    夥伴搜尋整個靜默失效，且沒有任何錯誤訊息
 
+### 「開啟 / 關閉時間」Tab：`settings` 是自由欄位，送出一定要合併（Phase 16）
+
+`ScheduleTab`（`components/tabs/ScheduleTab.tsx`）的欄位全部住在巢狀的 `settings` 底下
+（`['settings','startTime']` / `['settings','beforeDisplay']` …），後端契約與語意見
+`profit-shop.rule.md` §12.8「Phase 16」。前端這一側有四個容易寫錯的點：
+
+1. **送出必須以既有 `settings` 展開為底**：`mergeScheduleSettings(record.settings, values.settings)`。
+   `settings` 是自由 array，裡面還有 `btnColor` / `showStock` / `showBuyerCount` /
+   `showConfetti` 以及 legacy 匯入帶進來的未知 key。只送排程欄位會把它們**整批清掉，
+   而且沒有任何錯誤訊息**（Edit 頁在 Phase 16 之前是原樣回送 `record.settings`，
+   正是因為這個風險）。
+2. **清空的時間寫 `0`，不是刪 key**。`base` 裡可能已有舊值，刪 key 不會覆蓋它——
+   症狀是「時間清掉了、按儲存，重新整理後又跑回來」。PHP 端把 0 正規化為「未設定」。
+3. **毫秒 0 / 壞資料要轉成 `null`，不可轉成 `dayjs(0)`**。後者是 1970-01-01，會讓
+   「沒設定開賣時間」看起來像「開賣時間設在 1970 年」，站長按下儲存就把垃圾值寫回去了。
+4. **自訂文字用單行 `Input`，不要用 `TextArea`**。這個欄位經後端
+   `WP::sanitize_text_field_deep()`，換行會被吃掉；用 `TextArea` 會讓站長打的換行
+   **靜默消失**，畫面上看不出任何異常。
+5. **🔴 呈現方式是 `Checkbox.Group`（`string[]`），空陣列是合法值**。
+   「站長把三個勾選框全部取消」（`[]`＝什麼都不顯示）與「這個 key 根本不存在」
+   （既有賣場，應退回預設的 `['products']`）是兩件事。`toDisplayParts()` 一定要用
+   `Array.isArray(value)` 判斷，**不可**用 `value?.length` / `!value` 之類的真值判斷——
+   後者會讓取消勾選被靜默還原成「顯示商品」，站長改了設定卻沒有反應。PHP 端有完全
+   對應的一條（`is_array()` 而非 `empty()`），兩邊同時寫錯才會出事，但也只要一邊寫錯
+   就會前後台不一致。
+6. **`initialValues` 裡的陣列要各給一份新的（`[...CONST]`）**，不要讓兩個欄位共用同一個
+   常數參考——antd 的 `initialValues` 是會被 form store 持有的物件，共用參考在被就地修改
+   時會互相污染。
+
+`FIELD_TO_TAB` 登記的是**欄位路徑的第一段**（`resolveValidationFeedback` 讀 `f.name?.[0]`），
+所以巢狀欄位登記的是 `settings: 'schedule'` 而不是個別欄位名——漏登記的症狀是
+「按儲存沒反應」（`endTime` 早於 `startTime` 的驗證錯誤發生在非 active 的 Tab 上，
+紅字看不到，見 §「多 Tab 表單：驗證失敗絕不能靜默 return」）。
+
+⚠️ **`settings` 型別從 `Record<string, unknown>` 收斂成具名 shape 會連帶影響 `form.setFields()`**：
+`Record<string, unknown>` 會讓 antd 推導出的 `FieldData['name']` 包含任意 `string`，
+換成具名 shape 之後就只剩具名 union，`mapProfitShopException` 回傳的字串欄位名會突然
+型別不符（Phase 16 實測 `npx tsc --noEmit` 因此多 2 個錯）。修法是
+`form.setFields(fields as Parameters<typeof form.setFields>[0])`——antd 執行期本來就吃字串路徑，
+這個 cast 只是把「後端字串 → 表單欄位路徑」講明白，不改變任何行為。
+
 ### SlugInput 即時驗證 Pattern
 
 `pages/admin/ProfitShop/components/SlugInput.tsx`：

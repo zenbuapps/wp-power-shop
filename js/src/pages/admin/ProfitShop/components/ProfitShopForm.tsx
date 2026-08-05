@@ -6,8 +6,10 @@ import {
 	BasicTab,
 	ItemsTab,
 	ProfitTab,
+	ScheduleTab,
 } from '@/pages/admin/ProfitShop/components/tabs'
 import {
+	PROFIT_SHOP_DEFAULT_DISPLAY_PARTS,
 	PROFIT_SHOP_MODE,
 	PROFIT_SHOP_STATUS,
 	type TProfitShop,
@@ -22,12 +24,19 @@ type TProfitShopFormProps = {
 	onTabChange?: (key: string) => void
 }
 
-/** Tab key ↔ 欄位對映的單一真相（Tabs 定義也在本檔，兩者必須同步） */
+/**
+ * Tab key ↔ 欄位對映的單一真相（Tabs 定義也在本檔，兩者必須同步）
+ *
+ * ⚠️ 鍵是欄位路徑的**第一段**（見 `resolveValidationFeedback` 的 `f.name?.[0]`）。
+ * 「開啟 / 關閉時間」的欄位是巢狀的 `['settings', 'endTime']`，第一段是 `settings`，
+ * 所以這裡登記的是 `settings` 而不是個別欄位名。
+ */
 const FIELD_TO_TAB: Record<string, string> = {
 	title: 'basic',
 	slug: 'basic',
 	mode: 'basic',
 	status: 'basic',
+	settings: 'schedule',
 	partner_term_id: 'profit',
 	rate: 'profit',
 	items: 'items',
@@ -98,6 +107,12 @@ const ProfitShopFormComponent = ({
 			children: <BasicTab currentSlug={record?.slug} />,
 		},
 		{
+			key: 'schedule',
+			label: '開啟 / 關閉時間',
+			forceRender: true,
+			children: <ScheduleTab />,
+		},
+		{
 			key: 'profit',
 			label: '分潤設定',
 			forceRender: true,
@@ -131,6 +146,21 @@ const ProfitShopFormComponent = ({
 				status: PROFIT_SHOP_STATUS.DRAFT,
 				mode: PROFIT_SHOP_MODE.PAGE,
 				rate: 10,
+
+				/*
+				 * 排程呈現預設只勾「正常顯示商品但不能購買」，與後端
+				 * `ProfitShopFrontData::DEFAULT_DISPLAY_PARTS` 一致 —— 兩邊都預設本功能
+				 * 上線前的既有行為，既有賣場的前台才會零變化。
+				 * Edit 頁的 `setFieldsValue({ settings })` 會覆蓋這組預設值。
+				 *
+				 * ⚠️ 每個 Form 各給一份新陣列（`[...]`），不要共用同一個常數參考 ——
+				 * antd 的 initialValues 是「一份會被 form store 持有的物件」，
+				 * 共用參考會讓兩個欄位在被就地修改時互相污染。
+				 */
+				settings: {
+					beforeDisplay: [...PROFIT_SHOP_DEFAULT_DISPLAY_PARTS],
+					afterDisplay: [...PROFIT_SHOP_DEFAULT_DISPLAY_PARTS],
+				},
 			}}
 		>
 			{/*
