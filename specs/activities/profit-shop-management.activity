@@ -1,0 +1,130 @@
+[ACTIVITY] 店舖管理者建立與維運分潤賣場
+
+[ACTOR] 店舖管理者: 具有 manage_woocommerce 能力的後台使用者
+[ACTOR] 站台管理員: 額外具有 manage_options 能力（夥伴與遷移操作需要）
+
+[CONTEXT] 後台單頁應用的分潤賣場相關頁面：
+#/profit-partner（分潤夥伴）、#/profit-shop（賣場）、#/profit-migration（舊版遷移）。
+三個資源的後端回應形狀與後台其他資源不同，因此不使用一般的表格與表單資料層。
+
+1. 站台管理員 建立分潤夥伴
+  -> features/profit-shop/manage-profit-partner.feature @command
+  1a. [NOTE] 賣場必須指定一位夥伴，所以夥伴要先存在。
+      夥伴的 slug 同時是公開報表網址的一段，且與賣場永久連結共用同一組衝突檢查
+  1a. [DECISION] 建立結果
+    1a-A. 成功:
+      2. 站台管理員 設定該夥伴的登入密碼並自行轉交
+        -> features/profit-shop/manage-partner-credentials.feature @command
+    1a-B. slug 格式不合法 或 已被其他夥伴佔用:
+      （回傳驗證錯誤或衝突，列出衝突來源）
+      -> 1
+  1a. [MERGE]
+
+3. 店舖管理者 建立分潤賣場
+  -> features/profit-shop/save-profit-shop.feature @command
+  3a. [DECISION] 賣場的來源
+    3a-A. 從零建立:
+      4. 店舖管理者 填寫名稱、永久連結、呈現模式、分潤夥伴與分潤比例
+        4a. 系統 在使用者輸入永久連結時即時檢查衝突
+          -> features/profit-shop/validate-shop-slug.feature @query
+          4a-1. [NOTE] 七類衝突來源；草稿賣場佔用的永久連結**算衝突**，
+                已刪除賣場的則釋放回池
+        4b. [DECISION] 呈現模式
+          4b-A. 獨立頁面模式:
+            （賣場有自己的公開網址）
+          4b-B. 短碼模式:
+            （站長把短碼貼進任意頁面；⚠ 公開網址**仍然開得起來**，
+              編輯頁的據實告知警語不可移除）
+        4b. [MERGE]
+    3a-B. 從舊版一頁商店匯入:
+      5. 站台管理員 選擇來源並指定一位分潤夥伴
+        -> features/profit-shop/import-legacy-shop.feature @command
+        5a. [NOTE] 不可逆操作，前端設有四道閘門且 Modal 強制走確認按鈕。
+            舊版沒有夥伴概念，因此夥伴為必填；匯入後為草稿，不直接上線；
+            舊版資料完全不動
+  3a. [MERGE]
+
+6. 店舖管理者 進入賣場編輯頁挑選商品
+  -> features/profit-shop/query-shop-detail.feature @query
+  6a. 系統 補齊賣場商品的顯示資訊
+    -> features/profit-shop/enrich-shop-item-display.feature @query
+    6a-1. [NOTE] 賣場只保存商品識別與覆寫設定，不保存名稱與 SKU——
+          那屬於商品的當下狀態，夾帶會產生 stale 顯示
+  6b. [DECISION] 管理者的操作意圖
+    6b-A. 加入商品:
+      7. 店舖管理者 開啟商品選擇 Modal 並跨頁勾選
+        -> features/profit-shop/select-shop-products.feature @command
+      -> 6
+    6b-B. 設定商品層的覆寫價與灌水購買人數:
+      8. 店舖管理者 在賣場商品表格直接編輯欄位
+        -> features/profit-shop/save-shop-item-overrides.feature @command
+        8a. [NOTE] 「留空」與「填 0」語意完全不同：
+            前者是沿用原價，後者是覆寫為 0 元
+      -> 6
+    6b-C. 設定可變商品的變體層覆寫:
+      9. 店舖管理者 展開該商品逐一設定每個變體
+        -> features/profit-shop/save-variation-overrides.feature @command
+        9a. [NOTE] 變體只要有任一覆寫價，就**整組**採用變體層，不與商品層逐欄混用；
+            而「只設了灌水購買人數的空條目」**不算**變體層覆寫價——
+            這個判準直接決定「站長從未定價的半成品變體會不會變成可下單的商品」
+      -> 6
+    6b-D. 調整商品顯示順序:
+      10. 店舖管理者 拖曳調整順序
+        10a. [NOTE] 陣列順序即前台顯示順序，是業務資料而非實作細節；
+             拖曳僅限同一頁內
+      -> 6
+    6b-E. 設定販售期間與期間外呈現:
+      11. 店舖管理者 在排程分頁設定起訖時間與三個獨立的呈現勾選框
+        -> features/profit-shop/schedule-shop-availability.feature @command
+      -> 6
+    6b-F. 完成編輯:
+      12. 店舖管理者 點擊「儲存」
+        12a. [DECISION] 驗證結果
+          12a-A. 通過:
+            （整體覆寫寫入，重新查詢可原樣讀回）
+          12a-B. 有欄位未填或不合法:
+            （畫面自動切換到出錯的分頁並提示；
+              ⚠ 非作用中的分頁是隱藏的，若只是靜默中止，
+                使用者會回報「按了沒反應」）
+            -> 6
+        12a. [MERGE]
+  6b. [MERGE]
+
+13. 店舖管理者 上架賣場
+  -> features/profit-shop/change-shop-status.feature @command
+  13a. [NOTE] 狀態不只是後台欄位——publish 才會讓公開網址對外開放，
+       也才會讓加購時的分潤歸屬成立。草稿賣場常被當作促銷預覽，
+       其覆寫價不得洩漏到顧客購物車
+
+14. 店舖管理者 在列表頁維運既有賣場
+  14a. [DECISION] 維運動作
+    14a-A. 開啟前台網址 / 複製短碼:
+      （依呈現模式呈現不同的主要動作；各動作的停用條件**刻意分開判斷**——
+        沒設永久連結時「開啟」停用但「複製」可用，
+        賣場已刪除時兩者皆停用但「查看報表」仍可用）
+      -> 14
+    14a-B. 下架:
+      （公開網址關閉、新的加購不再成立歸屬；
+        ⚠ 已在購物車且商品自身有價格的品項**不撤銷**，
+          只靠賣場覆寫價才有價格的品項**會撤銷**——差異點才是關鍵）
+      -> 14
+    14a-C. 複製:
+      （產生一份草稿副本，商品與順序完整帶過去，來源不受影響）
+      -> 14
+    14a-D. 刪除:
+      （移至垃圾桶，公開網址一律 404，該永久連結釋放回池）
+      -> 14
+    14a-E. 查看該賣場夥伴的分潤報表:
+      -> activities/partner-authentication.activity
+  14a. [MERGE]
+
+15. 站台管理員 刪除不再使用的分潤夥伴
+  -> features/profit-shop/manage-profit-partner.feature @command
+  15a. [DECISION] 該夥伴是否仍被賣場引用
+    15a-A. 沒有任何賣場引用:
+      （允許刪除）
+    15a-B. 仍掛在賣場上:
+      （拒絕刪除並回傳衝突；管理者需先改掛其他夥伴或刪除那些賣場）
+      -> 15
+  15a. [MERGE]
+</content>
