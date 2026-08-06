@@ -706,11 +706,19 @@ GET partner-reports/* (帶 X-Partner-Token / cookie)
 
 | 端點分類 | 認證方式 | Capability |
 |---------|---------|------------|
-| `profit-shops/*`、`profit-partners/*`、`profit-settlements/*` | nonce + Powerhouse | `manage_woocommerce` |
+| `profit-shops/*`、`profit-partners/*` | nonce + Powerhouse | `manage_woocommerce` |
+| `profit-settlements/*` | nonce + Powerhouse | `manage_options`（更嚴格；2026-08-06 修正，見下方說明） |
 | `profit-migration/*` | nonce + Powerhouse | `manage_options`（更嚴格） |
 | `partner-auth/login` | 公開 | rate-limit |
 | `partner-reports/*` | Cookie/Header `X-Partner-Token` | token → partner_id 範圍鎖死 |
 | `profit-shops/{id}/add-to-cart` | 公開 + nonce | rate-limit |
+
+> **2026-08-06 修正**：`profit-settlements/*`（Phase 17 實作的 7 個結算端點）原文記載
+> `manage_woocommerce`，與實際落地的 `manage_options` 不一致——已依照兩份可執行驗收條件
+> （`query-settlements.feature` / `export-settlements-csv.feature`）的明文斷言修正本表。
+> 理由：結算頁緊鄰「標記已撥款」這個不可逆的金流動作，讓 `shop_manager` 看得到金額卻
+> 按不了按鈕只會讓人繞路（截圖、口頭轉述），七個端點（含唯讀的列表 / 摘要）收在同一個
+> 邊界才一致。詳見 `.claude/rules/profit-shop.rule.md` §13.10、`specs/tech-debt.md` TD-78。
 
 ### 6.2 價格防竄改（最重要）
 

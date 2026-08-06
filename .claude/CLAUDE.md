@@ -70,7 +70,7 @@ pnpm release:major
 
 29. **Don't** 把 Tailwind 的 `text-*`（或任何會設 `line-height` 的 utility）掛在 daisyUI 元件本身，尤其是**行為依賴 `line-height` 精確等於 `1em`** 的元件（`pc-countdown` 是已知案例）。powerhouse 的 Tailwind 是 `important: '#tw'`，utility 的 specificity 是 **(1,1,0)**；而 daisyUI 有一批**根部錨定**的宣告（例如 `:root .pc-countdown{line-height:1em}`）因為 `scope-daisyui` 的 `ROOT_ANCHORED` 守門而**刻意不被 scope**，維持 **(0,2,0)**——ID 欄位勝出，**Tailwind utility 反過來蓋掉 daisyUI**。這與 Pitfall #26 是同一套機制的**反方向**：#26 講 scope 讓 daisyUI 贏過佈景主題，本條講 scope 讓 utility 贏過 daisyUI 自己的必要宣告。⚠️ **daisyUI 官方範例會誤導你**：官方站寫的是 `class="countdown font-mono text-5xl"`（字級與元件同一個元素），在那邊 `.text-5xl` 只有 (0,1,0)、輸給 `:root .countdown`，所以能動；照抄到本專案就壞。`pc-countdown` 的實際症狀是「上下兩個數字各露一半」的錯位（`::before` 以 `top: calc(var(--value) * -1em)` 捲動，每行高度卻是 line-height，兩者不等就每格累積偏移），**沒有任何錯誤訊息**。修法：把 `font-*` / `text-*` 移到**外層 wrapper**，讓 daisyUI 的規則直接命中元件本身——**直接命中的宣告永遠優先於繼承值**，與 specificity 或 CSS 順序無關，因此是決定性的修法（不要改用 `leading-none` 之類的 utility 對打，那是同分靠順序決勝、powerhouse 調整輸出順序就會再壞一次；何況 `leading-none` 在 `front.min.css` 根本沒產出）。實作與完整推導見 `ProfitShopFrontView::countdown_unit()` 的 docblock。
 
-30. **Don't** 用 `curl` 抓賣場前台頁面來驗證改動——站台裝了 **WP Rocket**，未登入的 GET 會拿到快取版本，實測抓到的是 Phase 14 之前的 inline style 版 HTML（TD-32）。要看真實渲染結果，網址加一個 cache-buster query（`?nocache=xxx`）即可，或直接用 `agent-browser` 以登入身分開啟。
+30. **Don't** 用 `curl` 抓賣場前台頁面來驗證改動——站台裝了 **WP Rocket**，未登入的 GET 會拿到快取版本，實測抓到的是 Phase 14 之前的 inline style 版 HTML（TD-32）。要看真實渲染結果，網址加一個 cache-buster query（`?nocache=xxx`）即可，或直接用 `agent-browser` 以登入身分開啟。⚠️ **站台網域現況**（2026-08-06 確認）：**前台網址是 `turbo.local`**（本機 hosts 內 `127.0.0.1 turbo.local`）；`local-turbo.powerhouse.tw` 是 WordPress 的 **siteurl**，只有 wp-admin 會重導過去，本機 hosts **沒有**這個網域的條目——直接對 `local-turbo.powerhouse.tw` 下 `curl` 會得到 HTTP 000，看起來像站台掛了，其實只是網域沒解析。CLAUDE.md 多處歷史驗證紀錄（Pitfall 本條、Phase 14/15/16 的驗證章節）仍記載舊網域 `local-turbo.powerhouse.tw` 當前台入口，那些是撰寫當下站台配置下的真實記錄、不是錯誤，但**現在**要對前台下指令一律用 `turbo.local`。
 
 31. **Don't** 動賣場前台的變體比對（`inc/assets/js/profit-shop-front.js` 的 `matchVariation()` / `findBestVariation()` / `isAllAttributesChosen()`）之前沒讀過 `profit-shop.rule.md` §12.8「變體比對」——這段決定「送哪一個 `variation_id` 進購物車」，而 **Phase 9 的變體層價格覆寫以 variation_id 為鍵**，挑錯變體不是顯示瑕疵，是**收錯錢**，而且**三道閘門沒有任何一道會發現拿錯變體**（`SingleProductPriceHook` / `CartPriceOverrideHook` 只會忠實按錯的那個變體算），全程零錯誤訊息。三條最容易被「順手簡化」掉的紀律：(1) **變體屬性值為空字串 = 「任意 (Any)」= wildcard**（`wc_get_product_variation_attributes()` 先把父商品全部變體屬性 seed 成 `''` 再覆蓋），當成「必須等於空字串」比對會讓該商品**沒有任何輸入組合能匹配**、按鈕永遠停用；(2) **「選滿」與「值比對」是兩件獨立的事**（對應官方 `add-to-cart-variation.js` 的 `chosenCount` 與 `isMatch()` 兩處），Any 屬性一樣要求使用者選出具體值，混寫成一個判斷式只是把 bug 從「按鈕永遠停用」換成「按了換頁還報錯」，且「選滿」刻意以 **DOM**（distinct `data-ps-attr-name`）為來源、**不可**改從變體 JSON 鍵集反推（兩道防線不能押在同一個假設上）；(3) 🔴 **挑選規則是「具體屬性數最多者勝」**（`findBestVariation()` 單趟掃完全部候選、取 score 最高者，score = `attributes` 中值非空字串的屬性個數），**不是**「第一個命中者勝」。**不要**為了「對齊官方 `.shift()`」「簡化程式碼」或「省一次掃描」改回命中即 `return`（不論單趟或分級多趟）——官方沒有分潤價格覆寫這一層，挑錯在官方只是顯示差異、在本專案等於**少收錢**；而全 Any 商品在任何寫法下表面上都會動，手測極易誤判「沒差」，真正壞掉的是「catch-all + 具體覆寫」這種 WooCommerce 最常見的 Any 用法，且只在特定陣列順序（`menu_order ASC, ID ASC`）下才壞。⚠️ **曾經的兩趟法（`findVariation(false) || findVariation(true)`）已作廢**：它只分「全具體」與「其餘」兩級，只要參與競爭的兩個變體**都不是全具體**就退回陣列順序決勝（**兩個屬性即可觸發**，不是舊文件寫的三個以上），實測 3 屬性隨機樣本 12.4% 挑到非最佳解，計分法為 0。**效能不是理由**——計分法不能提早 return，多數情境其實比兩趟法**慢**（真實規模差距 < 0.01 ms，最壞人造情境 2.1 ms，都遠低於一幀），選它的理由是正確率。平局（互不支配，如 `{red,''}` vs `{'',large}`）取陣列第一個，那是唯一沒有客觀正解的情況。另有兩條守門不可刪：`keys.length > 0` 是防 vacuous truth（`attributes` 為 `{}` 的空殼變體會以 score 0 混進候選），**不是**已選滿檢查；`picked === null` 是第二道 fail-closed。⚠️ 含 Any 屬性的商品加購**會換頁、沒有 toast**，那是 `hasAnyAttribute()` 的**正確**降級（`WC_AJAX::add_to_cart()` 全文不讀 `$_POST['attribute_*']`，一律自己用 `get_variation_attributes()` 反查，Any 屬性拿回空字串後被 WC 判為缺少必填屬性），不是回歸，不要把它拿掉。已知取捨與尚未修的缺口見 `specs/tech-debt.md` TD-49 / TD-50 / TD-51 / TD-53 / TD-54。
 
@@ -80,13 +80,19 @@ pnpm release:major
 
 34. **Don't** 在 `woocommerce_before_calculate_totals` 這類購物車 hook **內部**呼叫會改動購物車的 WooCommerce 方法（`remove_cart_item()` / `add_to_cart()` / `set_quantity()`）而不加 re-entrancy 守門——`WC_Cart::remove_cart_item()` 在 `class-wc-cart.php:1372` 觸發 `woocommerce_cart_item_removed`，而 `WC_Cart::__construct`（同檔 `:131`）把 `calculate_totals` 掛在該 action（prio 20），**會直接遞迴回你正在執行的那個 hook**。⚠️ 本檔曾經斷言「`remove_cart_item()` **不會**呼叫 `calculate_totals()`」，**與實際行為相反**，而且被下一輪當成「已驗證事實」沿用進設計——實測（探針夾 priority 998 / 1000 量測真實堆疊深度，WooCommerce 10.1.4）：N 個需要移除的品項 ⇒ 巢狀深度 **N**（N=2/6/12 → 2/6/12），**與 N 1:1 成長**，每一層都是完整的 `calculate_totals()`（正式環境含稅金 / 優惠券 / 運費），Xdebug 預設 256 frame 限制下大購物車會 fatal。**觸發不需要攻擊者**：輪替 `AUTH_SALT`（標準資安事件處置動作）會讓全站簽章一次失效 ⇒ 所有這類品項同時走進這條路。修法選 **re-entrancy 旗標**（`private bool $applying` + body 抽成獨立方法 + **`try/finally` 保證復位**）而非「收集 key、迴圈結束後再刪」：後者同樣能把深度壓到 2，但**沒有消滅重入**（重入時仍會對剩下每筆品項重新驗一次 HMAC，O(N×M)），且要多帶一份「待刪清單」狀態；`try/finally` 不可省略——旗標卡在 `true` 會讓本 request 後續完全跳過套價，**錯誤定價且無任何錯誤訊息**。修正後實測：`calculate_totals` 巢狀深度恆為 2（那一層是 WooCommerce 自己的行為，我方不改）、**hook body 深度恆為 1**、真實堆疊峰值恆為 28 frames（N=50 亦同）。⚠️ **量測方式本身也會騙人**：第一版回歸測試用 reflection 讀旗標判斷「body 有沒有跑」，把守門改成 `if ( false )` 之後旗標**仍會被設成 true**，測試回報「深度 1」**全綠 = 假綠燈**；改成夾 998 / 1000 量測**真實堆疊深度**才騙不過（紅燈實測 N=8 → 深度 8），且與實作解耦。🔴 **通則（本專案已為此吃虧三次）**：凡是寫進註解的**行為斷言或量化宣稱**都必須有**當次實測**支撐——TD-20（`<Alert>` 宣稱「單品頁仍顯示原價」，同一次改動已讓它顯示覆寫價）、TD-54（docblock 宣稱「更快」，實測慢 2.55×）、TD-67（本條）。這類缺陷 `phpcs` / PHPUnit / `tsc` **一個都攔不到**。連帶：**引用第三方原始碼行號必須寫出版本**——本專案站台是 WooCommerce **10.1.4**，而 wp-env 容器裝的是另一個版本（實測 11.0.0-rc.1，上面那兩行分別位移到 `:135` / `:1476`），行號對不上時先確認版本再懷疑註解。詳見 `profit-shop.rule.md` §12.8「`remove_cart_item()` **會**遞迴回本 hook」與 TD-67。
 
+35. **Don't** 把「純重構」的驗收標準訂成「另外對新類別寫直接單元測試」或「用中性化探針證明舊碼真的不再執行」——**正確標準是靜態 diff 確認呼叫端 body 已完全替換成委派呼叫 + 既有測試零修改全綠**。推導：「舊路徑還在跑」這件事成立的前提是舊程式碼還在原地；若 `git diff` 顯示呼叫端（例如 `verify_item()` / `verify_cart_item()`）的 body 已經被替換成單純呼叫新類別、舊邏輯已刪，新類別一旦沒被正確呼叫，功能會壞、既有測試必然轉紅——**在「舊碼確實已刪」這個前提下，既有測試維持全綠本身就是委派生效的直接證據**，不需要另外動任何執行中的程式碼去驗證。對新類別另外補一份直接單元測試沒有壞處、可以納入，但**單獨不足以充分證明委派**——那份新測試就算新類別完全沒被舊呼叫端引用也一樣會綠。中性化探針（讓某段邏輯暫時回傳固定值、觀察哪些測試轉紅）保留給非安全核心的除錯情境；本專案曾在消滅「孿生驗章」（分潤簽章驗證邏輯被複製成兩份，`CartPriceOverrideHook` 與結帳 hook 各自維護）這種安全核心的重構上用了中性化探針，雖然當場清除乾淨、也沒被目擊，但事後檢討認為承擔的風險與能拿到的額外訊號不成比例——**純重構的驗收標準本來就已經排除了「舊路徑還在跑」這個疑慮**，不需要用會在安全核心程式碼裡開啟窗口的手段去反覆確認同一件事。
+36. **Don't** 把 red-green 中性化探針（暫時拿掉某段守門條件、確認測試轉紅、再還原）當成只有自己在跑就沒有風險的動作——**多個 agent 或多個人平行對同一批檔案工作時，任何一方做逐站實證都會製造一段「守門暫時失效」的窗口，而在那個當下，其他人完全無法從程式碼本身分辨「這是誰的實證中途」還是「缺陷真的復發了」**。本專案實際發生過：同一個檔案內三處 `AND (... = %s OR 1=1)`（訂單型別過濾的中性化寫法）同時存在時，被另一位協作者誤判為「防護被拿掉了」而出手「修好」，而那其實是第一位協作者正在進行中、尚未還原的合法實證步驟——事後才釐清雙方各自的時間軸與意圖。**紀律**：(1) 同一個檔案在同一時間只能有一方做 red-green 實證；(2) 每一次實證的中性化與還原都要盡量縮短窗口（本專案的實測案例窗口約 2 分鐘：注入 → 跑測試 → 立即還原，中間不插入任何其他工作）；(3) 實證結束後**必須**跑一次探針殘留掃描並把「零命中」結果貼進交付紀錄，例如 `grep -rn "OR 1=1\|OR TRUE\|1 = 1\|if ( false )\|暫時版本" inc/`。⚠️ 探針若被遺留（不論是因為協作衝突、還是收工時漏了一步），後果**比原本的缺陷復發更難發現**——SQL 表面上仍有 `AND ... = %s`、docblock 仍寫著「已過濾」、`phpcs` 全綠，除了那一條專門測它的測試會抓到之外沒有任何徵兆。這是**流程風險，不是特定哪一方的疏失**——凡是採用 red-green 手法做實證的人都可能製造這種窗口，紀律必須對所有協作者一體適用。
+37. **Don't** 以為 PHPUnit 9 的方法級 `@group` 是疊加在類別級 `@group` 之上——**方法級 `@group` 會直接取代類別級**，用於篩選的實際依據只看方法自己的 docblock。`phpunit.xml.dist` 的 `<include>` 只收 `smoke` / `happy` / `error` / `edge` / `security` 五個 group（`wordpress.rule.md` §11.5），若某個 `test_*` 方法的 docblock 只標了不在這五個之內的 group（例如 `@group hpos_compatible`），即使**同一個檔案的類別 docblock 標了 `@group security`**，該方法一樣會被**靜默跳過**——不報錯、不顯示在 skipped 清單裡，唯一的線索是「`--testdox` 列出的執行筆數」比「檔案裡 `grep -c 'public function test_'` 的方法數」少。本專案的真實案例：`WpSettlementSummaryProviderRealAggregationTest` 有兩條驗證 HPOS（High-Performance Order Storage）相容分支的測試，只標了方法級 `@group hpos_compatible`，執行數因此從應有的 27 卡在 25——**HPOS 分支從未被自動化驗證過**，直到補上 `@group happy`（與其他測試共用的 include 白名單其一）才真正跑到 27。**規則**：每個 `test_*` 方法的 docblock 都要**各自**帶上五個 include group 之一，不能只在類別層級標一次就以為全部方法都會被收。
+38. **Don't** 用 CAS（Compare-And-Swap，條件式 `$wpdb->update()`）繞過 `wc_update_order_item_meta()` 之後，就以為只清一個快取群組就夠——**它其實同時繞過了兩個快取清除**，兩個都要手動補：(1) `wp_cache_delete( $order_item_id, 'order_item_meta' )`——⚠️ **快取群組名是 `order_item_meta`，不是資料表名 `order_itemmeta`**；容易混淆是因為 WordPress metadata API 用 `{$meta_type}_meta` 當群組名（`wp-includes/meta.php:145`），而 WooCommerce order item 的 `$meta_type` 是 `order_item`（`class-wc-order-item-data-store.php:93`），組出來剛好是 `order_item_meta`——寫成資料表後綴 `order_itemmeta` 會是**靜默的 no-op**（`wp_cache_delete()` 對不存在的群組不會回報任何錯誤），症狀是「CAS 寫入成功，但同一個 request 後續透過 WC 物件層（例如 `wc_get_order_item_meta()`）讀到的仍是舊值」。(2) `WC_Cache_Helper::invalidate_cache_group( 'object_' . $order_item_id )`（`wc-order-item-functions.php:107`）——這是 `wc_update_order_item_meta()` 自己內部也會清的第二個群組，繞過官方函式就等於連這個也要自己補回來。
+39. **Don't** 在交付文件或 docblock 裡直接沿用「專案文件記載的」測試方法數字，當成驗收依據——**文件數字會過時，且過時的方式不會有任何警告**。本專案的真實案例：CLAUDE.md 記載「Phase 13：`CartPriceOverrideHookTest` 14 → 27 method」，這份文件在後續多輪安全強化（TD-62 / TD-66 / TD-67 等）中一路被引用為「該測試檔目前有 27 個方法」，但實測 `grep -c "public function test_"` 當下已經是 **50**——文件記載的 27 是 Phase 13 完工當時的快照，往後每一輪新增測試都沒有回頭更新這句話。**規則**：任何要在文件、docblock 或交付紀錄裡引用「某測試檔有幾個方法」「baseline 是多少」這類數字時，一律用 `grep -c "public function test_"` 或實際重跑一次現查，不要直接抄文件上的數字；即使抄的來源就是 CLAUDE.md 本身也一樣。
+
 ## Profit Shop Domain（v1 開發中）
 
 > 全新「分潤賣場」系統，與舊版 legacy 一頁商店共存。
 > 設計文件：`specs/2026-05-06-profit-shop-design.md`
 > 架構與規範：`.claude/rules/profit-shop.rule.md`
 
-**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）+ 10（賣場前台 UI 照搬 legacy）+ 11（賣場前台購物車改自訂 REST）+ 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車）+ 13（購物車顯示賣場覆寫後的原價 / 特價）+ 14（賣場前台改 PHP + daisyUI + vanilla JS，移除 React / antd；CSS 統一交給 powerhouse 管理；獨立頁面與 shortcode 兩條路徑渲染統一 DOM）+ 14 補充（2026-08-04，daisyUI 樣式改由 powerhouse CSS 建置層系統性 scope 進 `#tw`，取代逐檔手動 Tailwind utility 繞過）+ 15（商品 Modal 改 AJAX 加購，走 WooCommerce 原生 `?wc-ajax=add_to_cart`，含 loading 與成功 toast；零新增 endpoint、分潤三閘門零修改）+ 16（賣場開啟 / 關閉時間 + 期間外呈現：三個互相獨立的勾選框「daisyUI 倒數計時 / 自訂文字 / 顯示商品但不可購買」，全部不勾＝什麼都不顯示；後端 Domain 與 Application 層零修改，TD-22 部分兌現）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台**純 PHP + daisyUI + vanilla JS** UI + Modal 加購端到端（WooCommerce 原生表單）+ Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式與獨立頁面渲染完全相同 DOM + 購物車劃線原價與單品頁 / 賣場卡片三處一致 + 樣式統一由 powerhouse 管理、本外掛已無任何自有 CSS）。Phase 7 / 8 / 9 已 commit（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）；Phase 10 / 11 由 `issue/L3` 分支的 `ff81dbb` 帶入，經本次 merge 併進 `refactor/one-page`。⚠️ Phase 9 與 Phase 10 / 11 是**兩條平行開發的分支**（各自從 Phase 8 之後接續編號、各自都叫 Phase 9），合併時以 `refactor/one-page` 保號、`issue/L3` 順延一位收斂；讀舊 commit message 時請注意 `ff81dbb` 內文的「Phase 9 / 10」即本文件的 Phase 10 / 11。已知問題與技術債見 `specs/tech-debt.md`。
+**目前狀態**：Phase 4-A + 4-B + 4-C + 5 + 6-A（含 6-A1 後端 + 6-A2 前端 UI）+ 7（賣場編輯頁商品選擇器重構）+ 8（Partner 夥伴圖片）+ 9（賣場商品變體層價格 / 灌水人數覆寫）+ 10（賣場前台 UI 照搬 legacy）+ 11（賣場前台購物車改自訂 REST）+ 12（賣場前台退回 WooCommerce 原生加購、移除自訂購物車）+ 13（購物車顯示賣場覆寫後的原價 / 特價）+ 14（賣場前台改 PHP + daisyUI + vanilla JS，移除 React / antd；CSS 統一交給 powerhouse 管理；獨立頁面與 shortcode 兩條路徑渲染統一 DOM）+ 14 補充（2026-08-04，daisyUI 樣式改由 powerhouse CSS 建置層系統性 scope 進 `#tw`，取代逐檔手動 Tailwind utility 繞過）+ 15（商品 Modal 改 AJAX 加購，走 WooCommerce 原生 `?wc-ajax=add_to_cart`，含 loading 與成功 toast；零新增 endpoint、分潤三閘門零修改）+ 16（賣場開啟 / 關閉時間 + 期間外呈現：三個互相獨立的勾選框「daisyUI 倒數計時 / 自訂文字 / 顯示商品但不可購買」，全部不勾＝什麼都不顯示；後端 Domain 與 Application 層零修改，TD-22 部分兌現）+ 17（分潤結算全鏈路：結帳寫入 11 筆 order itemmeta + 退款 / 取消回沖 + 訂閱續訂帶入 + 結算 Application 層與 7 個 REST endpoint + 結算頁 SPA `/profit-settlements` + 訂單頁分潤資訊面板；補三項既有地基缺陷 F-1（結帳當下 line item id 恆為 0）/ F-2（`RoundingStrategy` 全專案零實作）/ F-3（結算 SQL 未過濾訂單型別導致訂閱商品分潤 ×2）；消滅 cart hook 與結帳 hook 的孿生驗章邏輯，抽出 `CartProfitMetaVerifier` 共用；⚠️ 真實站台端到端動線（加購 → 結帳 → 訂單分潤紀錄 → 夥伴報表 → 撥款）尚未驗證，目前只過自動化閘門）完工 → Profit Shop 全套上線就緒（Domain / Application / Infrastructure / Admin SPA / Partner Portal / 賣場前台**純 PHP + daisyUI + vanilla JS** UI + Modal 加購端到端（WooCommerce 原生表單）+ Partner 自助修密碼端到端 + 商品選擇器 Modal 化 + Partner 夥伴圖片 + 變體層價格覆寫含單品頁一致性 + Shortcode 呈現模式與獨立頁面渲染完全相同 DOM + 購物車劃線原價與單品頁 / 賣場卡片三處一致 + 樣式統一由 powerhouse 管理、本外掛已無任何自有 CSS + **分潤結算全鏈路**：訂單分潤紀錄寫入 / 退款與取消回沖 / 訂閱續訂帶入 / 站長端結算撥款 UI / 訂單頁分潤面板）。Phase 7 / 8 / 9 已 commit（7 → `52d7aa8`…`6c96679` 一系列、8 → `52d7aa8`、9 → `ab6d0e3` + `381d8b2`）；Phase 10 / 11 由 `issue/L3` 分支的 `ff81dbb` 帶入，經本次 merge 併進 `refactor/one-page`。⚠️ Phase 9 與 Phase 10 / 11 是**兩條平行開發的分支**（各自從 Phase 8 之後接續編號、各自都叫 Phase 9），合併時以 `refactor/one-page` 保號、`issue/L3` 順延一位收斂；讀舊 commit message 時請注意 `ff81dbb` 內文的「Phase 9 / 10」即本文件的 Phase 10 / 11。已知問題與技術債見 `specs/tech-debt.md`。
 
 ### Phase 1（Domain 層）已完工（commits `cbd0522` / `8359918` / `9ecdb77`）
 
@@ -524,7 +530,11 @@ Phase 10 的前台購物車是「寫入走 admin-ajax（`FrontAjax`）、讀取�
 
 A/B/C 三組對照同時證明：`$_POST['profit_shop_id']` 確實被 `AddToCartHook`（priority 5）讀到、三道閘門對偽造 shop_id 有效、`CartPriceOverrideHook`（priority 999）驗章後 `set_price` 正確、`CartItemMetaDisplay` 分潤標記正常。**退回原生表單後不需要任何 `$_POST` 橋接**這個推論在真實環境成立。
 
-⚠ 驗證過程踩到兩個**與本次改動無關**的環境陷阱，記錄下來避免重踩：(1) 站台裝了 **WP Rocket**，`/cart/` 頁與賣場頁的 GET 都會拿到快取版本，直接用 HTTP client 讀 `/cart/` 會看到「購物車是空的」的假象——要查真實購物車狀態必須走 `POST /?wc-ajax=get_refreshed_fragments`（見 TD-32）；(2) 系統 PATH 上的 `php` 不是 Local by Flywheel 的 PHP，`require wp-load.php` 會 Database Error，CLI 診斷腳本必須用 Local 自己的 PHP。
+⚠ 驗證過程踩到兩個**與本次改動無關**的環境陷阱，記錄下來避免重踩：(1) 站台裝了 **WP Rocket**，`/cart/` 頁與賣場頁的 GET 都會拿到快取版本，直接用 HTTP client 讀 `/cart/` 會看到「購物車是空的」的假象——要查真實購物車狀態必須走 `POST /?wc-ajax=get_refreshed_fragments`（見 TD-32）；(2) 系統 PATH 上的 `php` 不是 Local by Flywheel 的 PHP，`require wp-load.php` 會 Database Error，CLI 診斷腳本必須用 Local 自己的 PHP。⚠️ **2026-08-06 補充（Phase 17 驗證時再次踩到）：換對 PHP 仍不夠**——即使改用 Local 自己的 PHP 執行，`require wp-load.php` **仍會** `Error establishing a database connection`，因為 Local 的 MySQL 走非標準 port，一般 CLI 環境變數取不到那個環境。要直接對 DB 做診斷，改用 Local 內建的 mysql client 直連（範例路徑，實測可用；port 需用 `Get-NetTCPConnection` 查當下 `mysqld` 進程取得，非固定值）：
+    ```
+    C:\Users\User\AppData\Roaming\Local\lightning-services\mysql-8.4.0\bin\win64\bin\mysql.exe -h 127.0.0.1 -P 10085 -u root -proot local
+    ```
+    另有一個連帶陷阱：若堅持用 PHP CLI 走 `wp-load.php`，PHP 版本必須與站台 `php.ini` 完全相符（實測用 8.2.29 對一個 `php.ini` 是 8.3.23 的站台，模組 API 不匹配、擴充整批載入失敗）——「Local 自己的 PHP」不是指任何一個 Local 安裝的 PHP，是指**該站台當下綁定的那一個版本**。
 
 ### Phase 13（購物車顯示賣場覆寫後的原價 / 特價）已完工
 
@@ -811,6 +821,85 @@ Phase 14 剛完工時，賣場前台的 daisyUI class（`pc-btn-sm` 之類）會
 ⚠ **仍未驗證**：「倒數歸零後自動重新載入」這條時間相關行為（要等實際倒數到 0，或另外造一個數秒後開賣的賣場）。
 
 ⚠ 驗證過程踩到 TD-32：`curl` 抓賣場頁拿到的是 **WP Rocket 的舊快取**（內容還是 Phase 14 之前的 inline style 版），一度誤判「倒數區塊沒印出來」。網址加 `?nocache=xxx` 才看得到真實渲染結果，已寫進 Common Pitfall #30。
+
+### Phase 17（分潤結算全鏈路）已完工（commits `589d967` / `70a704f` / `866fbbd` / `6789585` / `621f40b`，2026-08-06）
+
+**在此之前的狀態**：`OrderItemSettlementRepository` 與 `SettlementRecord` 從 Phase 2 起就存在、且有完整的 Integration 測試（真實 SQL 聚合，`WpSettlementSummaryProviderRealAggregationTest` 21 method），但**從未被任何 hook 註冊或呼叫**——顧客從賣場加購時，`CartPriceOverrideHook` 確實會在 cart item 上寫入 6 筆 `_profit_*` meta 並用 HMAC 簽章保護，可是結帳成立訂單的那一刻，**沒有任何程式碼把這些 meta 複製進 `wc_order_itemmeta`**。結果是：訂單零分潤紀錄、`GET /partner-reports/*` 永遠回傳空資料、站長完全無法對夥伴撥款——而且**全程沒有任何錯誤訊息**，購物車顯示正確的覆寫價、結帳流程順暢完成，只有訂單資料庫裡查不到任何 `_profit_*` 開頭的 order item meta。這是「Domain / Infrastructure 都寫好了，但沒人接線」的典型反模式，與 `default_rate` / `page_template`（已刪除的全域設定頁欄位）同一種「存得進去、讀得出來、沒人用」失效，差別只在於這次連「存得進去」都不成立。
+
+**新增元件**：
+
+| 層 | 內容 | 路徑 |
+|---|---|---|
+| Infrastructure（結帳寫入） | `OrderLineItemSettlementHook`：掛 `woocommerce_checkout_create_order_line_item`，**priority 20**——classic 結帳與 Store API / Block 結帳共用同一個 WooCommerce action（`WC_Checkout::create_order_line_items()` 是唯一實作），因此一個 hook 涵蓋兩條結帳路徑。獨立重新驗一次 HMAC 簽章（不假設 `CartPriceOverrideHook`(999) 已經驗過），驗章通過才寫入 11 筆結算 meta；驗章失敗、缺簽章、竄改一律靜默不寫，不阻斷顧客結帳 | `Infrastructure/WooCommerce/OrderLineItemSettlementHook.php` |
+| Infrastructure（消滅孿生驗章） | `CartProfitMetaVerifier` + `VerifiedCartProfitMeta`：把版本分派（v1/v2/v3）+ 必備 meta 清單 + 價格 normalize 收斂成單一實作，`CartPriceOverrideHook` 與 `OrderLineItemSettlementHook` 都委派它；身分比對（拿什麼跟什麼比對）留在各自呼叫端、以 `Closure` 注入，只有「政策」（哪些版本要比對、缺身分 fail-closed）收斂 | `Infrastructure/WooCommerce/CartProfitMetaVerifier.php` + `VerifiedCartProfitMeta.php` |
+| Infrastructure（金額計算，F-2 補洞） | `WcDecimalRounding`（`RoundingStrategy` 的第一個 production 實作，純 bcmath half-up）+ `MoneyFormatter::to_store()`（寫入前再收斂到 `wc_get_price_decimals()`，避免加總時被 `bcadd($v,'0',2)` 靜默截斷） | `Infrastructure/WooCommerce/WcDecimalRounding.php` + `MoneyFormatter.php` |
+| Infrastructure（退款 / 取消回沖） | `SettlementReversalHook`：掛 `woocommerce_order_refunded`（10, 2）+ `woocommerce_order_status_cancelled`（10, 2）。全額退款 → `refunded`；部分退款 → 重算 `_profit_amount` 並維持 `pending`；`paid` 狀態一律不自動改，改記 `_profit_refund_after_paid` 旗標 + 稽核紀錄 + 後台待辦通知 | `Infrastructure/WooCommerce/SettlementReversalHook.php` + `RefundAfterPaidNotice.php` |
+| Infrastructure（訂閱續訂帶入） | `RenewalProfitHook`：掛 `wcs_renewal_order_created`（**filter**，priority 20）。凍結 `shop_id` / `partner_term_id`，重讀賣場當下 `rate`，依續訂價重算 `_actual_price` / `_profit_amount`，**強制**把 `_settlement_status` 重置為 `pending`、刪除 `_settled_at` / `_settled_by`（WooCommerce Subscriptions 建續訂單時會**無條件複製**母訂單的全部 order item meta，含 `_settlement_status='paid'` 這種髒值）。WooCommerce Subscriptions 未安裝時整段不註冊 | `Infrastructure/WooCommerce/RenewalProfitHook.php` |
+| Application（結算層） | `Application/UseCase/Settlement/`：`ListSettlementsUseCase` / `GetSettlementSummaryUseCase` / `MarkSettlementsPaidUseCase` / `MarkSettlementsCancelledUseCase` / `ReversePaidSettlementsUseCase` / `ExportSettlementsUseCase` / `ListSettlementOrderIdsUseCase`（D-6，供訂單列表依賣場過濾）+ `Support/SettlementBatchGuard` | `Application/UseCase/Settlement/` |
+| Application（Port + Service） | `SettlementQueryProviderInterface` / `SettlementAuditLogInterface` / `SettlementStatusMutatorInterface`（DIP：CAS 併發防護走 interface 注入，不是在 Repository 加方法）+ `SettlementAuditRecorder` / `CsvExporter` | `Application/Service/` |
+| Infrastructure（查詢 / 併發 / 稽核） | `WpAdminSettlementQuery`（後台列表 / 摘要 / 匯出 / order-ids，**獨立於** `WpSettlementSummaryProvider`——後者對 partner 範圍鎖死是類別級不變量，admin 查詢不可共用同一個類別）+ `WpSettlementStatusMutator`（CAS：條件式 `$wpdb->update()` 判 affected rows）+ `PartnerSettledLogRepository`（稽核事件持久化） | `Infrastructure/Persistence/` |
+| Presentation | `V2Api` 新增 **7 個 endpoint**（`GET profit-settlements` / `GET .../summary` / `GET .../order-ids` / `POST .../export` / `POST .../mark-paid` / `POST .../mark-cancelled` / `POST .../reverse-paid`），**七個全部 `manage_options`**（比設計文件 §6.1 的 `manage_woocommerce` 更嚴，理由見下方「決策」） | `Infrastructure/Rest/V2Api.php` |
+| 前端（站長端結算頁） | `#/profit-settlements`：兩張 `antd-toolkit` Card（篩選 + 列表，遵循 `admin-list-ui.rule.md`）+ 4 張摘要卡（待撥款 / 已撥款 / 已退款 / 已取消）+ 批次操作（標記已撥款 / 標記取消 / 人工沖回，三個都是 §12.4 的二次確認 Modal）+ CSV 匯出 | `js/src/pages/admin/ProfitSettlement/` |
+| 前端（訂單頁分潤面板） | `/orders/edit/:id` 新增面板：逐 line item 列出賣場 / 夥伴 / 比例 / 應分潤 / 狀態；訂單列表新增「分潤賣場」篩選（透過 `order-ids` 端點轉成 `wc-rest` 的 `include` filter） | `js/src/pages/admin/Orders/Edit/ProfitPanel/` + `Orders/List/Filter.tsx` |
+
+**三個既有地基缺陷（不是新功能，是動工前就存在、只是從未發作的隱患）**：
+
+- **F-1　結帳 hook 觸發時 line item id 恆為 0**：`class-wc-checkout.php:571` 的 `do_action('woocommerce_checkout_create_order_line_item')` 早於 `:573` 的 `$order->add_item($item)`（WooCommerce 10.1.4；wp-env 容器版本行號會位移）。既有的 `save()` 走 `wc_update_order_item_meta($order_item_id, ...)`，若在此時呼叫會把全部 meta 寫到 `order_item_id=0`，永遠讀不回且不拋錯。修法是新增 `save_to_item()`，改用 `WC_Order_Item::add_meta_data($key, $value, true)`（`$unique=true` 不可省——Store API 的 `update_line_items_from_cart()` 在 cart hash 變動時會 `remove_order_items('line_item')` 後重建，同一張草稿單可能觸發多次結帳 hook，沒有 unique 會累積重複 meta，讓結算 SQL 假設的 1:1 `INNER JOIN` 變成 1:N，金額直接翻倍）。
+- **F-2　`RoundingStrategy` 全專案零實作**：`ProfitCalculator` 建構子必填一個實作，在此之前**任何人都無法實例化它**。補上 `WcDecimalRounding`（純 bcmath half-up）。
+- **F-3　結算 SQL 五處完全沒有過濾訂單型別**：`OrderItemSettlementRepository::query_order_item_ids()`（HPOS / legacy 各一）+ `WpSettlementSummaryProvider` 的 KPI / trend / settlements 三處，全部只 `INNER JOIN wc_orders`，沒有限定 `type='shop_order'`。WooCommerce Subscriptions 建續訂單時會把母訂單的 order item meta **完整複製**到 `shop_subscription` 這個物件上（`_profit_*` 因此同時存在於 parent order 與 shop_subscription 兩處），而 `shop_subscription` 的狀態（`wc-active` / `wc-on-hold`）不在 `EXCLUDED_ORDER_STATUSES` 內 ⇒ 兩筆都被撈進來 ⇒ **訂閱商品的分潤金額在夥伴報表與結算列表上恰好 ×2**。五處統一引用 `OrderItemSettlementRepository::ORDER_POST_TYPE`（`public` 常數）作為單一真相來源。這個缺陷在動工前完全不會發作——因為根本沒有任何資料寫入；一旦 Stage 1（結帳寫入）上線，就會立刻引爆。
+
+三個地基缺陷連同「消滅孿生驗章」的完整技術細節（meta 命名對映表、CAS 實作、D-1～D-4 決策、`wcs_renewal_order_created` 的 filter/action 陷阱）見 `profit-shop.rule.md` 新增的「分潤結算全鏈路」章節。
+
+**驗收數字**（Unit / Integration 為團隊最後一次完整重跑的實測值；`phpcs` / `tsc` 已由本次文件同步作業重新現查一次，見 Common Pitfall #39）：
+
+| 項目 | 結果 |
+|---|---|
+| `vendor/bin/phpcs inc/` | **167 / 167 全綠**（現查，非沿用團隊先前記載的 164——中間又新增了 3 個檔案） |
+| Unit testsuite | **503 tests / 1160 assertions / 1 failure**（failure 為 pre-existing `LoginRateLimiterIpDimensionTest`，見 TD-2） |
+| Integration testsuite | **399 tests / 1904 assertions / 15 failures / 4 skipped**——15 條全部 pre-existing（partner auth / `CptRegistrarTest` / `RewriteRulesTest` / 中文 round-trip），逐條核對過名稱，無一在本次改動的檔案內；skipped 含 `test_real_wcs_renewal_order_resets_paid_status`（wp-env 未裝 WooCommerce Subscriptions，只在真實站台驗過續訂路徑） |
+| `npx tsc --noEmit` | **127 → 118**（現查；減少的 9 條全是 `Orders/List/Table/index.tsx` 那塊被註解掉多年的死篩選器連帶的未使用 import，本次補上真正的篩選卡片後死碼一併移除，不是新增改動製造的假降低） |
+| `pnpm build` | **✓ 35.43s** |
+| `npx eslint` | 無法執行（`unrs-resolver` native binding 載入失敗，TD-31，pre-existing 環境問題，本次新增檔案未經過 lint） |
+
+Baseline 對照（動工前實測）：Unit 413 tests、Integration 286 tests；本次 Unit **+90**、Integration **+113**。
+
+**真實站台端到端驗證（2026-08-06，team lead 執行，站台 `turbo.local`）**——✅ **已通過**：
+
+動線：賣場前台 → 加購 → 購物車 → 結帳（貨到付款）→ 訂單成立 → **直接查 MySQL**（非經 UI，繞開任何顯示層可能的假象）。
+
+訂單 **#2241** / line item **#428** 的分潤 meta 對照表：
+
+| meta_key | 值 | 意義 / 對應 cart meta |
+|---|---|---|
+| `_profit_shop_id` | 1932 | 賣場歸屬 |
+| `_profit_partner_term_id` | 34 | 夥伴（凍結） |
+| `_profit_rate` | **10**（即 10%） | 從賣場 #1932 的 CPT 當下值讀取（cart meta 完全沒有這個欄位） |
+| `_actual_price` | 600 | ← cart 的 `_profit_price_override` |
+| `_override_regular_price` | 800 | ← cart 的 `_profit_regular_price_override` |
+| `_override_sale_price` | 600 | ← cart 的 `_profit_sale_price_override` |
+| `_profit_amount` | **60** | `600 × 1 × 10% = 60`（`ProfitCalculator` 算出） |
+| `_settlement_status` | pending | 初始狀態 |
+
+購物車階段另實測 `NT$800 → NT$600`（劃線原價與實收價皆正確，Phase 13 的 regular/sale 套用鏈路在此路徑上與分潤結算並存不衝突）。
+
+這次驗證同時證明：(1) F-1 的「結帳 hook 觸發時 line item id 恆為 0」問題在真實環境確實已解決（meta 有落地）；(2) **三組改名 meta 命名對映全部正確**（`_profit_price_override`→`_actual_price` 等，§13.2 的映射表在真實環境成立）；(3) `_profit_rate` 從賣場 CPT 即時讀取成功；(4) `_profit_amount` 的 bcmath 計算正確（`600×1×10%=60`，無浮點誤差）；(5) HMAC 簽章驗證通過（驗不過就不會寫入任何 meta，這代表結帳 hook 的獨立驗章邏輯在真實環境確實執行了）；(6) 🔴 **`$unique = true` 確實生效**——逐一 `COUNT(*)` 全部 8 個 meta_key，每個都恰好 1 筆、無重複累積（F-1 的核心風險：若重複，結算 SQL 的 `INNER JOIN` 會由 1:1 變 1:N ⇒ 金額翻倍，未在真實環境重現）；(7) `_settlement_status` 正確初始化為 `pending`。
+
+**結算查詢鏈路最後一環也已驗證**：以 SQL 模擬 `WpSettlementSummaryProvider` / `WpAdminSettlementQuery` 的查詢（含 F-3 的 `shop_order` 型別過濾與 `EXCLUDED_ORDER_STATUSES`），該筆確實被撈到：
+
+```
+item  shop_id  partner  rate  actual  amount  status    post_status
+428   1932     34       10    600     60      pending   wc-processing
+```
+
+⇒ 完整鏈路端到端全通：賣場前台 → 加購 → 購物車覆寫價（800→600）→ 結帳 → 訂單 #2241 → line item 分潤 meta 完整寫入 → 結算查詢撈得到。
+
+🔴 **但這次驗證只涵蓋 legacy posts 路徑，HPOS 路徑在真實環境仍是零驗證**：實測站台 `woocommerce_custom_orders_table_enabled = no`（未啟用 HPOS），訂單 2241 只存在於 `wp_posts`（`post_type = shop_order`），`wp_wc_orders` 內沒有這筆。這與 `settlement-hook-notes.md` 記載的「HPOS 分支只有程式碼審查、缺自動化測試覆蓋」是**同一個缺口的另一半**——自動化測試沒跑 HPOS、真實站台也不是 HPOS ⇒ **HPOS 那一半的雙路徑邏輯，目前完全沒有任何形式的驗證**（見 `specs/tech-debt.md` TD-88）。⚠️ 連帶的診斷提醒：在這個站台上做 SQL 診斷必須用 legacy 路徑（`wp_posts` + `post_type` / `post_status`），**不是** HPOS 路徑（`wp_wc_orders` + `type` / `status`）——team lead 第一次寫模擬查詢誤 JOIN `wp_wc_orders` 得到零筆，一度誤判結算查詢壞掉，改用 `wp_posts` 才撈到。
+
+**仍未驗證的部分**（誠實標註，不要含糊）：wp-admin 的 UI（結算頁 `/profit-settlements` 與訂單頁分潤面板）需要登入 wp-admin，登入憑證屬使用者獨有資訊，尚未驗證——前端目前只過了 `tsc`（127→118）與 `pnpm build` 兩道靜態閘門；夥伴報表前台（`/profit-report/{slug}/`）需夥伴密碼，同樣尚未驗證；`test_real_wcs_renewal_order_resets_paid_status` 在 wp-env 恆 skip（未裝 WooCommerce Subscriptions），續訂路徑的 hook 接線與 WCS 本身的複製行為只在單元/整合層級用手工建構的 fixture 驗證過，沒有真的呼叫過 `wcs_create_renewal_order()`；只退金額、不退數量的退款（`qty=0` 但 `total>0`）不會觸發回沖——刻意接受的既有邊界，非缺陷；現有測試無法區分「正確的 CAS」與「偽裝成 CAS 的 read-check-write」——白盒斷言待補，見 `specs/tech-debt.md` TD-72。
+
+**測試資料**：訂單 **#2241** 已**刻意保留**（未刪除）——它是目前站台上唯一一筆帶完整分潤紀錄的訂單，可用於日後驗證結算頁與夥伴報表兩塊尚未驗證的 UI。**不要**誤判為測試殘留的髒資料而刪除。
+
+完整的技術細節、決策理由（D-1～D-6）、meta 命名對映表、CAS 實作、`wcs_renewal_order_created` 陷阱，一律見 `profit-shop.rule.md` 新增章節，本節不重複。
 
 ### Phase 5+ 預告（reviewer 順手清單彙整 + 產品決策層）
 

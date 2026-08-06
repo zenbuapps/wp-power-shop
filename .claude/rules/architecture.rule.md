@@ -196,8 +196,22 @@ applyTo: "**/*.{php,ts,tsx}"
 │  │   └──────────────────────────────────────────────────┘ │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │                           │                                   │
+│      顧客按下結帳（classic 或 Store API / Block 皆同一路徑）    │
+│                           │                                   │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │ ⑤ OrderLineItemSettlementHook（Phase 17，priority 20）   │ │
+│  │     woocommerce_checkout_create_order_line_item          │ │
+│  │   - 獨立重新驗章（委派 CartProfitMetaVerifier，不假設    │ │
+│  │     ④ 已經驗過——請求流程順序不是隔離邊界）              │ │
+│  │   - 驗章通過 → 讀賣場當下 rate → 算 _profit_amount →     │ │
+│  │     OrderItemSettlementRepository::save_to_item()        │ │
+│  │     （item id 此刻恆為 0，用 add_meta_data($unique=true)）│ │
+│  │   - 寫入 11 筆 order itemmeta，_settlement_status=pending │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                           │                                   │
 │            訂單成立 → OrderItemSettlementRepository           │
 │                  寫 partner 分潤紀錄                          │
+│      （完整資料流、meta 命名對映見 profit-shop.rule.md §13）  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -291,17 +305,29 @@ inc/classes/Domains/ProfitShop/
 │   │                                #     4-interface DI + hash_hmac + password_changed_at 撤銷）/
 │   │                                #     LoginRateLimiter（Phase 3-D 升級：per-slug + per-IP 雙維度，IP hash_hmac）/
 │   │                                #     CartPriceSignatureService（Phase 3-D 新增：HMAC-SHA256 cart 簽章）
-│   └── UseCase/                     # 24 個 UseCase
+│   └── UseCase/                     # 24 個 UseCase + Settlement/ 7 個（Phase 17）
 │       ├── Shop/                    #   9 個（CRUD + publish/unpublish/duplicate + ValidateSlugUseCase[Phase 3-E]）
 │       ├── Partner/                 #   5 admin CRUD + 5 Auth（含 ChangePasswordUseCase[Phase 6-A1]）+ 3 Report
-│       └── Migration/               #   2 個（list legacy / import）
+│       ├── Migration/               #   2 個（list legacy / import）
+│       └── Settlement/              #   （Phase 17）ListSettlementsUseCase / GetSettlementSummaryUseCase /
+│                                    #   MarkSettlementsPaidUseCase / MarkSettlementsCancelledUseCase /
+│                                    #   ReversePaidSettlementsUseCase / ExportSettlementsUseCase /
+│                                    #   ListSettlementOrderIdsUseCase（D-6）+ Support/SettlementBatchGuard
 │                                    #   （Settings/ 3 個已整組移除，見 profit-shop.rule.md §7）
 │
 ├── Infrastructure/                  # 唯一可呼叫 WP / WC API 的層
 │   ├── Persistence/                 # CptProfitShopRepository / PartnerTermRepository（Phase 3-D：+get_password_changed_at）/
-│   │                                #   OrderItemSettlementRepository / LegacyOnePageShopRepository /
+│   │                                #   OrderItemSettlementRepository（Phase 17：+save_to_item/compare_and_set
+│   │                                #     系呼叫下放給 WpSettlementStatusMutator/update_profit_amount/
+│   │                                #     flag_refund_after_paid，ORDER_POST_TYPE public 常數）/
+│   │                                #   LegacyOnePageShopRepository /
 │   │                                #   WpSettlementSummaryProvider（Phase 3-D：placeholder → 545 行真實 SQL，
-│   │                                #     含 HPOS 雙路徑 / bcadd 精度 / IDOR partner_term_id 鎖死）
+│   │                                #     含 HPOS 雙路徑 / bcadd 精度 / IDOR partner_term_id 鎖死；
+│   │                                #     Phase 17：三段 SQL 補訂單型別過濾，見 profit-shop.rule.md §13.3 F-3）/
+│   │                                #   WpAdminSettlementQuery（Phase 17，後台結算列表 / 摘要 / 匯出 / order-ids，
+│   │                                #     刻意獨立於 WpSettlementSummaryProvider，見 §13.3）/
+│   │                                #   WpSettlementStatusMutator（Phase 17，CAS 條件式狀態更新）/
+│   │                                #   PartnerSettledLogRepository（Phase 17，撥款 / 沖回 / 退款稽核事件）
 │   ├── WordPress/                   # CptRegistrar / TaxonomyRegistrar / RewriteRules（含 REWRITE_VERSION
 │   │                                #     版本比對式 flush，掛 init 自動觸發）/
 │   │                                #   WpProductLookup / WpSlugConflictLookup /
@@ -317,10 +343,23 @@ inc/classes/Domains/ProfitShop/
 │   │                                #   before_calculate_totals priority 999 + draft shop fallback）/
 │   │                                #   （CartItemMetaDisplay 已於 Phase 15 刪檔——前台不顯示分潤標記）/
 │   │                                #   （Phase 9，WC 單品頁套用賣場覆寫價含變體，template_redirect
-│   │                                #   priority 20，改寫 variation prices hash 隔離跨賣場快取污染）
+│   │                                #   priority 20，改寫 variation prices hash 隔離跨賣場快取污染）/
+│   │                                #   CartProfitMetaVerifier + VerifiedCartProfitMeta（Phase 17，
+│   │                                #   消滅孿生驗章，cart hook 與結帳 hook 共用同一份簽章驗證）/
+│   │                                #   WcDecimalRounding + MoneyFormatter（Phase 17，F-2 補洞：
+│   │                                #   RoundingStrategy 第一個 production 實作）/
+│   │                                #   OrderLineItemSettlementHook（Phase 17，priority 20，
+│   │                                #   woocommerce_checkout_create_order_line_item，結帳寫入 11 筆
+│   │                                #   order itemmeta）/ SettlementReversalHook（Phase 17，退款 /
+│   │                                #   取消回沖）/ RefundAfterPaidNotice（Phase 17，已撥款後退款的
+│   │                                #   後台待辦佇列）/ RenewalProfitHook（Phase 17，priority 20，
+│   │                                #   wcs_renewal_order_created **filter**，訂閱續訂帶入，
+│   │                                #   WooCommerce Subscriptions 未安裝時整段不註冊）
 │   └── Rest/                        # ExceptionMapper（Domain Exception → HTTP，Phase 3-E：+filter test seam；
 │   │                                #   Phase 6-A1：+WeakPassword → 422 weak_password + data.reasons[]）+
-│   │                                #   V2Api（27 endpoint：Phase 3-E +validate-slug、Phase 6-A1 +partner-auth/change-password）
+│   │                                #   V2Api（34 endpoint：Phase 3-E +validate-slug、Phase 6-A1
+│   │                                #   +partner-auth/change-password、Phase 17 +profit-settlements
+│   │                                #   系 7 個 endpoint，見 wordpress.rule.md）
 │
 └── Loader.php                       # ProfitShop sub-loader，由 Domains\Loader 註冊
 ```
@@ -348,11 +387,16 @@ plugin.php
                       ├→ Infrastructure/WordPress/PartnerPortalRenderer::instance(...) # Phase 4-B，partner portal mount 點；Phase 5-A.1 起注入 rate-limit + ip provider
                       ├→ Infrastructure/WordPress/ProfitShopRenderer::instance(...) # Phase 4-C1，賣場前台 PHP renderer，DI ProfitShopRepositoryInterface；Phase 5-A.1 起注入 rate-limit + ip provider
                       ├→ Infrastructure/WordPress/ProfitShopShortcode::instance(...) # TD-13（前半），[power_shop_profit_shop id="..."]，與 ProfitShopRenderer 共用同一份 template（Phase 14 起兩條路徑渲染逐字相同的 DOM，外層一律 <div>、不注入 SEO meta）
-                      ├→ Infrastructure/Rest/V2Api::instance() # 27+ 個 endpoint（Phase 6-A1 +partner-auth/change-password）
+                      ├→ Infrastructure/Rest/V2Api::instance() # 34 個 endpoint（Phase 6-A1 +partner-auth/change-password、Phase 17 +profit-settlements 系 7 個）
                       │  （Phase 11 的 FrontCartApi 已於 Phase 12 刪檔——前台改走 WooCommerce 原生表單加購，不再有自訂購物車 REST）
                       ├→ Infrastructure/WooCommerce/AddToCartHook::instance(...)   # Phase 4-C2，priority 5（早於 CartPriceOverrideHook 的 10），DI ProfitShopRepositoryInterface
+                      ├→ new OverridePriceResolver() / new CartPriceSignatureService(...)         # Phase 13，cart hook 與結帳 hook 共用實例
                       ├→ Infrastructure/WooCommerce/CartPriceOverrideHook::instance() # Phase 3-D，priority 10 / 999，admin context guard
-                      └→ Infrastructure/WooCommerce/SingleProductPriceHook::instance(...) # Phase 9，template_redirect priority 20，WC 單品頁套用賣場覆寫價（含變體），DI ProfitShopRepositoryInterface
+                      ├→ Infrastructure/WooCommerce/SingleProductPriceHook::instance(...) # Phase 9，template_redirect priority 20，WC 單品頁套用賣場覆寫價（含變體），DI ProfitShopRepositoryInterface
+                      ├→ new WcDecimalRounding() / new ProfitCalculator($rounding) / new MoneyFormatter($rounding)  # Phase 17，F-2 補洞，供結帳寫入與退款/續訂 hook 共用
+                      ├→ Infrastructure/WooCommerce/OrderLineItemSettlementHook::instance(...)     # Phase 17，priority 20，woocommerce_checkout_create_order_line_item，結帳寫入分潤 order itemmeta
+                      ├→ Infrastructure/WooCommerce/SettlementReversalHook::instance(...)          # Phase 17，priority 10，woocommerce_order_refunded / woocommerce_order_status_cancelled，退款/取消回沖
+                      └→ RenewalProfitHook::is_supported() 為 true 才 instance(...)                # Phase 17，priority 20，wcs_renewal_order_created（filter），WooCommerce Subscriptions 選用相依，未安裝時完全不註冊
 ```
 
 ### Partner Portal 載入流程（Phase 4-B）

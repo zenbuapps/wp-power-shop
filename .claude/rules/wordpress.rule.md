@@ -105,6 +105,20 @@ Phase 6-A1（Partner 自助修密碼後端，1 個；Phase 6-A2 已完工 partne
 |--------|------|------------|------|
 | POST | `partner-auth/change-password` | **partner_token** | Partner 自助修密碼。Body：`{current_password, new_password}`（**不過 sanitize_text_field**，保留密碼字面值）；partner_term_id **永不**從 body / query 取，鎖死於 `_partner_term_id`（permission_callback 從 token 解出 + V2Api L-4 fail-fast `<= 0` 拒）。流程：assert_not_blocked → find_by_id → verify current → new PartnerPassword VO → save → reset → audit log（不含明文）。pseudo-slug `pwchange:{id}` 與 login slug 維度**隔離**；弱密碼不污染 rate-limit。Success path：`Set-Cookie profit_partner_token=; Max-Age=0` 強制重新登入 + `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`。失敗對映：401 unauthorized（current 錯）/ 422 weak_password（含 `data.reasons[]`）/ 429 rate_limited（含 Retry-After）。**Phase 6-A2 前端 UI 已實裝**：partner portal 路由 `/change-password`（authenticated only，Dashboard 入口），UI 紀律見 `react.rule.md` §6.6 ChangePassword.tsx HIGH-RISK 8 條。 |
 
+Phase 17（分潤結算，7 個，2026-08-06；後台端點，**七個一律 `manage_options`**——比設計文件 §6.1 原記載的 `manage_woocommerce` 更嚴，理由與依據見 `profit-shop.rule.md` §13.10）：
+
+| Method | 端點 | Permission | 說明 |
+|--------|------|------------|------|
+| GET | `profit-settlements` | **admin_only** | 結算列表（filter：partner_id / shop_id / status / date range；`per_page` cap 100、`page` cap 10000） |
+| GET | `profit-settlements/summary` | **admin_only** | 摘要（10 個欄位：pending/paid/refunded/cancelled 各金額+筆數 + total_sales + total_count），沿用與列表相同的篩選條件 |
+| GET | `profit-settlements/order-ids` | **admin_only** | D-6：依 `shop_id` 回傳 order_id 陣列，供訂單列表當 `wc-rest` 的 `include` filter 用（cap 200 筆，`truncated` 誠實回報） |
+| POST | `profit-settlements/export` | **admin_only** | CSV 匯出，回 `{filename, content_base64}`（9 欄，公式注入跳脫，內容含 UTF-8 BOM） |
+| POST | `profit-settlements/mark-paid` | **admin_only** | 標記已撥款（CAS 併發防護，逐筆回 `{updated_ids, skipped, audit_log_failed_partner_ids, ...}`，不 all-or-nothing）+ `X-WP-Nonce` |
+| POST | `profit-settlements/mark-cancelled` | **admin_only** | 標記取消（只允許 `pending` → `cancelled`）+ `X-WP-Nonce` |
+| POST | `profit-settlements/reverse-paid` | **admin_only** | 人工沖回（只允許 `paid` → `refunded`）+ `X-WP-Nonce` |
+
+⚠️ 三個 `POST` mutation 端點的權限判斷是 `manage_options` **加上** `X-WP-Nonce`——capability 擋「你是誰」，nonce 擋「這個請求是不是你自己發的」，兩者防的不是同一件事，缺一不可。回應一律 `{code, message, data}`（admin endpoint 慣例，非 partner 裸 payload）。完整資料流、meta 命名對映、三個地基缺陷（F-1/F-2/F-3）、CAS 實作、`wcs_renewal_order_created` 陷阱見 `profit-shop.rule.md` §13「分潤結算全鏈路」。
+
 賣場前台購物車 REST（Phase 11 的 `FrontCartApi`，6 個 endpoint）**已於 Phase 12 整組移除**。
 賣場前台不再有任何自訂購物車 API：加購走 WooCommerce 原生表單送出
 （`WC_Form_Handler::add_to_cart_action()`），購物車與結帳一律由 WooCommerce 自己的頁面負責。

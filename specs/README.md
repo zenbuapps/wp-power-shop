@@ -105,30 +105,44 @@ specs/
 > Domain 設計文件：[2026-05-06-profit-shop-design.md](2026-05-06-profit-shop-design.md)
 > 架構與紀律：`.claude/rules/profit-shop.rule.md`
 
-> 🚧 **分潤結算鏈路：實作中（2026-08-06 起）**
+> ✅ **分潤結算全鏈路：已完工（2026-08-06，Phase 17）**
 >
 > 在此之前，分潤結算的**寫入鏈路完全未實作**——`OrderItemSettlementRepository`
 > 與 `SettlementRecord` 存在且有整合測試，但從未被註冊或呼叫，購物車上的
 > `_profit_*` meta 不會被複製到 `wc_order_itemmeta`，因此夥伴報表的查詢側
-> 雖已完整實作，實際上永遠回傳空資料。
+> 雖已完整實作，實際上永遠回傳空資料，站長也無法撥款。
 >
-> 目前依 [`plan/2026-08-06-profit-settlement-chain-plan.md`](plan/2026-08-06-profit-settlement-chain-plan.md)
-> 分階段實作中。下方「分潤結算」小節的 7 個 Feature 描述的是**該藍圖已拍板的目標行為**，
-> 不是當下的實作現況。
+> 依 [`plan/2026-08-06-profit-settlement-chain-plan.md`](plan/2026-08-06-profit-settlement-chain-plan.md)
+> 分階段實作完成，下方「分潤結算」小節的 7 個 Feature 現在描述的是**實際行為**：
 >
-> **尚未完成的子項**（依藍圖 Stage 編號）：
+> | Stage | 內容 | 對應 Feature | 狀態 |
+> |---|---|---|---|
+> | 1 | 結帳寫入 order itemmeta | attribute-order-line-item | ✅ |
+> | 2 | 退款 / 取消回沖 | reverse-settlement-on-refund | ✅ |
+> | 3 | 訂閱續訂帶入 | carry-profit-to-renewal-order | ✅（wp-env 未安裝 WooCommerce Subscriptions，`test_real_wcs_renewal_order_resets_paid_status` 恆 skip，只在單元/整合層級以手工 fixture 驗證，未真正呼叫過 `wcs_create_renewal_order()`） |
+> | 4 | 結算 Application 層 + 7 個 REST endpoint | query-settlements / mark-settlement-paid / export-settlements-csv | ✅ |
+> | 5 | 結算頁 SPA `/profit-settlements` | query-settlements / mark-settlement-paid | ✅ |
+> | 6 | 訂單頁分潤資訊面板 + 訂單列表賣場過濾 | view-order-profit-panel | ✅ |
 >
-> | Stage | 內容 | 對應 Feature |
-> |---|---|---|
-> | 1 | 結帳寫入 order itemmeta | attribute-order-line-item |
-> | 2 | 退款 / 取消回沖 | reverse-settlement-on-refund |
-> | 3 | 訂閱續訂帶入 | carry-profit-to-renewal-order |
-> | 4 | 結算 Application 層 + 7 個 REST endpoint | query-settlements / mark-settlement-paid / export-settlements-csv |
-> | 5 | 結算頁 SPA `/profit-settlements` | query-settlements / mark-settlement-paid |
-> | 6 | 訂單頁分潤資訊面板 + 訂單列表賣場過濾 | view-order-profit-panel |
+> 藍圖另指出三個必須先修的**既有地基缺陷**（結帳當下訂單品項尚無 id、`RoundingStrategy`
+> 全專案零實作、結算 SQL 未過濾訂單型別導致訂閱品項雙倍計算），三者皆已修補，正確行為
+> 已寫進上述 Feature，完整技術細節見 `.claude/rules/profit-shop.rule.md` §13。
 >
-> 藍圖另指出三個必須先修的**既有地基缺陷**（訂閱品項雙倍計算、結帳當下訂單品項尚無 id、
-> `RoundingStrategy` 零實作），其正確行為已寫進上述 Feature，不另立檔案。
+> ✅ **真實站台端到端驗證已通過**（2026-08-06，站台 `turbo.local`）：加購 → 結帳
+> → 訂單 #2241 line item #428 分潤 meta 完整落地（`_profit_rate=10`、
+> `_actual_price=600`、`_profit_amount=60`、`_settlement_status=pending`）→
+> 結算查詢確實撈得到該筆。三組 meta 命名對映、`$unique=true` 去重、HMAC 驗章、
+> `_profit_rate` 即時讀賣場當下值全部在真實環境確認正確。完整對照表見
+> `.claude/CLAUDE.md`「Phase 17」章節；該筆訂單刻意保留供後續 UI 驗證使用。
+>
+> 🔴 **尚未驗證的部分**：(1) 站台**未啟用 HPOS**，本次驗證只涵蓋 legacy posts
+> 路徑，HPOS 雙路徑的 HPOS 那一半完全沒有任何形式的驗證（自動化測試與真實站台
+> 皆未覆蓋，見 `specs/tech-debt.md` TD-88）；(2) wp-admin UI（結算頁
+> `/profit-settlements`、訂單頁分潤面板）與夥伴報表前台（`/profit-report/{slug}/`）
+> 需要登入憑證，尚未驗證，前端目前只過 `tsc` / `pnpm build` 兩道靜態閘門；
+> (3) 訂閱續訂路徑（`test_real_wcs_renewal_order_resets_paid_status`）在 wp-env
+> 因未安裝 WooCommerce Subscriptions 恆 skip，只在單元/整合層級以手工 fixture
+> 驗證。詳見 `.claude/CLAUDE.md`「Phase 17」章節。
 
 #### 加購與定價（安全與金流核心）
 

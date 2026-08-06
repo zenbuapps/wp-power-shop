@@ -325,6 +325,7 @@ const isEditing = useIsEditing()
 | `/profit-partner/create` | `ProfitPartner/Create` | `power-shop` |
 | `/profit-partner/edit/:id` | `ProfitPartner/Edit` | `power-shop`（密碼為一般欄位）|
 | `/profit-migration` | `ProfitMigration/List` | `power-shop`（含 ImportModal）|
+| `/profit-settlements` | `ProfitSettlement/List` | `power-shop`（Phase 17，useCustom，server-side 篩選 + 分頁） |
 | `/analytics` | `Analytics` | `power-shop` |
 | `/wp-media-library` | `WPMediaLibraryPage` | `default` |
 
@@ -1071,6 +1072,47 @@ if (isFormValidationError(err)) {
 新增欄位時兩者必須同步，分開放一定會忘。Tab 受控（`activeTab` / `onTabChange`）由父層
 持有 state，Create / Edit 兩頁共用同一套 helper。
 
+### 結算頁 ProfitSettlement + 訂單頁分潤面板（Phase 17）
+
+站長端的分潤結算 UI，後端 7 個 endpoint 見 `wordpress.rule.md`「Phase 17」與 `profit-shop.rule.md` §13。
+
+```
+js/src/pages/admin/ProfitSettlement/
+├── types.ts       # 狀態常數 / 狀態顯示對映 / DELETED_SHOP_LABEL 等佔位文字常數 / 7 個回應型別
+├── utils.ts        # toSettlementQuery / downloadBase64File / partitionByAllowedStatus / formatUnixSeconds
+├── hooks.ts         # useSettlementList / useSettlementSummary / useSettlementOrderIds /
+│                    #   useSettlementBatchAction / useSettlementExport
+├── List/index.tsx   # 篩選卡片 + 4 張摘要卡 + 列表卡片 + 批次操作 + CSV 匯出
+├── List/Filter.tsx  # 夥伴 / 賣場 / 狀態 / 日期區間四條件
+├── List/SummaryCards.tsx
+└── components/
+    ├── BatchActionModal.tsx   # ⚠ HIGH-RISK（不可逆金流），§12.4 二次確認模式
+    └── ShopSelector.tsx       # 賣場下拉，結算頁篩選與訂單列表過濾共用
+
+js/src/pages/admin/Orders/Edit/ProfitPanel/index.tsx  # 訂單頁分潤資訊面板
+js/src/pages/admin/Orders/List/Filter.tsx             # 訂單列表「分潤賣場」篩選
+```
+
+**與 profit-* 三兄弟（ProfitShop / ProfitPartner / ProfitMigration）唯一不同的地方：走 server-side 篩選 + 分頁，不沿用 `admin-list-ui.rule.md` §3.2 路線 B 的 client-side 過濾**。路線 B 適用「後端無分頁、總量小」的情境；結算紀錄是「每張訂單每個分潤品項一筆」，成長速度完全不同，後端本來就提供了四種篩選 + 分頁 + `MAX_PER_PAGE=100`。因此**只有版型**沿用路線 B 的兩張 `antd-toolkit` Card，資料流走 server-side（分頁狀態 `page` / `perPage` 由頁面自己持有，`total` 取自後端）。其餘規則不變：`useCustom` / `useCustomMutation` + 明示 `dataProviderName: 'power-shop'`（Pitfall #10）、快取失效一律 `useInvalidateProfitQueries('profit-settlements')`（**禁** `useInvalidate`，見上方「Refine 的 `useInvalidate` 對 `useCustom` 完全無效」）。
+
+**`BatchActionModal` 是不可逆金流操作**，套 `profit-shop.rule.md` §12.4 的二次確認模式：`closable={false}` / `maskClosable={false}` / `keyboard={false}`，Modal 內明確列出將被改動的每一筆 + 金額合計 + 事前算出會被跳過幾筆。**單列操作與批次走完全相同的確認流程與端點**——不做「單列直接送出、不確認」的捷徑，單筆一樣是真實金流，共用同一條路徑才不會出現「批次會擋、單筆不擋」的漏洞。
+
+🔴 **`skipped` 與 `audit_log_failed_partner_ids` 必須顯性呈現，且 `duration: 0` 不自動消失**。後端批次回應是 `{updated_ids, updated_count, skipped, skipped_count, total_amount, audit_log_failed_partner_ids}`——`skipped`（`order_item_id => 原因`）以獨立 warning notification 逐筆列出並明講「請勿重複操作，先重新整理列表確認目前狀態」；`audit_log_failed_partner_ids` 是**部分成功**（狀態改了、稽核紀錄沒寫成功），獨立成第三則警告並明講「狀態不需要重做」——併進失敗清單會誘發重撥。這不是錦上添花的 UX 細節：第二個管理員若不知道自己那次批次操作沒有生效，很可能真的再去銀行轉一次帳；後端用 CAS 擋住了重複計入，**前端負責讓人知道發生過什麼**。
+
+**金額欄位全程當字串**：型別上就是 `string`，`Statistic` 元件收字串會原樣渲染，刻意不設 `precision` / `formatter` 以免被轉成 float。唯一需要前端加總的地方（訂單面板的「分潤合計」，後端沒有提供這個欄位）用**字串定點加法**（把兩位小數當「分」相加，最後插回小數點），不是 `Number()` 累加——否則會出現 `48.00 + 180.00 = 227.99999999999997` 這種典型浮點誤差。已知限制：只支援兩位小數（對齊 WC 預設），站台若把 `wc_get_price_decimals()` 調成 3 位以上這個合計會少算，正解是改由後端提供合計欄位。
+
+**CSV 下載：`atob()` 的結果不可直接丟進 `Blob`**。`atob` 回傳的是「一字元一位元組」的 binary string，直接 `new Blob([str])` 會被瀏覽器**再以 UTF-8 編碼一次**——原本的 UTF-8 位元組被當成 Latin-1 各自膨脹成 2 bytes，中文全部亂碼、BOM 也壞掉。必須逐字元 `charCodeAt` 還原成 `Uint8Array`。BOM 由後端加在內容裡，前端不再加。
+
+**訂單頁分潤面板刻意讀「訂單品項的 meta」，不打 `GET /profit-settlements`**：兩個理由，第二個是硬性的——(1) `view-order-profit-panel.feature` 的「Rule: 後置（凍結）」明講這份資訊已經凍結在訂單品項上，直接讀 `record.items[].meta_data` 天然滿足「賣場改比例 / 改名 / 被刪除後歷史訂單數字不變」；(2) `SettlementFilterInput` 沒有 `order_id` 過濾條件，要用結算端點取單一訂單的明細只能整批撈回來再前端過濾，而列表 `per_page` 上限 100——訂單一多就會靜默漏資料。已查證 WC REST 確實送得出這些 meta：`WC_REST_Orders_V2_Controller::get_order_item_data()` 的 `$item->get_data()` 走 `WC_Data::get_meta_data()`，回傳全部 meta（含底線前綴），只有 `get_formatted_meta_data()` 才會濾掉底線前綴，`TOrderBaseRecord.items[].meta_data` 本來就已經是 `{id, key, value}[]`，型別不需擴充。
+
+面板拆成**兩層元件**（`ProfitPanelComponent` 只判斷有沒有分潤品項 + `ProfitPanelBody` 持有全部查詢），讓「一般訂單完全不發 `useProfitShopList()` / `useProfitPartnerList()` 這兩個查詢」在**結構上**成立——第一版把這兩個查詢放在外層、early return 之前，查詢仍然照發、只是結果沒人用，而註解卻宣稱「一般訂單不發查詢」，這正是本 repo 已吃虧三次的失效模式（見 CLAUDE.md Common Pitfall #39 附近提到的 TD-20 / TD-54 / TD-67：註解的宣稱與實際行為相反，`lint` / `tsc` / 測試一個都攔不到）。
+
+🔴 **`DELETED_SHOP_LABEL` / `DELETED_PARTNER_LABEL` 兩個常數必須與後端 `WpAdminSettlementQuery` 的同名常數逐字相同**（`[已刪除賣場]` / `[已停用夥伴]`），放在 `ProfitSettlement/types.ts` 供結算頁與訂單面板共用。「已刪除」的判定同樣要對齊後端 `resolve_shop_names()`：**查不到或 `post_status === 'trash'`** 都算已刪除。
+
+**訂單列表「分潤賣場」過濾必須送 `include=[0]`，不能送空陣列或不送**：`include` 空陣列 / 不送在 `wc-rest` 的語意是**不過濾**，會讓站長選了一個沒有訂單的賣場卻看到全部訂單，而畫面上的篩選還顯示著那個賣場名稱。清單載入中同樣先送 `[0]`，避免先閃一頁未過濾的訂單、再突然縮成幾筆的錯誤畫面。
+
+**已刪除的賣場仍留在 `ShopSelector` 選項裡**（標「已刪除」Tag）：結算紀錄凍結的是 `shop_id`，賣場被刪掉後那些錢還是要付，把它從篩選器移除等於讓站長再也篩不出那批待撥款紀錄。
+
 ## 6.6 Partner Portal 前端架構（Phase 4-B）
 
 Partner self-service portal 是與 admin 完全隔離的獨立 SPA。目錄、entry、tooling、安全紀律皆與 admin SPA 不同。
@@ -1461,6 +1503,9 @@ js/src/
 ├── pages/admin/ProfitPartner/   # 夥伴 CRUD（密碼為一般欄位，2026-08 起）+ PartnerSelector
 ├── pages/admin/ProfitMigration/ # Phase 4-A3：legacy 一頁商店匯入 + ImportModal（HIGH-RISK）
 │                             # （Phase 4-A3 的 ProfitSettings 全域設定頁已整組移除）
+├── pages/admin/ProfitSettlement/ # Phase 17：結算頁（篩選 + 4 摘要卡 + 列表 + 批次撥款）+ BatchActionModal
+│                                #   （HIGH-RISK）+ ShopSelector，server-side 篩選 + 分頁，見 §6.5
+├── pages/admin/Orders/Edit/ProfitPanel/ # Phase 17：訂單頁分潤資訊面板，讀 order item meta 而非結算 API
 ├── partner-portal/             # Phase 4-B + 6-A2：獨立 SPA bundle（mount 點 #profit_partner_portal，與 admin 完全隔離）
 │   ├── pages/                  #   Login / Dashboard / TrendChart / SettlementsTable / ChangePassword（6-A2 HIGH-RISK）
 │   ├── hooks/                  #   useKpi / useTrend / useSettlements / useChangePassword（6-A2）
