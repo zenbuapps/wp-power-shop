@@ -16,13 +16,17 @@ Feature: 分潤夥伴查詢自己的分潤報表
   # ── 結算狀態四態 ─────────────────────────────────────────
   # pending（待結算）/ paid（已撥款）/ refunded（已退款）/ cancelled（已取消）
   #
-  # ── 🔴 上游缺口：目前沒有任何程式會寫入結算紀錄（2026-08-06 覆核）──
+  # ── 🚧 上游鏈路：結算寫入實作中（2026-08-06 起）────────────
   # 本 Feature 描述的是**查詢端**的行為，該側已完整實作並可正確聚合。
   # 但 `wc_order_itemmeta` 上的 `_profit_partner_term_id` / `_profit_amount` /
-  # `_settlement_status` **從來沒有任何程式寫入**——全 domain 沒有註冊任何訂單 hook，
-  # 購物車上的 `_profit_*` meta 不會被複製到訂單品項。
-  # ⇒ 在補上寫入鏈路之前，真實站台上這三份報表**永遠是空的 / 全 0**。
+  # `_settlement_status` 在此之前沒有任何程式寫入，因此真實站台上這三份報表
+  # 是空的 / 全 0。寫入鏈路依 specs/plan/2026-08-06-profit-settlement-chain-plan.md
+  # 分階段補上，行為見 attribute-order-line-item.feature。
   # 下方 Background 的結算紀錄因此是「寫入鏈路補上之後」的預期狀態。
+  #
+  # ⚠️ 連帶必須成立的前提（同一份藍圖的地基修補）：結算查詢只認訂單型別為
+  #    shop_order 的品項。訂閱商品的分潤 meta 會同時存在於主訂單與訂閱物件上，
+  #    不過濾型別的話這裡的金額會剛好變成兩倍。
 
   Background:
     Given 已存在分潤夥伴 "夥伴A" 其 term_id 為 5 且 slug 為 "partner-a"

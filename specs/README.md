@@ -26,7 +26,7 @@ specs/
 │   ├── product/             # 商品領域（5 個 Feature）
 │   ├── customer/            # 顧客領域（5 個 Feature）
 │   ├── dashboard/           # 儀表板與分析領域（4 個 Feature）
-│   └── profit-shop/         # 分潤賣場領域（23 個 Feature）
+│   └── profit-shop/         # 分潤賣場領域（30 個 Feature）
 ├── ui/                      # UI 視圖：頁面規格
 │   ├── dashboard.md
 │   ├── order-list.md
@@ -49,7 +49,10 @@ specs/
 ├── clarify/                 # 澄清紀錄（每次需求訪談一檔）
 │   └── 2026-07-29-profit-shop-product-selector.md
 ├── plan/                    # 工程計畫（每個需求一檔，命名 YYYY-MM-DD-{slug}-plan.md）
-│   └── 2026-07-29-profit-shop-product-selector-plan.md
+│   ├── 2026-07-29-profit-shop-product-selector-plan.md
+│   ├── 2026-07-30-profit-shop-variation-override-plan.md
+│   ├── 2026-08-03-cart-regular-price-override-plan.md
+│   └── 2026-08-06-profit-settlement-chain-plan.md   # 分潤結算全鏈路 TDD 協調藍圖
 └── tech-debt.md             # 已知問題與技術債登記表（跨領域、持續累積）
 ```
 
@@ -102,19 +105,30 @@ specs/
 > Domain 設計文件：[2026-05-06-profit-shop-design.md](2026-05-06-profit-shop-design.md)
 > 架構與紀律：`.claude/rules/profit-shop.rule.md`
 
-> 🔴 **已知的未實作缺口（2026-08-06 規格化覆核）**
+> 🚧 **分潤結算鏈路：實作中（2026-08-06 起）**
 >
-> **分潤結算的寫入鏈路完全未實作**。`OrderItemSettlementRepository` 與
-> `SettlementRecord` 存在且有整合測試，但**從未被註冊或呼叫**——全 domain
-> 沒有任何 `woocommerce_checkout_create_order_line_item` 之類的訂單 hook，
-> 購物車上的 `_profit_*` meta 不會被複製到 `wc_order_itemmeta`，
-> `_profit_amount` / `_settlement_status` 沒有任何程式寫入。
+> 在此之前，分潤結算的**寫入鏈路完全未實作**——`OrderItemSettlementRepository`
+> 與 `SettlementRecord` 存在且有整合測試，但從未被註冊或呼叫，購物車上的
+> `_profit_*` meta 不會被複製到 `wc_order_itemmeta`，因此夥伴報表的查詢側
+> 雖已完整實作，實際上永遠回傳空資料。
 >
-> 連帶未實作：退款回沖、訂單取消回沖、訂閱續訂帶入、站長端的結算撥款頁與
-> 對應的六個 endpoint（設計文件 §3.5 / §4.3 / §5.2–§5.5）。
+> 目前依 [`plan/2026-08-06-profit-settlement-chain-plan.md`](plan/2026-08-06-profit-settlement-chain-plan.md)
+> 分階段實作中。下方「分潤結算」小節的 7 個 Feature 描述的是**該藍圖已拍板的目標行為**，
+> 不是當下的實作現況。
 >
-> ⇒ 夥伴報表的查詢側已完整實作，但在補上寫入鏈路之前**永遠回傳空資料**。
-> 上述缺口尚未登記於 `tech-debt.md`（那份文件只放「發現但刻意不修」的項目）。
+> **尚未完成的子項**（依藍圖 Stage 編號）：
+>
+> | Stage | 內容 | 對應 Feature |
+> |---|---|---|
+> | 1 | 結帳寫入 order itemmeta | attribute-order-line-item |
+> | 2 | 退款 / 取消回沖 | reverse-settlement-on-refund |
+> | 3 | 訂閱續訂帶入 | carry-profit-to-renewal-order |
+> | 4 | 結算 Application 層 + 7 個 REST endpoint | query-settlements / mark-settlement-paid / export-settlements-csv |
+> | 5 | 結算頁 SPA `/profit-settlements` | query-settlements / mark-settlement-paid |
+> | 6 | 訂單頁分潤資訊面板 + 訂單列表賣場過濾 | view-order-profit-panel |
+>
+> 藍圖另指出三個必須先修的**既有地基缺陷**（訂閱品項雙倍計算、結帳當下訂單品項尚無 id、
+> `RoundingStrategy` 零實作），其正確行為已寫進上述 Feature，不另立檔案。
 
 #### 加購與定價（安全與金流核心）
 
@@ -150,6 +164,18 @@ specs/
 | [change-partner-password](features/profit-shop/change-partner-password.feature) | @command | 夥伴自助修改密碼 |
 | [query-partner-report](features/profit-shop/query-partner-report.feature) | @query | KPI / 趨勢 / 結算明細與範圍隔離 |
 
+#### 分潤結算（實作中，見上方說明）
+
+| Feature | 類型 | 說明 |
+|---------|------|------|
+| [attribute-order-line-item](features/profit-shop/attribute-order-line-item.feature) | @command | 結帳寫入 11 筆結算 meta、命名對映與兩條結帳路徑 |
+| [reverse-settlement-on-refund](features/profit-shop/reverse-settlement-on-refund.feature) | @command | 退款與取消訂單的回沖規則（含部分退款重算） |
+| [carry-profit-to-renewal-order](features/profit-shop/carry-profit-to-renewal-order.feature) | @command | 訂閱續訂單的凍結、動態與強制重置欄位 |
+| [mark-settlement-paid](features/profit-shop/mark-settlement-paid.feature) | @command | 撥款 / 取消 / 人工沖回與併發保護 |
+| [query-settlements](features/profit-shop/query-settlements.feature) | @query | 結算列表與摘要、篩選與分頁上限 |
+| [export-settlements-csv](features/profit-shop/export-settlements-csv.feature) | @query | CSV 匯出與公式注入防範 |
+| [view-order-profit-panel](features/profit-shop/view-order-profit-panel.feature) | @query | 訂單頁分潤面板與訂單列表賣場過濾 |
+
 #### 賣場前台
 
 | Feature | 類型 | 說明 |
@@ -166,7 +192,7 @@ specs/
 | 類別 | 數量 |
 |------|------|
 | Activity 流程 | 8 |
-| Feature 規格 | 43（27 @command + 16 @query） |
+| Feature 規格 | 50（31 @command + 19 @query） |
 | UI 頁面規格 | 12 |
 | Actor 定義 | 1 |
 | API 端點 | 見 [api.yml](api/api.yml) |
