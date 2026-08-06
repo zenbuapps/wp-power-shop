@@ -1436,6 +1436,295 @@ components:
         - success
         - password_changed_at
 
+    # ──────────────────────────── Settlements（後台結算頁，spec §3.5 / §4.3）
+
+    SettlementFilterInput:
+      type: object
+      description: |
+        後台結算查詢的過濾條件（spec §4.3）。GET 端點走 query string，
+        POST /export 走 body。所有 ID 欄位會被轉成正整數並去重；
+        **不在白名單內的 status 一律回 400 validation_failed，不會被靜默丟棄**
+        （靜默丟棄會讓過濾條件退化成「不過濾」，站長會誤讀成篩選結果）。
+
+        單數與複數鍵名皆可（`partner_id` / `partner_ids` / `partner_term_id` /
+        `partner_term_ids`），同時出現時取聯集；字串值以逗號分隔。
+      properties:
+        partner_term_ids:
+          type: array
+          items:
+            type: integer
+          description: 分潤夥伴 term ID 過濾（空 = 不限）
+        shop_ids:
+          type: array
+          items:
+            type: integer
+          description: 賣場 ID 過濾（空 = 不限）
+        statuses:
+          type: array
+          items:
+            type: string
+            enum: [pending, paid, refunded, cancelled]
+          description: 結算狀態過濾（空 = 不限）
+        date_start:
+          type: integer
+          nullable: true
+          description: 訂單建立起始時間（unix timestamp，null = 不限）
+        date_end:
+          type: integer
+          nullable: true
+          description: 訂單建立結束時間（unix timestamp，null = 不限）
+        page:
+          type: integer
+          default: 1
+          maximum: 10000
+        per_page:
+          type: integer
+          default: 20
+          maximum: 100
+
+    AdminSettlementListItem:
+      type: object
+      description: 後台結算列表的單筆項目
+      properties:
+        order_item_id:
+          type: integer
+        order_id:
+          type: integer
+        product_name:
+          type: string
+          description: 下單當下凍結的商品名稱（order_item_name）
+        partner_term_id:
+          type: integer
+        partner_name:
+          type: string
+          description: |
+            分潤夥伴名稱。夥伴已被刪除時為 `[已停用夥伴]`——**該列不可消失**，
+            金額已凍結，那筆錢仍然要付給人。
+          example: 夥伴A
+        shop_id:
+          type: integer
+        shop_name:
+          type: string
+          description: 分潤賣場名稱。賣場已被刪除時為 `[已刪除賣場]`（同上，該列不可消失）。
+          example: 夏季賣場
+        actual_price:
+          type: string
+          description: 成交金額（十進位字串，保留精度）
+          example: '500.00'
+        profit_amount:
+          type: string
+          description: 應分潤金額（十進位字串，保留精度）
+          example: '100.00'
+        rate:
+          type: integer
+          description: 分潤比例（0-100，凍結值）
+        status:
+          type: string
+          enum: [pending, paid, refunded, cancelled]
+        needs_manual_rate:
+          type: boolean
+          description: |
+            🔴 分潤比例為 0，需站長人工設定。結帳當下賣場已被刪除時，寫入 hook 會刻意
+            寫下完整歸屬 meta 但 `rate = 0` / `amount = '0.00'`（而不是不寫），
+            好讓這筆錢仍看得見、可人工補救。**這種紀錄絕不可被過濾掉**——
+            過濾等於讓一筆該付的錢從系統中消失。前端應標紅提示「賣場已刪除，需人工設定比例」。
+        settled_at:
+          type: integer
+          nullable: true
+          description: 撥款時間（unix timestamp；未撥款為 null）
+        order_date:
+          type: string
+          description: 訂單建立時間（GMT，`Y-m-d H:i:s`）
+      required:
+        - order_item_id
+        - order_id
+        - partner_name
+        - shop_name
+        - profit_amount
+        - status
+
+    AdminSettlementListOutput:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminSettlementListItem'
+        total:
+          type: integer
+          description: 符合條件的總筆數（**不是**當前頁筆數）
+        page:
+          type: integer
+        per_page:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - per_page
+
+    SettlementAdminSummaryOutput:
+      type: object
+      description: |
+        後台結算摘要卡（spec §3.5「待撥款金額（筆數） / 已撥款金額（筆數） / 退款金額」）。
+        **所有金額欄位都是十進位字串**（bcmath 產出）——這些數字會直接變成轉給夥伴的
+        金額，轉成 float 累加會出現分位誤差。摘要忽略 page / per_page，永遠涵蓋整個篩選結果。
+      properties:
+        pending_amount:
+          type: string
+          example: '1500.00'
+        pending_count:
+          type: integer
+        paid_amount:
+          type: string
+        paid_count:
+          type: integer
+        refunded_amount:
+          type: string
+        refunded_count:
+          type: integer
+        cancelled_amount:
+          type: string
+        cancelled_count:
+          type: integer
+        total_sales:
+          type: string
+          description: 成交金額合計（actual_price 加總）
+        total_count:
+          type: integer
+
+    SettlementBatchRequest:
+      type: object
+      description: mark-paid / mark-cancelled / reverse-paid 共用的請求 body
+      properties:
+        order_item_ids:
+          type: array
+          items:
+            type: integer
+          minItems: 1
+          maxItems: 500
+          description: |
+            要處理的 order_item_id 清單。空清單或超過 500 筆一律 400 validation_failed
+            （後者是 DoS 防護）。重複的 ID 只會被處理一次。
+      required:
+        - order_item_ids
+
+    SettlementBatchOutput:
+      type: object
+      description: |
+        批次操作結果。**被跳過的項目一定會出現在 `skipped` 並附原因**——
+        兩位管理員同時撥款時，第二個人必須看到「這些已經是 paid、本次未重複計入」，
+        否則他會以為自己那次沒生效而真的再去轉一次帳（spec §5.5）。
+      properties:
+        updated_ids:
+          type: array
+          items:
+            type: integer
+          description: 實際完成狀態轉換的 order_item_id
+        updated_count:
+          type: integer
+        skipped:
+          type: object
+          additionalProperties:
+            type: string
+          description: 'order_item_id => 被跳過的原因（JSON 化後鍵為字串）'
+          example:
+            '456': '目前狀態為 paid，只有待撥款（pending）可標記為已撥款，本次未重複計入'
+        skipped_count:
+          type: integer
+        total_amount:
+          type: string
+          description: 本次異動的分潤金額合計（十進位字串）
+          example: '250.00'
+        audit_log_failed_partner_ids:
+          type: array
+          items:
+            type: integer
+          description: |
+            狀態已更新但 `_partner_settled_log` 稽核紀錄寫入失敗的 partner term ID。
+            這是**部分成功**而非失敗——不可與 `skipped` 混為一談，否則站長會以為
+            那些品項沒被撥款而重撥。
+      required:
+        - updated_ids
+        - skipped
+        - total_amount
+
+    SettlementExportOutput:
+      type: object
+      description: |
+        CSV 匯出結果（決策 D-5）。以 `{code, message, data}` 包 base64 字串而非直接串流
+        `text/csv`，理由有二：
+
+        1. 後台端點一律是這個外層形狀，前端讀取時依賴它（`useCustom` 要剝兩層）；
+           串流原始 CSV 會讓這條路徑變成唯一的例外。
+        2. 錯誤（權限不足、篩選條件非法）能以一般的 JSON 錯誤格式回應，而不是讓使用者
+           下載到一個內容其實是錯誤訊息的 .csv。
+
+        用 base64 而非原始字串：內容開頭有 UTF-8 BOM，中間有 CRLF 換行與引號跳脫，
+        這些位元組在 JSON 編解碼與各層 proxy 的字元集轉換中都可能被改動，
+        而 BOM 少一個位元組 Excel 就會以系統預設編碼開啟，中文欄位整片亂碼。
+
+        前端解碼：先 atob 再轉 Uint8Array，最後包成 Blob（type 取 mime_type）觸發下載。
+
+        每一格都經過試算表公式注入中和（spec §6.9）：開頭為 `=` `+` `-` `@`
+        （含前置空白、定位字元或歸位字元之後才出現者）一律前綴單引號。
+        🔴 商品名稱、分潤夥伴、分潤賣場三欄都是使用者可輸入的字串，三個都要跳脫——
+        只跳脫商品名稱的話，攻擊者改用賣場名稱即可。
+
+        CSV 欄位固定 9 欄，順序與標題由 export-settlements-csv.feature 逐字鎖定：
+        訂單編號／訂單品項編號／商品名稱／分潤夥伴／分潤賣場／實際單價／應分潤金額／結算狀態／訂單日期
+      properties:
+        filename:
+          type: string
+          description: 含日期，避免多次匯出互相覆蓋
+          example: profit-settlements-20260806-113000.csv
+        mime_type:
+          type: string
+          example: text/csv; charset=utf-8
+        content_base64:
+          type: string
+          description: CSV 全文的 base64。解碼後開頭含 UTF-8 BOM。
+        row_count:
+          type: integer
+          description: 資料列數（不含表頭）
+      required:
+        - filename
+        - mime_type
+        - content_base64
+        - row_count
+
+    SettlementOrderIdsOutput:
+      type: object
+      description: |
+        符合分潤條件的 order_id 清單（決策 D-6）。
+
+        WooCommerce REST 的 `orders` 端點**無法依 order item meta 篩選**，
+        分潤歸屬寫在 line item 上、不在訂單本體。因此「只看某個賣場的訂單」得分兩步：
+        先向本端點拿 order_id 陣列，再當成 `wc-rest` 的 `include` filter 送出。
+      properties:
+        order_ids:
+          type: array
+          items:
+            type: integer
+          description: 訂單 ID（新到舊）
+        total:
+          type: integer
+          description: 符合條件的訂單總數（**未受 limit 影響**，用來算出 truncated）
+        limit:
+          type: integer
+          description: 本次套用的上限（最大 200）
+        truncated:
+          type: boolean
+          description: |
+            🔴 是否因超過上限而被截斷。為 true 時前端**必須**提示「結果過多，請縮小篩選範圍」——
+            靜默截斷會讓站長看到一份不完整的訂單列表卻毫無徵兆，
+            直接得出「這個賣場只有這幾張訂單」的錯誤結論。
+      required:
+        - order_ids
+        - total
+        - limit
+        - truncated
+
   parameters:
     PartnerToken:
       name: X-Partner-Token
@@ -3942,6 +4231,500 @@ paths:
                 $ref: '#/components/schemas/SettlementListOutput'
         '401':
           description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  # ────────────────────────────
+  # Settlements（後台結算頁，spec §3.5 / §4.3 / §5.5）
+  #
+  # 🔴 Permission：七個端點**一律** manage_options，連唯讀的列表 / 摘要也是。
+  #   規格 query-settlements.feature 與 export-settlements-csv.feature 都明文斷言
+  #   「僅具商店管理權限」→ 403。結算頁緊鄰「標記已撥款」這個不可逆的金流動作，
+  #   讓 shop_manager 看得到金額卻按不了按鈕只會讓人繞路（截圖、口頭轉述），
+  #   整頁同一個邊界才一致。⚠️ 這比 spec §6.1 的 manage_woocommerce 嚴格；
+  #   兩份文件不一致時以 feature 為準（較新且是可執行的驗收條件）。
+  #   三個 mutation 另外要求 X-WP-Nonce：capability 擋「你是誰」、
+  #   nonce 擋「這請求是不是你自己發的」，兩者防的不是同一件事。
+  #
+  # 回應一律是 admin endpoint 的 {code, message, data} 包裝（**不是** partner 端點的裸 payload）。
+  # ────────────────────────────
+
+  /power-shop/profit-settlements:
+    get:
+      tags:
+        - Settlement
+      summary: 後台結算列表（跨 partner）
+      description: |
+        依 partner / 賣場 / 狀態 / 日期區間過濾的結算明細（spec §3.5）。
+        已取消 / 失敗 / trash / auto-draft 訂單的 line item 一律排除，
+        避免無效訂單污染撥款金額。
+
+        `total` 是符合條件的**總筆數**（另一次 count 查詢），不是當前頁筆數。
+      operationId: listProfitSettlements
+      security:
+        - WPNonce: []
+      parameters:
+        - name: partner_id
+          in: query
+          description: 分潤夥伴 term ID（可複數或逗號分隔；亦接受 partner_ids / partner_term_id[s]）
+          schema:
+            type: string
+        - name: shop_id
+          in: query
+          description: 賣場 ID（可複數或逗號分隔；亦接受 shop_ids）
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: 結算狀態（可複數或逗號分隔；亦接受 statuses）
+          schema:
+            type: string
+            enum: [pending, paid, refunded, cancelled]
+        - name: date_start
+          in: query
+          description: 訂單建立起始時間（unix timestamp）
+          schema:
+            type: integer
+        - name: date_end
+          in: query
+          description: 訂單建立結束時間（unix timestamp）
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: 結算列表 + 分頁中介資料
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/AdminSettlementListOutput'
+        '400':
+          description: |
+            validation_failed。最常見成因：`status` 帶了白名單以外的值。
+            **刻意不靜默忽略**——忽略會讓過濾條件退化成「不過濾」，
+            站長看到全部品項卻以為自己在看篩選子集。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options；僅具 manage_woocommerce 者一律 403）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/order-ids:
+    get:
+      tags:
+        - Settlement
+      summary: 取得符合分潤條件的訂單 ID 清單
+      description: |
+        決策 D-6。WooCommerce REST 的 `orders` 端點無法依 order item meta 篩選，
+        前端得先向本端點取回 order_id 陣列，再當成 `wc-rest` 的 `include` filter 送出。
+
+        ⚠️ `include` 走 query string、過長會被伺服器截斷或拒絕，因此硬性 cap 在 200。
+        回應的 `truncated` 為 true 時前端**必須**提示站長縮小範圍。
+      operationId: listProfitSettlementOrderIds
+      security:
+        - WPNonce: []
+      parameters:
+        - name: shop_id
+          in: query
+          description: 賣場 ID（可複數或逗號分隔）
+          schema:
+            type: string
+        - name: partner_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, paid, refunded, cancelled]
+        - name: date_start
+          in: query
+          schema:
+            type: integer
+        - name: date_end
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: 上限（只能小於等於 200；超過一律 clamp）
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 200
+      responses:
+        '200':
+          description: 訂單 ID 清單
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementOrderIdsOutput'
+        '400':
+          description: validation_failed（status 不在白名單）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/summary:
+    get:
+      tags:
+        - Settlement
+      summary: 後台結算摘要卡
+      description: |
+        待撥款 / 已撥款 / 退款的金額與筆數（spec §3.5）。
+        與列表端點吃**完全相同**的過濾條件——兩者若不同步，摘要卡金額會與表格
+        對不起來，而站長是照卡片金額去轉帳的。摘要忽略 page / per_page。
+      operationId: getProfitSettlementSummary
+      security:
+        - WPNonce: []
+      parameters:
+        - name: partner_id
+          in: query
+          schema:
+            type: string
+        - name: shop_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, paid, refunded, cancelled]
+        - name: date_start
+          in: query
+          schema:
+            type: integer
+        - name: date_end
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 摘要卡數據
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementAdminSummaryOutput'
+        '400':
+          description: validation_failed（status 不在白名單）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options；僅具 manage_woocommerce 者一律 403）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/mark-paid:
+    post:
+      tags:
+        - Settlement
+      summary: 批次標記已撥款（pending → paid）
+      description: |
+        spec §5.5。**只有 `pending` 會被轉換**，其餘一律進 `skipped` 並附原因。
+
+        🔴 併發防護走**條件式 UPDATE（compare-and-set）**，不是 read-check-write：
+        `UPDATE ... SET meta_value='paid' WHERE meta_key='_settlement_status' AND meta_value='pending'`，
+        以 affected rows 判定誰搶到。兩位管理員同時按下撥款時，資料庫的 row lock
+        保證只有一個請求拿到 1；先讀出狀態再檢查再寫入的做法**會讓兩邊都通過檢查、
+        都寫入，站長真的轉兩次帳**。
+
+        沒搶到的請求不會寫 `_settled_at` / `_settled_by`（那是「誰在何時撥的款」的
+        稽核證據），且回應會明確列出「本次未重複計入」的 id——靜默略過會讓第二位
+        管理員以為自己那次沒生效而真的再轉一次帳。
+
+        成功的品項會依 partner 分組寫入 termmeta `_partner_settled_log`
+        （type=`settle`，spec §7.5），每個 partner 只會看到自己的金額。
+
+        **需要 `X-WP-Nonce`**（CSRF 防禦）。
+      operationId: markProfitSettlementsPaid
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementBatchRequest'
+      responses:
+        '200':
+          description: |
+            批次結果。注意：即使 `updated_ids` 為空也是 200——
+            「全部都已處理過」是正常狀態，不是錯誤。
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementBatchOutput'
+        '400':
+          description: validation_failed（清單為空 / 超過 500 筆 / 無法辨識操作者身分）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options）或缺少有效的 X-WP-Nonce
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/mark-cancelled:
+    post:
+      tags:
+        - Settlement
+      summary: 批次標記取消（pending → cancelled）
+      description: |
+        用於「訂單成立但不該計入分潤」（測試單 / 內部單 / 夥伴自己下的單）。
+
+        與 mark-paid 的兩個關鍵差異：
+          1. **不寫** `_settled_at` / `_settled_by`——取消不是撥款，污染那兩欄會讓
+             任何以 `_settled_at` 統計實際撥款的報表算進根本沒撥出去的品項。
+          2. **`paid` 不可轉 cancelled**（錢已撥出，改成「取消」等於帳面上抹掉一筆
+             真實支出）。要沖回請用 `reverse-paid`。
+
+        稽核紀錄 type=`cancel`。**需要 `X-WP-Nonce`**。
+      operationId: markProfitSettlementsCancelled
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementBatchRequest'
+      responses:
+        '200':
+          description: 批次結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementBatchOutput'
+        '400':
+          description: validation_failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options）或缺少有效的 X-WP-Nonce
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/reverse-paid:
+    post:
+      tags:
+        - Settlement
+      summary: 批次人工沖回（paid → refunded）
+      description: |
+        錢已撥給夥伴之後才發生退款 / 爭議時，在系統裡留下「這筆已撥款被沖回」的紀錄，
+        供下次撥款扣抵（spec §4.3 / §5.3 / §7.9）。
+
+        **只允許 `paid` → `refunded`**。Domain 狀態機同時接受 `pending → refunded`，
+        但那在「人工沖回」語意下是錯的：一筆根本還沒撥出去的款會產生
+        `refund_after_paid` 稽核紀錄，站長下次撥款照此扣抵 → **少付夥伴一次**，
+        而該筆也不會再出現在待撥款清單。因此本端點有一道獨立的
+        `status === paid` 前置檢查，不符者一律進 `skipped`。
+        pending 要作廢請改用 `mark-cancelled`。
+
+        稽核紀錄 type=`refund_after_paid`（spec §7.5 指定）。**需要 `X-WP-Nonce`**。
+      operationId: reverseProfitSettlementsPaid
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementBatchRequest'
+      responses:
+        '200':
+          description: 批次結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementBatchOutput'
+        '400':
+          description: validation_failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options）或缺少有效的 X-WP-Nonce
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/export:
+    post:
+      tags:
+        - Settlement
+      summary: 匯出結算明細 CSV
+      description: |
+        匯出**整個篩選結果**（不只當前頁）——只給螢幕上那 20 筆對帳沒有意義，
+        因此本端點忽略傳入的 `page`，自行從第 1 頁逐塊抓到 5000 列上限。
+
+        過濾條件走 body（partner / shop 多選會讓 query string 過長）；
+        `page` 以外的條件與列表端點完全一致。
+
+        回應仍是 `{code, data}` 包裝、`data.content` 是 CSV 全文，
+        由前端 `new Blob([content], { type: mime_type })` 觸發下載——
+        直接回 `text/csv` 會讓 admin 端點多一種例外形狀，前端得為單一端點另開通道。
+
+        安全：每一格都做試算表公式注入中和（spec §6.9）；回應帶
+        `Cache-Control: no-store`（內容含全站分潤金額）。
+      operationId: exportProfitSettlements
+      security:
+        - WPNonce: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementFilterInput'
+      responses:
+        '200':
+          description: |
+            CSV 內容（base64）。匯出範圍等同當下的篩選條件——所見即所得。
+            規格明訂「系統一次產出整份檔案，不提供背景排程或分批下載」，
+            因此**沒有業務層的筆數上限**（內部逐塊查詢只是為了避免單次 SQL 拉回巨量結果）。
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store, no-cache, must-revalidate
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementExportOutput'
+        '400':
+          description: validation_failed（status 不在白名單）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足
           content:
             application/json:
               schema:

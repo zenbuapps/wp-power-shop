@@ -65,72 +65,55 @@ final class CartPriceOverrideHook {
 
 	/**
 	 * Cart_item meta 鍵：來源賣場 ID
+	 *
+	 * 🔴 以下六個常數一律是 `CartProfitMetaVerifier::META_*` 的**別名**，不是各自的字面值。
+	 * 驗章邏輯已收斂到那個類別（見 `verify_item()`），若這裡重新寫一份字面值，寫入端
+	 * （本 hook）與讀取端（verifier）就有兩個真相來源——只要有一個字母不同，驗章會恆失敗，
+	 * 症狀是「購物車套了覆寫價、訂單卻沒有分潤紀錄」，而且沒有任何錯誤訊息。
+	 *
+	 * 值本身完全不變，既有 `self::META_*` 呼叫端零影響。
 	 */
-	private const META_SHOP_ID = '_profit_shop_id';
+	private const META_SHOP_ID = CartProfitMetaVerifier::META_SHOP_ID;
 
 	/**
 	 * Cart_item meta 鍵：來源分潤夥伴 term ID
 	 */
-	private const META_PARTNER_TERM_ID = '_profit_partner_term_id';
+	private const META_PARTNER_TERM_ID = CartProfitMetaVerifier::META_PARTNER_TERM_ID;
 
 	/**
 	 * Cart_item meta 鍵：override 後的有效價格（normalize 後的字串）
 	 */
-	private const META_PRICE_OVERRIDE = '_profit_price_override';
+	private const META_PRICE_OVERRIDE = CartProfitMetaVerifier::META_PRICE_OVERRIDE;
 
 	/**
 	 * Cart_item meta 鍵：override 後的原價（'' 表示不覆寫原價）
 	 */
-	private const META_REGULAR_OVERRIDE = '_profit_regular_price_override';
+	private const META_REGULAR_OVERRIDE = CartProfitMetaVerifier::META_REGULAR_OVERRIDE;
 
 	/**
 	 * Cart_item meta 鍵：override 後的特價（'' 表示無特價）
 	 */
-	private const META_SALE_OVERRIDE = '_profit_sale_price_override';
+	private const META_SALE_OVERRIDE = CartProfitMetaVerifier::META_SALE_OVERRIDE;
 
 	/**
 	 * Cart_item meta 鍵：簽章
 	 */
-	private const META_SIGNATURE = '_profit_signature';
-
-	/**
-	 * 全部版本（v1 / v2 / v3）共同必備的 meta
-	 *
-	 * @var string[]
-	 */
-	private const META_KEYS_BASE = [
-		self::META_SHOP_ID,
-		self::META_PARTNER_TERM_ID,
-		self::META_PRICE_OVERRIDE,
-		self::META_SIGNATURE,
-	];
-
-	/**
-	 * 只有 v2 / v3 簽章才必備的 meta（v1 沒有這兩筆）
-	 *
-	 * ⚠️ v3 **沒有**新增任何 meta：商品身分取自 cart item 的原生 product_id / variation_id
-	 *    欄位，複製一份成 _profit_* meta 只會多一個可以互相矛盾的來源。
-	 *
-	 * @var string[]
-	 */
-	private const META_KEYS_V2 = [
-		self::META_REGULAR_OVERRIDE,
-		self::META_SALE_OVERRIDE,
-	];
+	private const META_SIGNATURE = CartProfitMetaVerifier::META_SIGNATURE;
 
 	/**
 	 * 全部 meta（session restore / strip 用）
 	 *
-	 * 三處（restore_from_session / strip_profit_meta / has_all_profit_meta）共用同一份
-	 * 常數，是刻意的：這三份清單以前是各自展開的字面陣列，新增 meta 時漏改任何一處都會
-	 * 造成「session 後 meta 遺失」或「合法 cart 被誤判成 tampering」，而且完全靜默。
+	 * Restore_from_session / strip_profit_meta 共用同一份常數，是刻意的：這些清單以前是
+	 * 各自展開的字面陣列，新增 meta 時漏改任何一處都會造成「session 後 meta 遺失」或
+	 * 「合法 cart 被誤判成 tampering」，而且完全靜默。
+	 *
+	 * ⚠️ 現在直接別名到 `CartProfitMetaVerifier::META_KEYS_ALL`——驗章端用哪一份清單判斷
+	 * 「meta 齊不齊」，這裡就必須 strip / restore 哪一份，兩者分歧會讓 session 還原後少一筆
+	 * meta 而被驗章端判成 tampering。
 	 *
 	 * @var string[]
 	 */
-	private const META_KEYS_ALL = [
-		...self::META_KEYS_BASE,
-		...self::META_KEYS_V2,
-	];
+	private const META_KEYS_ALL = CartProfitMetaVerifier::META_KEYS_ALL;
 
 	/**
 	 * 價格解析器（與 SingleProductPriceHook 共用同一份取價語意）
@@ -138,6 +121,16 @@ final class CartPriceOverrideHook {
 	 * @var OverridePriceResolver
 	 */
 	private readonly OverridePriceResolver $resolver;
+
+	/**
+	 * 驗章器（與 `OrderLineItemSettlementHook` 共用同一份驗章語意）
+	 *
+	 * 見 `verify_item()` 的 docblock：這兩個 hook 過去各自維護一份版本分派 + HMAC 驗證，
+	 * 分歧時兩邊都「正常運作」卻沒有分潤紀錄。收斂成同一個類別後，分歧在結構上不可能發生。
+	 *
+	 * @var CartProfitMetaVerifier
+	 */
+	private readonly CartProfitMetaVerifier $verifier;
 
 	/**
 	 * 當次加購的一次性授權（閘門 ②）
@@ -188,13 +181,19 @@ final class CartPriceOverrideHook {
 	 * @param ProfitShopRepositoryInterface $shops      賣場 Repository（DIP，禁鴨子型別）
 	 * @param CartPriceSignatureService     $signatures 簽章服務
 	 * @param OverridePriceResolver|null    $resolver   價格解析器；null 時建立預設實例（純 Domain 物件、無狀態）
+	 * @param CartProfitMetaVerifier|null   $verifier   驗章器；null 時由 $signatures 建立（無狀態）。
+	 *                                                  ⚠️ 保持 optional 是刻意的——改成必填會讓既有
+	 *                                                  測試與 Loader 的 `new` 全部 ArgumentCountError，
+	 *                                                  而本次是純重構、不該要求呼叫端配合。
 	 */
 	public function __construct(
 		private readonly ProfitShopRepositoryInterface $shops,
 		private readonly CartPriceSignatureService $signatures,
-		?OverridePriceResolver $resolver = null
+		?OverridePriceResolver $resolver = null,
+		?CartProfitMetaVerifier $verifier = null
 	) {
 		$this->resolver = $resolver ?? new OverridePriceResolver();
+		$this->verifier = $verifier ?? new CartProfitMetaVerifier( $signatures );
 
 		// admin context guard：純後台（非 ajax）不掛 hook，避免影響後台 cart manipulation
 		if ( \is_admin() && ! \wp_doing_ajax() ) {
@@ -857,112 +856,58 @@ final class CartPriceOverrideHook {
 	 * _profit_regular_price_override，若靠 meta 存在與否判版本，就會套用一個從未被簽章
 	 * 保護過的假原價。因此 v1 分支**無條件忽略**任何 regular / sale meta。
 	 *
+	 * ═══ 驗章本體已委派 `CartProfitMetaVerifier`（2026-08）═══
+	 *
+	 * 本方法在此之前是**孿生實作**：`OrderLineItemSettlementHook::verify_cart_item()`
+	 * 另外維護一份一模一樣的版本分派 + HMAC 驗證。兩者分歧的症狀是
+	 * 「購物車套了覆寫價、訂單卻沒有分潤紀錄」——顧客付了分潤價、夥伴永遠拿不到結算，
+	 * 而且兩邊都「正常運作」、零錯誤訊息（與 Phase 13 `OverridePriceResolver` 同型問題）。
+	 *
+	 * 現在兩個 hook 都委派同一個類別，分歧在結構上不可能發生。本方法只剩兩件事：
+	 * 提供**自己那一套**身分比對 predicate（購物車比的是「被定價的那個物件」，
+	 * 結帳比的是「落進訂單的那筆 line item」，兩者本來就不同），以及把結果轉成
+	 * 既有呼叫端期待的陣列形狀。
+	 *
 	 * @param array<string, mixed> $item    cart item（session 陣列或 cart_contents 皆可）
 	 * @param \WC_Product|null     $product 該筆 cart item 自己的商品實例；v3 用來與陣列欄位交叉比對
 	 *
 	 * @return array{price: string, regular: string|null, sale: string|null}|null 驗章不過回 null
 	 */
 	private function verify_item( array $item, ?\WC_Product $product = null ): ?array {
-		$signature = isset( $item[ self::META_SIGNATURE ] ) ? (string) $item[ self::META_SIGNATURE ] : '';
-		$version   = $this->signatures->payload_version( $signature );
-
-		if ( null === $version ) {
-			return null;
-		}
-
-		// v1 只有 4 筆 meta；v2 / v3 另需 regular + sale。
-		// v3 **不新增任何 meta**——商品身分取自 cart item 的原生 product_id / variation_id 欄位。
-		if ( ! $this->has_all_profit_meta( $item, 'v1' !== $version ) ) {
-			return null;
-		}
-
-		$shop_id         = (int) $item[ self::META_SHOP_ID ];
-		$partner_term_id = (int) $item[ self::META_PARTNER_TERM_ID ];
-		// J-2 必修：verify 端必須與 sign 端用同一 normalize 形式比對，避免格式漂移造成靜默 fallback。
-		$price = self::normalize_price_for_signature( (string) $item[ self::META_PRICE_OVERRIDE ] );
-
-		if ( 'v1' === $version ) {
-			// 🔴 v1 legacy 相容路徑：v1 payload 從未包含 regular/sale，簽章也就沒有保護過它們。
-			// 即使 cart_item 上出現這兩筆 meta（可能是攻擊者注入），一律**忽略**，只套 price。
-			// 這裡刻意不把「有 regular meta 的 v1 cart」判成 tampering——那會讓改版前的
-			// 合法舊購物車在某些 plugin 順手加 meta 的情況下被誤殺、分潤價靜默消失。
-			if ( ! $this->signatures->verify( $shop_id, $partner_term_id, $price, $signature ) ) {
-				return null;
-			}
-
-			return [
-				'price'   => $price,
-				'regular' => null,
-				'sale'    => null,
-			];
-		}
-
-		$regular = (string) $item[ self::META_REGULAR_OVERRIDE ];
-		$sale    = (string) $item[ self::META_SALE_OVERRIDE ];
-
-		if ( 'v2' === $version ) {
-			/*
-			* 🔴 v2 payload 從未包含商品身分，簽章沒有保護過它 ⇒ 這裡**不做**任何 id 比對。
-			* 與 v1 忽略 regular/sale 是同一條紀律：舊版本只驗它自己簽過的欄位。
-			*
-			* 「那為什麼不順手也比對一次？」——v2 能拿來比對的兩個來源（cart 陣列欄位、
-			* cart 物件）都在攻擊者的同一個控制面內，比對**零安全增益**；反而會把
-			* 「陣列欄位與物件因任何第三方外掛而暫時不一致」的既有購物車誤殺。
-			* 這是已知且刻意保留的縱深防禦缺口（TD-58 對 v2 仍成立），代價是不誤傷既有購物車。
-			*/
-			if ( ! $this->signatures->verify( $shop_id, $partner_term_id, $price, $signature, $regular, $sale ) ) {
-				return null;
-			}
-
-			return [
-				'price'   => $price,
-				'regular' => $regular,
-				'sale'    => $sale,
-			];
-		}
-
-		// ===== v3：簽章綁定商品身分 =====
-		$cart_product_id   = isset( $item['product_id'] ) ? (int) $item['product_id'] : 0;
-		$cart_variation_id = isset( $item['variation_id'] ) ? (int) $item['variation_id'] : 0;
-
-		if ( $cart_product_id <= 0 ) {
-			// v3 必須有身分，缺了就 fail-closed（不退回 v2 語意——那等於自願降級）。
-			return null;
-		}
-
 		/*
-		* 交叉比對：cart item 的**陣列欄位** vs **實際被定價的那個物件**。
+		* 身分比對 predicate（只有 v3 會被呼叫，見 CartProfitMetaVerifier）：
+		* cart item 的**陣列欄位** vs **實際被定價的那個物件**。
 		*
 		* WooCommerce 自己是用 `wc_get_product( $values['variation_id'] ? $values['variation_id']
 		* : $values['product_id'] )` 建出 cart_contents['data']
 		* （includes/class-wc-cart-session.php 的 get_cart_from_session()），正常路徑必然一致；
 		* 但授權現在決定「不可購買的商品變不變成可購買」，不該把一致性當成外部保證。
+		*
+		* ⚠️ `$product` 為 null 時傳 null predicate（= 不比對），與重構前
+		* `if ( $product instanceof \WC_Product )` 的守門逐字等價：session restore 階段
+		* 拿不到物件，此時身分仍受 v3 簽章的 HMAC 保護。
 		*/
-		if ( $product instanceof \WC_Product ) {
-			$expected_target = $cart_variation_id > 0 ? $cart_variation_id : $cart_product_id;
+		$identity_matches = null;
 
-			if ( (int) $product->get_id() !== $expected_target ) {
-				return null;
-			}
+		if ( $product instanceof \WC_Product ) {
+			$identity_matches = static function ( int $product_id, int $variation_id ) use ( $product ): bool {
+				$expected_target = $variation_id > 0 ? $variation_id : $product_id;
+				return (int) $product->get_id() === $expected_target;
+			};
 		}
 
-		if ( ! $this->signatures->verify(
-			$shop_id,
-			$partner_term_id,
-			$price,
-			$signature,
-			$regular,
-			$sale,
-			$cart_product_id,
-			$cart_variation_id
-		) ) {
+		$verified = $this->verifier->verify( $item, $identity_matches );
+
+		if ( null === $verified ) {
 			return null;
 		}
 
+		// v1 的 regular / sale 是 null（該版本從未簽過這兩欄），原樣傳遞：
+		// apply_prices_to_product() 靠 null 判斷「完全不動商品原本的原價 / 特價」。
 		return [
-			'price'   => $price,
-			'regular' => $regular,
-			'sale'    => $sale,
+			'price'   => $verified->price,
+			'regular' => $verified->regular,
+			'sale'    => $verified->sale,
 		];
 	}
 
@@ -1306,29 +1251,6 @@ final class CartPriceOverrideHook {
 	}
 
 	/**
-	 * 檢查 cart_item 是否完整含必備的 _profit_* meta
-	 *
-	 * ⚠️ regular / sale 兩筆 meta **依簽章版本條件必填**，不可無條件必填：
-	 * 改版前寫入的 v1 cart_item 只有 4 筆 meta，判成必填會讓**所有既有購物車**
-	 * 一次被當成 tampering → strip + reset → 分潤價靜默消失。
-	 *
-	 * @param array<string, mixed> $item        cart_item
-	 * @param bool                 $require_v2  是否額外要求 v2 / v3 專屬的 regular / sale meta
-	 *
-	 * @return bool 完整為 true
-	 */
-	private function has_all_profit_meta( array $item, bool $require_v2 ): bool {
-		$required = $require_v2 ? self::META_KEYS_ALL : self::META_KEYS_BASE;
-
-		foreach ( $required as $key ) {
-			if ( ! isset( $item[ $key ] ) ) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	/**
 	 * 移除 cart_item 上的所有 _profit_* meta（驗章失敗時讓商品退回原價）
 	 *
 	 * @param \WC_Cart $cart cart 實例
@@ -1395,8 +1317,10 @@ final class CartPriceOverrideHook {
 	 * @return string 標準化後的價格字串
 	 */
 	private static function normalize_price_for_signature( string $price ): string {
-		// wc_format_decimal 第二參數空字串 = 走 number_format 分支（補足預設小數位）
-		return (string) \wc_format_decimal( $price, '' );
+		// 🔴 委派給驗章器，不在這裡重寫一份：sign 端（本 hook）與 verify 端
+		// （CartProfitMetaVerifier）只要 normalize 形式差一個字元，驗章就會恆失敗，
+		// 而症狀是「分潤價靜默消失」。兩份實作靠人維持一致正是本次重構要消滅的東西。
+		return CartProfitMetaVerifier::normalize_price( $price );
 	}
 
 	/**

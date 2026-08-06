@@ -42,8 +42,8 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 	 * Order itemmeta keys
 	 *
 	 * 註：_override_regular_price / _override_sale_price / _override_signup_fee 為 write-only，
-	 * 由 Phase 4 OrderHooks 在訂單建立時填入，本 Repository 不直接讀回 Entity（spec §2.5）。
-	 * 暫不刪除常數宣告，待 Phase 4 接管後直接套用。
+	 * 由 `save_to_item()`（結帳建立 line item 時）填入，本 Repository 不直接讀回 Entity
+	 * （spec §2.5）——它們是給站長 / 對帳查核用的快照，不參與任何計算。
 	 */
 	private const META_SHOP_ID           = '_profit_shop_id';
 	private const META_PARTNER_TERM_ID   = '_profit_partner_term_id';
@@ -56,6 +56,30 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 	private const META_SETTLEMENT_STATUS = '_settlement_status';
 	private const META_SETTLED_AT        = '_settled_at';
 	private const META_SETTLED_BY        = '_settled_by';
+
+	/**
+	 * 唯一納入結算查詢的訂單型別
+	 *
+	 * 🔴 少了這道過濾，**訂閱商品的分潤金額會直接翻倍**。
+	 *
+	 * 成因：訂閱商品結帳後，`_profit_*` 這組 line item meta 會**同時存在於**
+	 * parent order（`shop_order`）與 `shop_subscription` 兩筆記錄上；而
+	 * `shop_subscription` 的狀態（`wc-active` / `wc-on-hold` / `wc-pending-cancel`）
+	 * **完全不在** EXCLUDED_ORDER_STATUSES 內 ⇒ 兩筆都會被撈進來、金額 ×2。
+	 *
+	 * ⚠️ 這個缺陷在 2026-08 之前不發作，只因為**沒有任何程式碼會寫入這些 meta**
+	 *    （`OrderLineItemSettlementHook` 是第一個寫入端）；結帳寫入一上線就會立刻引爆。
+	 *
+	 * HPOS 用 `wc_orders.type`、legacy 用 `posts.post_type`，兩邊值都是 `shop_order`。
+	 *
+	 * 🔴 **public 是刻意的**：`WpSettlementSummaryProvider`（夥伴報表的 KPI / trend /
+	 * settlements 三段 SQL）必須用**完全相同**的值過濾，否則會出現「後台結算頁只算一次、
+	 * 夥伴自己的報表卻算兩次」這種兩邊各自都『正常運作』的分歧。共用同一個常數讓那種
+	 * 漂移在結構上不可能發生——這也是為什麼**不要**在別的類別裡另外寫一份 `'shop_order'`。
+	 *
+	 * @var string
+	 */
+	public const ORDER_POST_TYPE = 'shop_order';
 
 	/**
 	 * 排除於結算查詢的訂單狀態清單
@@ -186,6 +210,75 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 	}
 
 	/**
+	 * 把結算快照寫進**尚未儲存**的 WC_Order_Item（結帳建立 line item 時的唯一寫入出口）
+	 *
+	 * ═══ 為什麼需要與 save() 並存的第二條寫入路徑 ═══
+	 *
+	 * `save()` 走 `wc_update_order_item_meta()`，前提是 order item **已經有 ID**。
+	 * 但結帳時唯一同時拿得到「cart item 的 _profit_* meta」與「對應 line item」的擴充點是
+	 * `woocommerce_checkout_create_order_line_item`（WooCommerce 10.1.4：
+	 * includes/class-wc-checkout.php:571），而它觸發時 `$order->add_item( $item )` **還沒執行**
+	 * （下一行才執行），`$item->get_id()` 恆為 0 ⇒ `wc_update_order_item_meta()` 無處可寫。
+	 *
+	 * 因此這條路徑改用 `WC_Order_Item::add_meta_data()`——WooCommerce 自己在同一個方法內
+	 * 也是這樣做的（`$item->set_backorder_meta()`），meta 會在 `$order->save()` 時一併落地。
+	 *
+	 * 🔴 這個方法存在的**真正理由是收斂 meta key**：cart 端與 order 端的命名不同
+	 * （`_profit_price_override` → `_actual_price`、`_profit_regular_price_override`
+	 * → `_override_regular_price`…），把 key 名稱留在 Repository 內，呼叫端就不可能寫錯對映。
+	 * 對映表見 `OrderLineItemSettlementHook` 的 class docblock。
+	 *
+	 * ⚠️ 本方法**忽略** `$record->order_item_id`（此刻必為 0，item 尚未儲存）——
+	 *    真正的 ID 由 WooCommerce 在 `$order->save()` 時決定。
+	 *
+	 * ⚠️ `_settled_at` / `_settled_by` 為 null 時**不寫入**，與 `save()` 的「null ⇒ delete」
+	 *    等價：`find_by_order_item()` 對缺鍵與空字串都還原成 null。
+	 *
+	 * 🔴 `add_meta_data( ..., true )` 的 `$unique = true` **不可省略**。
+	 * Store API 的 `update_line_items_from_cart()`（src/StoreApi/Utilities/OrderController.php:786）
+	 * 在 cart hash 變動時會 `remove_order_items( 'line_item' )` 後重建，同一張草稿單可能觸發多次。
+	 * 少了 unique 旗標會累積重複 meta，而 `WpSettlementSummaryProvider` 的三段 SQL 都假設
+	 * `_settlement_status` 是 **1:1 INNER JOIN**（該檔 :226 自己註明）
+	 * ⇒ 重複 meta 會讓夥伴分潤金額**直接翻倍**。
+	 *
+	 * 🔴 本方法**不可**加進 `SettlementRepositoryInterface`：Domain 層不得出現
+	 * `WC_Order_Item_Product` 型別，加了會讓 `tests/Unit/**`（不啟 WP）直接 fatal。
+	 *
+	 * @param \WC_Order_Item_Product $item                尚未儲存的 order line item
+	 * @param SettlementRecord       $record              結算快照（order_item_id 會被忽略）
+	 * @param string                 $override_regular    覆寫原價；'' 表示未覆寫
+	 * @param string                 $override_sale       覆寫特價；'' 表示無特價
+	 * @param string                 $override_signup     覆寫註冊費（訂閱專用）；'' 表示未覆寫
+	 *
+	 * @return void
+	 */
+	public function save_to_item(
+		\WC_Order_Item_Product $item,
+		SettlementRecord $record,
+		string $override_regular,
+		string $override_sale,
+		string $override_signup
+	): void {
+		$item->add_meta_data( self::META_SHOP_ID, $record->shop_id, true );
+		$item->add_meta_data( self::META_PARTNER_TERM_ID, $record->partner_term_id, true );
+		$item->add_meta_data( self::META_RATE, $record->rate->value(), true );
+		$item->add_meta_data( self::META_OVERRIDE_REGULAR, $override_regular, true );
+		$item->add_meta_data( self::META_OVERRIDE_SALE, $override_sale, true );
+		$item->add_meta_data( self::META_OVERRIDE_SIGNUP, $override_signup, true );
+		$item->add_meta_data( self::META_ACTUAL_PRICE, $record->actual_price, true );
+		$item->add_meta_data( self::META_PROFIT_AMOUNT, $record->profit_amount, true );
+		$item->add_meta_data( self::META_SETTLEMENT_STATUS, $record->status, true );
+
+		if ( null !== $record->settled_at ) {
+			$item->add_meta_data( self::META_SETTLED_AT, $record->settled_at, true );
+		}
+
+		if ( null !== $record->settled_by ) {
+			$item->add_meta_data( self::META_SETTLED_BY, $record->settled_by, true );
+		}
+	}
+
+	/**
 	 * 找出某 partner 旗下的結算記錄
 	 *
 	 * @param int            $term_id  Partner term ID
@@ -225,6 +318,10 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 	 * 兩種路徑都使用 $wpdb->prepare + placeholder，不拼 SQL 字串。
 	 * Phase 2 僅實作 LIMIT/OFFSET + status 排除；date 過濾留待 Phase 3。
 	 *
+	 * 🔴 兩條路徑都必須**同時**過濾訂單型別（`ORDER_POST_TYPE`）與訂單狀態。
+	 *    只濾狀態會把 `shop_subscription` 一起撈進來，讓訂閱商品的分潤金額翻倍——
+	 *    完整推導見 `ORDER_POST_TYPE` 常數的 docblock。
+	 *
 	 * @param string         $meta_key   meta key（_profit_partner_term_id 或 _profit_shop_id）
 	 * @param int            $meta_value meta 值
 	 * @param FilterCriteria $criteria   過濾條件（目前僅讀取 page/per_page）
@@ -249,6 +346,7 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 				INNER JOIN {$wpdb->prefix}woocommerce_order_items oi ON oi.order_item_id = oim.order_item_id
 				INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id
 				WHERE oim.meta_key = %s AND oim.meta_value = %s
+				AND o.type = %s
 				AND o.status NOT IN ({$status_placeholders})
 				ORDER BY oim.order_item_id DESC
 				LIMIT %d OFFSET %d";
@@ -258,13 +356,14 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 				INNER JOIN {$wpdb->prefix}woocommerce_order_items oi ON oi.order_item_id = oim.order_item_id
 				INNER JOIN {$wpdb->posts} p ON p.ID = oi.order_id
 				WHERE oim.meta_key = %s AND oim.meta_value = %s
+				AND p.post_type = %s
 				AND p.post_status NOT IN ({$status_placeholders})
 				ORDER BY oim.order_item_id DESC
 				LIMIT %d OFFSET %d";
 		}
 
 		$args = array_merge(
-			[ $meta_key, (string) $meta_value ],
+			[ $meta_key, (string) $meta_value, self::ORDER_POST_TYPE ],
 			self::EXCLUDED_ORDER_STATUSES,
 			[ $per_page, $offset ]
 		);

@@ -195,6 +195,124 @@ final class OrderItemSettlementRepositoryTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 `shop_subscription` 上的 line item 不得被撈進結算查詢
+	 *
+	 * 訂閱商品結帳後，`_profit_*` 這組 line item meta 會**同時存在於** parent order
+	 * （`shop_order`）與 `shop_subscription` 兩筆記錄上。而 `shop_subscription` 的狀態
+	 * （`wc-active` / `wc-on-hold` / `wc-pending-cancel`）**完全不在**
+	 * `EXCLUDED_ORDER_STATUSES` 內 ⇒ 只濾狀態不濾型別的話兩筆都會被撈出來，
+	 * **夥伴的分潤金額直接翻倍**。
+	 *
+	 * ⚠️ 這個缺陷在 2026-08 之前不發作，只因為沒有任何程式碼會寫入這些 meta；
+	 *    `OrderLineItemSettlementHook`（結帳寫入）一上線就會立刻引爆。
+	 *
+	 * ⚠️ 本測試涵蓋的是 **legacy（HPOS 關閉）** 那條 SQL——wp-env 的 `afterStart` 顯式把
+	 *    `woocommerce_custom_orders_table_enabled` 設為 `no`。HPOS 那條分支的同款過濾
+	 *    （`o.type = 'shop_order'`）目前只靠程式碼審查，未被自動化測試覆蓋。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_find_by_partner_excludes_shop_subscription_line_items(): void {
+		$partner_term_id = 4242;
+
+		// (1) 正常訂單（shop_order）的 line item
+		$order_item_id = $this->create_line_item();
+		$this->save_settlement(
+			$order_item_id,
+			[
+				'shop_id'         => 900,
+				'partner_term_id' => $partner_term_id,
+				'rate'            => 20,
+				'actual_price'    => '500.00',
+				'profit_amount'   => '100.00',
+				'status'          => SettlementRecord::STATUS_PENDING,
+			]
+		);
+
+		// (2) shop_subscription 上帶著同一組 meta 的 line item（WooCommerce Subscriptions 的真實行為）
+		$subscription_item_id = $this->create_subscription_line_item();
+		$this->save_settlement(
+			$subscription_item_id,
+			[
+				'shop_id'         => 900,
+				'partner_term_id' => $partner_term_id,
+				'rate'            => 20,
+				'actual_price'    => '500.00',
+				'profit_amount'   => '100.00',
+				'status'          => SettlementRecord::STATUS_PENDING,
+			]
+		);
+
+		/*
+		* 🔴 反假綠燈的前置檢查：證明訂閱那一筆**確實有完整可讀的結算 meta**。
+		*
+		* 少了這一行，本測試在「fixture 根本沒寫進資料」時也會通過（撈到 1 筆），
+		* 於是 SQL 過濾即使被拿掉也永遠綠燈。加上它之後，唯一能讓 find_by_partner()
+		* 只回 1 筆的原因就只剩「訂單型別過濾生效」——`wc-active` 不在
+		* EXCLUDED_ORDER_STATUSES 內，狀態過濾攔不住它。
+		*/
+		$this->assertInstanceOf(
+			SettlementRecord::class,
+			$this->repo->find_by_order_item( $subscription_item_id ),
+			'前置檢查：訂閱那筆 line item 的結算 meta 應該是寫得進、讀得出的'
+		);
+
+		$found = $this->repo->find_by_partner( $partner_term_id, new FilterCriteria() );
+
+		$this->assertCount(
+			1,
+			$found,
+			'只能撈到 shop_order 那一筆；連 shop_subscription 一起撈會讓分潤金額翻倍'
+		);
+		$this->assertSame( $order_item_id, $found[0]->order_item_id );
+	}
+
+	/**
+	 * 同一條過濾也必須作用於 find_by_shop()
+	 *
+	 * 兩個 public 方法共用 `query_order_item_ids()`，但只鎖其中一個等於留了半扇門——
+	 * 站長端的賣場報表會看到翻倍金額。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_find_by_shop_excludes_shop_subscription_line_items(): void {
+		$shop_id = 901;
+
+		$order_item_id = $this->create_line_item();
+		$this->save_settlement(
+			$order_item_id,
+			[
+				'shop_id'         => $shop_id,
+				'partner_term_id' => 4243,
+				'rate'            => 10,
+				'actual_price'    => '200.00',
+				'profit_amount'   => '20.00',
+				'status'          => SettlementRecord::STATUS_PENDING,
+			]
+		);
+
+		$subscription_item_id = $this->create_subscription_line_item();
+		$this->save_settlement(
+			$subscription_item_id,
+			[
+				'shop_id'         => $shop_id,
+				'partner_term_id' => 4243,
+				'rate'            => 10,
+				'actual_price'    => '200.00',
+				'profit_amount'   => '20.00',
+				'status'          => SettlementRecord::STATUS_PENDING,
+			]
+		);
+
+		$found = $this->repo->find_by_shop( $shop_id, new FilterCriteria() );
+
+		$this->assertCount( 1, $found );
+		$this->assertSame( $order_item_id, $found[0]->order_item_id );
+	}
+
+	/**
 	 * 確認 OrderUtil 已載入（HPOS 工具 class 存在），證明測試在 WC HPOS 相容環境執行
 	 *
 	 * 真正的 HPOS 開關差異交給 CI matrix（with-wc-classic / with-wc-hpos）兩種情境跑同一份測試。
@@ -239,6 +357,71 @@ final class OrderItemSettlementRepositoryTest extends TestCase {
 		$order->save();
 
 		$this->assertGreaterThan( 0, $item_id, '建立 WC line item 失敗' );
+
+		return (int) $item_id;
+	}
+
+	/**
+	 * 建立一筆掛在 `shop_subscription` 底下的 line item，回傳 order_item_id
+	 *
+	 * 站台沒有安裝 WooCommerce Subscriptions（`.wp-env.json` 的 plugins 清單不含它），
+	 * 所以 `shop_subscription` post type 與 `wc-active` post status 都沒有被註冊。
+	 * 但受測的是**直接讀 DB 的 SQL**，真正重要的是 `wp_posts` 那一列的
+	 * `post_type` / `post_status` 欄位值——因此建立後用 `$wpdb->update()` 直接把兩個欄位
+	 * 寫成訂閱的樣子，避開 `wp_insert_post()` 對未註冊型別 / 狀態可能做的正規化。
+	 *
+	 * `wc-active` 刻意選用：它**不在** `EXCLUDED_ORDER_STATUSES` 內，
+	 * 所以只靠狀態過濾一定攔不住——這正是本測試要鎖的缺口。
+	 *
+	 * @return int order_item_id
+	 */
+	private function create_subscription_line_item(): int {
+		global $wpdb;
+
+		$subscription_id = \wp_insert_post(
+			[
+				'post_title'  => '訂閱測試',
+				'post_status' => 'draft',
+				'post_type'   => 'post',
+			]
+		);
+
+		$this->assertIsInt( $subscription_id );
+		$this->assertGreaterThan( 0, $subscription_id, '建立訂閱 post 失敗' );
+
+		$wpdb->update( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$wpdb->posts,
+			[
+				'post_type'   => 'shop_subscription',
+				'post_status' => 'wc-active',
+			],
+			[ 'ID' => $subscription_id ]
+		);
+		\clean_post_cache( $subscription_id );
+
+		// 確認 DB 那一列真的長成訂閱的樣子——受測的 SQL 讀的就是這兩個欄位
+		$row = $wpdb->get_row( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$wpdb->prepare( "SELECT post_type, post_status FROM {$wpdb->posts} WHERE ID = %d", $subscription_id ),
+			ARRAY_A
+		);
+
+		$this->assertSame( 'shop_subscription', $row['post_type'] ?? '' );
+		$this->assertSame( 'wc-active', $row['post_status'] ?? '' );
+		$this->assertNotContains(
+			'wc-active',
+			[ 'trash', 'wc-trash', 'wc-failed', 'wc-cancelled', 'failed', 'cancelled', 'auto-draft' ],
+			'前提：wc-active 不在 EXCLUDED_ORDER_STATUSES 內，所以狀態過濾攔不住訂閱'
+		);
+
+		$item_id = \wc_add_order_item(
+			$subscription_id,
+			[
+				'order_item_name' => '訂閱測試品項',
+				'order_item_type' => 'line_item',
+			]
+		);
+
+		$this->assertGreaterThan( 0, (int) $item_id, '建立訂閱 line item 失敗' );
 
 		return (int) $item_id;
 	}

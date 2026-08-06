@@ -20,7 +20,15 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Entity\SettlementRecord;
  *   - 以 wc_order_itemmeta JOIN 自身（多次 alias）取出 partner / amount / status / actual_price / shop_id
  *   - INNER JOIN wc_orders（HPOS）或 wp_posts（legacy）取得訂單狀態與日期
  *   - WHERE partner_term_id = %d（鎖死在 prepared statement 第一條件）
+ *   - 訂單型別 = OrderItemSettlementRepository::ORDER_POST_TYPE（過濾 shop_subscription，見下）
  *   - 訂單狀態 NOT IN EXCLUDED_ORDER_STATUSES（過濾 cancelled/failed/trash/auto-draft）
+ *
+ * 🔴 三段 SQL（KPI / trend / settlements）**都必須**同時過濾訂單型別與訂單狀態。
+ *    只濾狀態會讓**夥伴看到的報表金額直接 ×2**：訂閱商品結帳後，`_profit_*` 這組
+ *    line item meta 會同時存在於 parent order（`shop_order`）與 `shop_subscription`
+ *    兩筆記錄上，而 `shop_subscription` 的狀態（`wc-active` / `wc-on-hold` /
+ *    `wc-pending-cancel`）完全不在 EXCLUDED_ORDER_STATUSES 內 ⇒ 兩筆都被撈進來。
+ *    完整推導見 `OrderItemSettlementRepository::ORDER_POST_TYPE` 的 docblock。
  *   - settlement status filter 走白名單比對（VALID_SETTLEMENT_STATUSES）
  *   - shop_ids 強制 intval cast（絕不允許字串進 SQL）
  *   - date range 以 DATETIME 字串 + prepare %s 注入
@@ -137,6 +145,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 		: "INNER JOIN {$wpdb->posts} o ON o.ID = oi.order_id";
 
 		$order_status_col = $is_hpos ? 'o.status' : 'o.post_status';
+		$order_type_col   = $is_hpos ? 'o.type' : 'o.post_type';
 
 		$status_placeholders = implode( ',', array_fill( 0, count( self::EXCLUDED_ORDER_STATUSES ), '%s' ) );
 
@@ -158,6 +167,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 				AND oim_actual.meta_key = %s
 			WHERE oim_partner.meta_key = %s
 				AND oim_partner.meta_value = %d
+				AND {$order_type_col} = %s
 				AND {$order_status_col} NOT IN ({$status_placeholders})
 				{$where_extra_sql}
 			GROUP BY oim_st.meta_value";
@@ -169,6 +179,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 				self::META_ACTUAL_PRICE,
 				self::META_PARTNER_TERM_ID,
 				$partner_term_id,
+				OrderItemSettlementRepository::ORDER_POST_TYPE,
 			],
 			self::EXCLUDED_ORDER_STATUSES,
 			$where_extra_args
@@ -256,6 +267,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 		: "INNER JOIN {$wpdb->posts} o ON o.ID = oi.order_id";
 
 		$order_status_col = $is_hpos ? 'o.status' : 'o.post_status';
+		$order_type_col   = $is_hpos ? 'o.type' : 'o.post_type';
 		$order_date_col   = $is_hpos ? 'o.date_created_gmt' : 'o.post_date_gmt';
 
 		$status_placeholders = implode( ',', array_fill( 0, count( self::EXCLUDED_ORDER_STATUSES ), '%s' ) );
@@ -280,6 +292,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 				AND oim_actual.meta_key = %s
 			WHERE oim_partner.meta_key = %s
 				AND oim_partner.meta_value = %d
+				AND {$order_type_col} = %s
 				AND {$order_status_col} NOT IN ({$status_placeholders})
 				{$where_extra_sql}
 			GROUP BY bucket
@@ -293,6 +306,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 				self::META_ACTUAL_PRICE,
 				self::META_PARTNER_TERM_ID,
 				$partner_term_id,
+				OrderItemSettlementRepository::ORDER_POST_TYPE,
 			],
 			self::EXCLUDED_ORDER_STATUSES,
 			$where_extra_args
@@ -346,6 +360,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 		: "INNER JOIN {$wpdb->posts} o ON o.ID = oi.order_id";
 
 		$order_status_col = $is_hpos ? 'o.status' : 'o.post_status';
+		$order_type_col   = $is_hpos ? 'o.type' : 'o.post_type';
 
 		$status_placeholders = implode( ',', array_fill( 0, count( self::EXCLUDED_ORDER_STATUSES ), '%s' ) );
 
@@ -378,6 +393,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 				AND oim_shop.meta_key = %s
 			WHERE oim_partner.meta_key = %s
 				AND oim_partner.meta_value = %d
+				AND {$order_type_col} = %s
 				AND {$order_status_col} NOT IN ({$status_placeholders})
 				{$where_extra_sql}
 			ORDER BY oi.order_item_id DESC
@@ -391,6 +407,7 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 				self::META_SHOP_ID,
 				self::META_PARTNER_TERM_ID,
 				$partner_term_id,
+				OrderItemSettlementRepository::ORDER_POST_TYPE,
 			],
 			self::EXCLUDED_ORDER_STATUSES,
 			$where_extra_args,

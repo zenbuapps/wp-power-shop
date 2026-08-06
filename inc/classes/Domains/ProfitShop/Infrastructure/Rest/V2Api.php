@@ -11,10 +11,13 @@ use J7\PowerShop\Domains\ProfitShop\Application\DTO\ChangePasswordInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\PartnerLoginInput;
 use J7\PowerShop\Domains\ProfitShop\Application\DTO\ProfitShopInput;
+use J7\PowerShop\Domains\ProfitShop\Application\DTO\SettlementFilterInput;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\CsvExporter;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\ItemValidator;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\LoginRateLimiter;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PartnerAuthService;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PartnerTokenStore;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\SettlementAuditRecorder;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\SlugConflictDetector;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Migration\ImportLegacyShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Migration\ListImportableLegacyShops;
@@ -32,6 +35,13 @@ use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\GetPartne
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\GetPartnerTrendUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\ListPartnerSettlementsUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\UpdatePartner;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\ExportSettlementsUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\GetSettlementSummaryUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\ListSettlementOrderIdsUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\ListSettlementsUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\MarkSettlementsCancelledUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\MarkSettlementsPaidUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\ReversePaidSettlementsUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\CreateShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\DeleteShop;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Shop\DuplicateShop;
@@ -45,7 +55,11 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Criteria\FilterCriteria;
 use J7\PowerShop\Domains\ProfitShop\Domain\Exception\InvalidCredentials;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\LegacyOnePageShopRepository;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\OrderItemSettlementRepository;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\PartnerSettledLogRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\PartnerTermRepository;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpAdminSettlementQuery;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementStatusMutator;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementSummaryProvider;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\SystemClock;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpAdminEmailNotifier;
@@ -213,6 +227,53 @@ final class V2Api extends ApiBase {
 			[
 				'endpoint' => 'profit-partners/(?P<id>\d+)',
 				'method' => 'delete',
+				'permission_callback' => $admin_only,
+			],
+			// §4.3 profit-settlements（後台結算頁）
+			//
+			// 🔴 七個端點**一律** admin_only（manage_options），連唯讀的列表 / 摘要也是。
+			// 規格 query-settlements.feature 與 export-settlements-csv.feature 都明文斷言
+			// 「僅具商店管理權限」→ 403。理由寫在 feature 檔頭：結算頁緊鄰「標記已撥款」
+			// 這個不可逆的金流動作，讓 shop_manager 看得到卻按不了按鈕只會讓人繞路
+			// （截圖、口頭轉述金額），整頁收在 manage_options 才是一致的邊界。
+			// ⚠️ 這比 spec §6.1 的 manage_woocommerce 嚴格；兩份文件不一致時以 feature 為準
+			// （後者較新，且是可執行的驗收條件）。
+			// 三個 mutation 另外要求 X-WP-Nonce：capability 擋「你是誰」、nonce 擋
+			// 「這個請求是不是你自己發的」，兩者防的不是同一件事。
+			[
+				'endpoint' => 'profit-settlements',
+				'method' => 'get',
+				'permission_callback' => $admin_only,
+			],
+			[
+				'endpoint' => 'profit-settlements/summary',
+				'method' => 'get',
+				'permission_callback' => $admin_only,
+			],
+			// D-6：訂單列表「分潤賣場」過濾用（WC REST orders 無法依 order item meta 篩選）
+			[
+				'endpoint' => 'profit-settlements/order-ids',
+				'method' => 'get',
+				'permission_callback' => $admin_only,
+			],
+			[
+				'endpoint' => 'profit-settlements/export',
+				'method' => 'post',
+				'permission_callback' => $admin_only,
+			],
+			[
+				'endpoint' => 'profit-settlements/mark-paid',
+				'method' => 'post',
+				'permission_callback' => $admin_only,
+			],
+			[
+				'endpoint' => 'profit-settlements/mark-cancelled',
+				'method' => 'post',
+				'permission_callback' => $admin_only,
+			],
+			[
+				'endpoint' => 'profit-settlements/reverse-paid',
+				'method' => 'post',
 				'permission_callback' => $admin_only,
 			],
 			// §4.7 profit-migration
@@ -1210,6 +1271,301 @@ final class V2Api extends ApiBase {
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}
+	}
+
+	// ========== §4.3 profit-settlements callbacks ==========
+
+	/**
+	 * GET /profit-settlements
+	 *
+	 * 對應規格：specs/2026-05-06-profit-shop-design.md §3.5、§4.3
+	 *
+	 * Query string：partner_id / shop_id / status（皆可複數或逗號分隔）、
+	 * date_start / date_end（unix timestamp）、page / per_page。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_profit_settlements_callback( $request ): \WP_REST_Response {
+		try {
+			$filter = self::read_settlement_filter( $request );
+
+			$useCase = new ListSettlementsUseCase( query: WpAdminSettlementQuery::instance() );
+			$output  = $useCase->execute( $filter );
+
+			return self::ok( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /profit-settlements/order-ids
+	 *
+	 * 決策 D-6：WooCommerce REST 的 `orders` 端點無法依 order item meta 篩選，
+	 * 前端得先向本端點取回 order_id 陣列，再當成 `wc-rest` 的 `include` filter 送出。
+	 *
+	 * ⚠️ 回應的 `truncated` 為 true 時前端**必須**提示站長縮小範圍——
+	 * 靜默截斷會讓他直接得出「這個賣場只有這幾張訂單」的錯誤結論。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_profit_settlements_order_ids_callback( $request ): \WP_REST_Response {
+		try {
+			$filter = self::read_settlement_filter( $request );
+
+			$params = WP::sanitize_text_field_deep( $request->get_query_params(), false );
+			$limit  = ( is_array( $params ) && isset( $params['limit'] ) ) ? (int) $params['limit'] : null;
+
+			$useCase = new ListSettlementOrderIdsUseCase( query: WpAdminSettlementQuery::instance() );
+			$output  = $useCase->execute( $filter, $limit );
+
+			return self::ok( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /profit-settlements/summary
+	 *
+	 * 摘要卡與列表吃同一組過濾條件（見 GetSettlementSummaryUseCase docblock）。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_profit_settlements_summary_callback( $request ): \WP_REST_Response {
+		try {
+			$filter = self::read_settlement_filter( $request );
+
+			$useCase = new GetSettlementSummaryUseCase( query: WpAdminSettlementQuery::instance() );
+			$output  = $useCase->execute( $filter );
+
+			return self::ok( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * POST /profit-settlements/mark-paid
+	 *
+	 * Body：`{ "order_item_ids": [123, 456] }`
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_profit_settlements_mark_paid_callback( $request ): \WP_REST_Response {
+		$nonce_error = self::admin_nonce_error( $request );
+		if ( null !== $nonce_error ) {
+			return $nonce_error;
+		}
+
+		try {
+			$useCase = new MarkSettlementsPaidUseCase(
+				settlements: OrderItemSettlementRepository::instance(),
+				mutator: WpSettlementStatusMutator::instance(),
+				auditor: self::make_settlement_audit_recorder(),
+				clock: SystemClock::instance(),
+			);
+
+			$output = $useCase->execute(
+				self::read_order_item_ids( $request ),
+				\get_current_user_id()
+			);
+
+			return self::ok( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * POST /profit-settlements/mark-cancelled
+	 *
+	 * Body：`{ "order_item_ids": [123, 456] }`
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_profit_settlements_mark_cancelled_callback( $request ): \WP_REST_Response {
+		$nonce_error = self::admin_nonce_error( $request );
+		if ( null !== $nonce_error ) {
+			return $nonce_error;
+		}
+
+		try {
+			$useCase = new MarkSettlementsCancelledUseCase(
+				settlements: OrderItemSettlementRepository::instance(),
+				mutator: WpSettlementStatusMutator::instance(),
+				auditor: self::make_settlement_audit_recorder(),
+			);
+
+			$output = $useCase->execute(
+				self::read_order_item_ids( $request ),
+				\get_current_user_id()
+			);
+
+			return self::ok( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * POST /profit-settlements/reverse-paid
+	 *
+	 * 人工沖回（paid → refunded）。Body：`{ "order_item_ids": [123, 456] }`
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_profit_settlements_reverse_paid_callback( $request ): \WP_REST_Response {
+		$nonce_error = self::admin_nonce_error( $request );
+		if ( null !== $nonce_error ) {
+			return $nonce_error;
+		}
+
+		try {
+			$useCase = new ReversePaidSettlementsUseCase(
+				settlements: OrderItemSettlementRepository::instance(),
+				mutator: WpSettlementStatusMutator::instance(),
+				auditor: self::make_settlement_audit_recorder(),
+			);
+
+			$output = $useCase->execute(
+				self::read_order_item_ids( $request ),
+				\get_current_user_id()
+			);
+
+			return self::ok( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * POST /profit-settlements/export
+	 *
+	 * 匯出**整個篩選結果**（不只當前頁）為 CSV，回應仍是 `{code, data}` 包裝，
+	 * `data.content` 是 CSV 全文（含 UTF-8 BOM），由前端 Blob 下載。
+	 * 理由見 SettlementExportOutput docblock。
+	 *
+	 * 過濾條件走 body（條件較長，且 partner / shop 多選會讓 query string 過長）。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function post_profit_settlements_export_callback( $request ): \WP_REST_Response {
+		try {
+			$body   = self::read_json_body( $request );
+			$filter = SettlementFilterInput::from_array( $body );
+
+			$useCase = new ExportSettlementsUseCase(
+				query: WpAdminSettlementQuery::instance(),
+				csv: new CsvExporter(),
+				clock: SystemClock::instance(),
+			);
+			$output = $useCase->execute( $filter );
+
+			$response = self::ok( $output->to_array() );
+			// 匯出內容含全站分潤金額，不該被任何中介快取留存。
+			$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate' );
+			$response->header( 'Pragma', 'no-cache' );
+
+			return $response;
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	// ========== §4.3 profit-settlements helpers ==========
+
+	/**
+	 * 從 request 讀出結算過濾條件（GET 走 query string、POST 走 body）
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @phpstan-param \WP_REST_Request<array<string, mixed>> $request
+	 *
+	 * @return SettlementFilterInput
+	 */
+	private static function read_settlement_filter( \WP_REST_Request $request ): SettlementFilterInput {
+		$params = WP::sanitize_text_field_deep( $request->get_query_params(), false );
+		if ( ! is_array( $params ) ) {
+			$params = [];
+		}
+
+		return SettlementFilterInput::from_array( $params );
+	}
+
+	/**
+	 * 從 request body 讀出 order_item_ids
+	 *
+	 * 型別正規化（去除非正整數、去重、上限）交給 `SettlementBatchGuard`——
+	 * 那是 Application 層的守門，這裡只負責把值取出來。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @phpstan-param \WP_REST_Request<array<string, mixed>> $request
+	 *
+	 * @return array<int, mixed>
+	 */
+	private static function read_order_item_ids( \WP_REST_Request $request ): array {
+		$body = self::read_json_body( $request );
+		$raw  = $body['order_item_ids'] ?? [];
+
+		if ( ! is_array( $raw ) ) {
+			// 容忍 "1,2,3" 這種送法（有些 HTTP client 不好送陣列）。
+			$raw = is_string( $raw ) ? explode( ',', $raw ) : [ $raw ];
+		}
+
+		return array_values( $raw );
+	}
+
+	/**
+	 * Admin nonce 檢查（CSRF 防禦），不通過時回傳 403 response，通過回 null
+	 *
+	 * 與 regenerate-password / set-password 同一條紀律：capability 擋的是「你是誰」，
+	 * nonce 擋的是「這個請求是不是你自己發的」。撥款端點若少了 nonce，
+	 * 站長開著後台被誘導點一個外部頁面就可能在不知情下把整批款項標記成已撥。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @phpstan-param \WP_REST_Request<array<string, mixed>> $request
+	 *
+	 * @return \WP_REST_Response|null
+	 */
+	private static function admin_nonce_error( \WP_REST_Request $request ): ?\WP_REST_Response {
+		$nonce = (string) $request->get_header( 'x_wp_nonce' );
+		if ( \wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+			return null;
+		}
+
+		return new \WP_REST_Response(
+			[
+				'code'    => 'rest_forbidden',
+				'message' => '缺少有效的 admin nonce',
+			],
+			403
+		);
+	}
+
+	/**
+	 * 建立 SettlementAuditRecorder（production 連 partner termmeta + 系統時鐘）
+	 *
+	 * @return SettlementAuditRecorder
+	 */
+	private static function make_settlement_audit_recorder(): SettlementAuditRecorder {
+		return new SettlementAuditRecorder(
+			log: PartnerSettledLogRepository::instance(),
+			clock: SystemClock::instance(),
+		);
 	}
 
 	// ========== Service factories（poor-man's DI；單元測試直接 new，不走這） ==========

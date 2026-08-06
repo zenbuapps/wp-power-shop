@@ -10,11 +10,16 @@ namespace J7\PowerShop\Domains\ProfitShop;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\CartPriceSignatureService;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PageRateLimitService;
 use J7\PowerShop\Domains\ProfitShop\Domain\Service\OverridePriceResolver;
+use J7\PowerShop\Domains\ProfitShop\Domain\Service\ProfitCalculator;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\OrderItemSettlementRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\AddToCartHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\CartPriceOverrideHook;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\MoneyFormatter;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\OrderLineItemSettlementHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\SingleProductPriceHook;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\WcDecimalRounding;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\PartnerPortalRenderer;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopRenderer;
@@ -51,6 +56,9 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
  *           AddToCartHook(5) → CartPriceOverrideHook(10/999) 的定價鏈路、cart_item 的
  *           `_profit_*` meta 與 HMAC 簽章、以及結算紀錄全部不受任何影響。
  *           真要復原見 git commit `f813e07`。
+ * 2026-08：加上 OrderLineItemSettlementHook——結帳時把驗過章的 cart item `_profit_*` meta
+ *           凍結成 order itemmeta 快照（spec §2.5 / §5.2）。這是整條分潤結算鏈路的第一環，
+ *           在此之前訂單成立後完全沒有分潤紀錄，夥伴報表永遠是空的且無任何錯誤訊息。
  */
 final class Loader {
 
@@ -100,10 +108,13 @@ final class Loader {
 		// 兩邊各自複製一份 fallback chain 曾導致「購物車劃線原價顯示商品原始原價」的分歧。
 		$price_resolver = new OverridePriceResolver();
 
+		// 簽章服務無狀態，cart hook 與結帳 hook 共用同一個實例（sign 端 / verify 端同源）。
+		$signatures = new CartPriceSignatureService( new WpSaltProvider() );
+
 		// Phase 3-D：前台 cart 價格 override hook（最高風險：影響真實訂單金額）
 		CartPriceOverrideHook::instance(
 			CptProfitShopRepository::instance(),
-			new CartPriceSignatureService( new WpSaltProvider() ),
+			$signatures,
 			$price_resolver
 		);
 
@@ -113,5 +124,19 @@ final class Loader {
 			CptProfitShopRepository::instance(),
 			$price_resolver
 		);
+
+		/*
+		* 結帳寫入分潤結算快照（cart item meta → order itemmeta）。
+		*
+		* 掛 `woocommerce_checkout_create_order_line_item`(20)——與上面四個 hook 完全不同的
+		* 擴充點（`woocommerce_add_cart_item_data` 5/10、`woocommerce_before_calculate_totals` 999、
+		* `template_redirect` 20），零衝突。priority 20 的完整理由見該 class 的 docblock。
+		*
+		* 這是整條結算鏈路的第一環：少了它，訂單成立後 wc_order_itemmeta 沒有任何分潤紀錄，
+		* 夥伴報表永遠是空的，而且沒有任何錯誤訊息。
+		*/
+		$rounding = new WcDecimalRounding();
+
+		OrderLineItemSettlementHook::instance( CptProfitShopRepository::instance(), OrderItemSettlementRepository::instance(), $signatures, new ProfitCalculator( $rounding ), new MoneyFormatter( $rounding ) );
 	}
 }

@@ -473,7 +473,14 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 	 *
 	 * 若本機環境不支援動態切換，標 skipped；CI matrix 應跑 with-wc-classic / with-wc-hpos。
 	 *
+	 * ⚠️ `@group happy` 不可移除：PHPUnit 9 的**方法級 `@group` 會取代類別級**，不是疊加。
+	 * 本檔類別級雖標了 `@group security`（在 phpunit.xml.dist 的 include 清單內），
+	 * 但方法級一旦只標 `hpos_compatible`（不在清單內），這條就會被**靜默跳過**——
+	 * 不報錯、不顯示 skipped，只是筆數對不上（22 個方法只跑 20）。
+	 * 本檔的這兩條因此曾長期從未執行，HPOS 分支等同零自動化驗證。
+	 *
 	 * @test
+	 * @group happy
 	 * @group hpos_compatible
 	 */
 	public function test_summary_works_under_hpos_enabled(): void {
@@ -495,7 +502,10 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 	/**
 	 * 驗證在 legacy（HPOS 關閉、posts-based）下仍能正確聚合
 	 *
+	 * ⚠️ `@group happy` 不可移除，理由同上一條方法的 docblock。
+	 *
 	 * @test
+	 * @group happy
 	 * @group hpos_compatible
 	 */
 	public function test_summary_works_under_legacy_post_orders(): void {
@@ -590,6 +600,193 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 	 *   total_sales      = 4995.00
 	 *   profit_paid      = 999.00
 	 */
+
+	/**
+	 * 🔴 三段 SQL 都必須排除 `shop_subscription`，否則夥伴看到的報表金額直接 ×2
+	 *
+	 * 成因：訂閱商品結帳後，`_profit_*` 這組 line item meta 會**同時存在於** parent order
+	 * （`shop_order`）與 `shop_subscription` 兩筆記錄上；而 `shop_subscription` 的狀態
+	 * （`wc-active` / `wc-on-hold` / `wc-pending-cancel`）**完全不在** EXCLUDED_ORDER_STATUSES
+	 * 內 ⇒ 只濾狀態的話兩筆都會被撈進來。
+	 *
+	 * 本測試用**獨立的 partner_term_id**（不在 build_fixture 的資料裡），基線因此精確為 0，
+	 * 「1 筆 vs 2 筆」「100 vs 200」就是這條過濾生不生效的直接指紋。
+	 *
+	 * ⚠️ 三個 public 方法各有一段自己的 SQL，**必須逐一斷言**：只鎖其中一段等於留了兩扇門，
+	 *    而夥伴 portal 的 KPI 卡、趨勢圖、結算明細是三個不同的畫面。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_all_three_queries_exclude_shop_subscription_line_items(): void {
+		$partner_id = 987654;
+		$shop_id    = 902;
+
+		$order_id = $this->create_order_with_settlement(
+			$partner_id,
+			$shop_id,
+			'wc-completed',
+			SettlementRecord::STATUS_PENDING,
+			'500.00',
+			'100.00',
+			'2026-05-10 09:00:00',
+			'subscription_guard_parent'
+		);
+		$order_item_id = $this->item_ids['subscription_guard_parent'];
+
+		// 把訂閱那筆的日期對齊 parent order 的 GMT 日期：若過濾失效，trend 會在**同一個
+		// bucket** 內變成 count=2 / profit=200.00，紅燈形狀最清楚。
+		$parent_date_gmt = $this->read_post_date_gmt( $order_id );
+
+		$subscription_item_id = $this->create_subscription_line_item( $parent_date_gmt );
+		$this->repo->save(
+			new SettlementRecord(
+				order_item_id: $subscription_item_id,
+				shop_id: $shop_id,
+				partner_term_id: $partner_id,
+				rate: new ProfitRate( 20 ),
+				actual_price: '500.00',
+				profit_amount: '100.00',
+				status: SettlementRecord::STATUS_PENDING,
+			)
+		);
+
+		/*
+		* 🔴 反假綠燈保護（二）：證明訂閱那一筆**確實有完整可讀的結算 meta**。
+		*
+		* 少了這一行，本測試在「fixture 根本沒寫進資料」時也會通過（各項都只算到 1 筆），
+		* 於是型別過濾即使被整段拿掉也永遠綠燈。加上它之後，唯一能讓下面三段斷言成立的
+		* 原因就只剩「訂單型別過濾生效」。
+		* （反假綠燈保護（一）在 create_subscription_line_item() 內：直接讀 wp_posts
+		*   斷言該列真的是 post_type='shop_subscription' / post_status='wc-active'。）
+		*/
+		$this->assertInstanceOf(
+			SettlementRecord::class,
+			$this->repo->find_by_order_item( $subscription_item_id ),
+			'前置檢查：訂閱那筆 line item 的結算 meta 應該是寫得進、讀得出的'
+		);
+
+		$criteria = new FilterCriteria();
+
+		// ---- ① KPI（summary_for_partner）----
+		$kpi = $this->provider->summary_for_partner( $partner_id, $criteria );
+
+		$this->assertSame(
+			'100.00',
+			$kpi['profit_pending'],
+			'KPI 待撥款只能算 shop_order 那一筆；連 shop_subscription 一起算會變 200.00（金額 ×2）'
+		);
+		$this->assertSame(
+			'500.00',
+			$kpi['total_sales'],
+			'KPI 總銷售同理，重複計入會變 1000.00'
+		);
+
+		// ---- ② 趨勢（trend_for_partner）----
+		$trend = $this->provider->trend_for_partner( $partner_id, $criteria, 'day' );
+
+		$this->assertCount( 1, $trend, '趨勢只該有一個 bucket（兩筆日期刻意對齊，重複計入不會多一格、只會讓該格翻倍）' );
+		$this->assertSame( 1, $trend[0]['count'], '該 bucket 的筆數重複計入會變 2' );
+		$this->assertSame( '100.00', $trend[0]['profit'], '該 bucket 的分潤重複計入會變 200.00' );
+
+		// ---- ③ 結算明細（find_by_partner）----
+		$list = $this->provider->find_by_partner( $partner_id, $criteria );
+
+		$this->assertCount( 1, $list, '結算明細只能列出 shop_order 那一筆' );
+		$this->assertSame(
+			$order_item_id,
+			$list[0]['order_item_id'],
+			'列出來的必須是 shop_order 的 line item，不是訂閱的那一筆'
+		);
+	}
+
+	/**
+	 * 讀出某筆 post 的 post_date_gmt（trend 分桶依據）
+	 *
+	 * @param int $post_id post ID
+	 *
+	 * @return string `Y-m-d H:i:s`
+	 */
+	private function read_post_date_gmt( int $post_id ): string {
+		global $wpdb;
+
+		$value = $wpdb->get_var( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$wpdb->prepare( "SELECT post_date_gmt FROM {$wpdb->posts} WHERE ID = %d", $post_id )
+		);
+
+		$this->assertIsString( $value, '讀不到 parent order 的 post_date_gmt' );
+
+		return (string) $value;
+	}
+
+	/**
+	 * 建立一筆掛在 `shop_subscription` 上的 line item
+	 *
+	 * WooCommerce Subscriptions 未必安裝於測試環境，因此直接改寫 `wp_posts` 的
+	 * `post_type` / `post_status`——受測的 SQL 讀的就是這兩個欄位，這樣造出的資料
+	 * 與真實訂閱在**過濾的角度上完全等價**。
+	 *
+	 * 🔴 反假綠燈保護（一）：建立後直接讀 `wp_posts` 斷言該列真的長成訂閱的樣子。
+	 * 少了它，若 `$wpdb->update()` 因任何原因沒生效（例如欄位名打錯），這筆就還是
+	 * `shop_order`，測試會在「過濾根本沒生效」的情況下照樣綠燈。
+	 *
+	 * @param string $date_gmt 要套用的 `post_date_gmt`（與 parent order 對齊，供 trend 同 bucket）
+	 *
+	 * @return int order_item_id
+	 */
+	private function create_subscription_line_item( string $date_gmt ): int {
+		global $wpdb;
+
+		$subscription_id = \wp_insert_post(
+			[
+				'post_title'  => '訂閱測試（型別過濾用）',
+				'post_status' => 'draft',
+				'post_type'   => 'post',
+			]
+		);
+
+		$this->assertIsInt( $subscription_id );
+		$this->assertGreaterThan( 0, $subscription_id, '建立訂閱 post 失敗' );
+
+		$wpdb->update( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$wpdb->posts,
+			[
+				'post_type'     => 'shop_subscription',
+				'post_status'   => 'wc-active',
+				'post_date_gmt' => $date_gmt,
+				'post_date'     => $date_gmt,
+			],
+			[ 'ID' => $subscription_id ]
+		);
+		\clean_post_cache( $subscription_id );
+
+		$row = $wpdb->get_row( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$wpdb->prepare( "SELECT post_type, post_status FROM {$wpdb->posts} WHERE ID = %d", $subscription_id ),
+			ARRAY_A
+		);
+
+		$this->assertSame( 'shop_subscription', $row['post_type'] ?? '' );
+		$this->assertSame( 'wc-active', $row['post_status'] ?? '' );
+		$this->assertNotContains(
+			'wc-active',
+			[ 'trash', 'wc-trash', 'wc-failed', 'wc-cancelled', 'failed', 'cancelled', 'auto-draft' ],
+			'前提：wc-active 不在 EXCLUDED_ORDER_STATUSES 內，所以狀態過濾攔不住訂閱'
+		);
+
+		$item_id = \wc_add_order_item(
+			$subscription_id,
+			[
+				'order_item_name' => '訂閱測試品項',
+				'order_item_type' => 'line_item',
+			]
+		);
+
+		$this->assertIsInt( $item_id );
+		$this->assertGreaterThan( 0, $item_id, '建立訂閱 line item 失敗' );
+
+		return (int) $item_id;
+	}
+
 	private function build_fixture(): void {
 		// 1. Partners（profit_partner taxonomy）
 		$this->ensure_partner_taxonomy_exists();
@@ -743,5 +940,216 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 		if ( ! \post_type_exists( 'powershop' ) ) {
 			\register_post_type( 'powershop', [ 'public' => false ] );
 		}
+	}
+
+	// ============================================================
+	// J. 🔴 訂單型別過濾（訂閱物件不得被計入）
+	// ============================================================
+
+	/**
+	 * 在 `shop_subscription` 物件上建立帶 partner_A 分潤 meta 的 line item
+	 *
+	 * 模擬訂閱商品結帳後 `_profit_*` 同時落在主訂單與訂閱物件上的真實情況。
+	 * 直接寫 `wp_posts` / `woocommerce_order_items` 而不用 WCS API——
+	 * WooCommerce Subscriptions 未必在測試環境啟用，但「訂單型別必須被過濾」
+	 * 這條規則與該外掛是否啟用無關。
+	 *
+	 * ⚠️ **反假綠燈保護 1**：本 helper 內直接讀 `wp_posts` 斷言該列真的是
+	 * `post_type='shop_subscription'` / `post_status='wc-active'`。
+	 * 少了它，若 factory 因故建出 `shop_order`，測試會「通過」但測到的是錯的東西。
+	 *
+	 * @param string $profit_amount 分潤金額
+	 * @param string $status        結算狀態
+	 *
+	 * @return int order_item_id
+	 */
+	private function seed_subscription_line_item( string $profit_amount = '200.00', string $status = 'pending' ): int {
+		global $wpdb;
+
+		$subscription_id = self::factory()->post->create(
+			[
+				'post_type'   => 'shop_subscription',
+				'post_status' => 'wc-active',
+			]
+		);
+
+		// 反假綠燈保護 1：確認 fixture 真的是訂閱物件而不是普通訂單
+		$row = $wpdb->get_row(
+			$wpdb->prepare( "SELECT post_type, post_status FROM {$wpdb->posts} WHERE ID = %d", $subscription_id ),
+			\ARRAY_A
+		);
+		$this->assertIsArray( $row, 'fixture 應建立成功' );
+		$this->assertSame( 'shop_subscription', $row['post_type'], 'fixture 必須真的是 shop_subscription' );
+		$this->assertSame( 'wc-active', $row['post_status'], 'wc-active 刻意不在 EXCLUDED_ORDER_STATUSES 內——這正是缺陷成因' );
+
+		$wpdb->insert(
+			$wpdb->prefix . 'woocommerce_order_items',
+			[
+				'order_item_name' => '訂閱物件上的分潤品項',
+				'order_item_type' => 'line_item',
+				'order_id'        => $subscription_id,
+			],
+			[ '%s', '%s', '%d' ]
+		);
+		$item_id = (int) $wpdb->insert_id;
+		$this->assertGreaterThan( 0, $item_id );
+
+		\wc_update_order_item_meta( $item_id, '_profit_shop_id', $this->shop_a_id );
+		\wc_update_order_item_meta( $item_id, '_profit_partner_term_id', $this->partner_a_id );
+		\wc_update_order_item_meta( $item_id, '_profit_rate', 20 );
+		\wc_update_order_item_meta( $item_id, '_actual_price', '1000.00' );
+		\wc_update_order_item_meta( $item_id, '_profit_amount', $profit_amount );
+		\wc_update_order_item_meta( $item_id, '_settlement_status', $status );
+
+		// 反假綠燈保護 2：確認 meta 真的寫進去了
+		// 少了它，「fixture 根本沒寫入」會讓所有排除斷言以假通過的方式全綠。
+		$this->assertSame(
+			(string) $this->partner_a_id,
+			(string) \wc_get_order_item_meta( $item_id, '_profit_partner_term_id', true ),
+			'fixture 的 partner meta 必須真的寫入，否則排除斷言會以假通過的方式全綠'
+		);
+		$this->assertSame(
+			$profit_amount,
+			(string) \wc_get_order_item_meta( $item_id, '_profit_amount', true ),
+			'fixture 的金額 meta 必須真的寫入'
+		);
+
+		$this->order_ids[ 'subscription_' . $subscription_id ] = $subscription_id;
+
+		return $item_id;
+	}
+
+	/**
+	 * 🔴 security：KPI 不得把訂閱物件上的品項計入（否則金額 ×2）
+	 *
+	 * baseline：partner_A 的 profit_pending = order_2(200) + order_3(300) = 500。
+	 * 加入一筆掛在 `shop_subscription` 上、同樣 200 的 pending 品項後，
+	 * 正確結果仍應是 500；少了型別過濾會變成 700。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_summary_excludes_shop_subscription_line_items(): void {
+		$before = $this->provider->summary_for_partner( $this->partner_a_id, new FilterCriteria() );
+		$this->assertSame( '500.00', $before['profit_pending'], 'baseline 應為 500' );
+
+		$this->seed_subscription_line_item( '200.00', 'pending' );
+
+		$after = $this->provider->summary_for_partner( $this->partner_a_id, new FilterCriteria() );
+
+		$this->assertSame(
+			'500.00',
+			$after['profit_pending'],
+			'訂閱物件上的品項不得被計入——變成 700 就是「訂閱商品分潤 ×2」的具體形狀'
+		);
+		$this->assertSame( $before['total_sales'], $after['total_sales'], 'total_sales 同樣不得被污染' );
+	}
+
+	/**
+	 * 🔴 security：trend 不得把訂閱物件上的品項計入
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_trend_excludes_shop_subscription_line_items(): void {
+		$before = $this->provider->trend_for_partner( $this->partner_a_id, new FilterCriteria(), 'day' );
+		$before_profit = array_sum( array_map( static fn( array $r ): float => (float) $r['profit'], $before ) );
+		$before_count  = array_sum( array_map( static fn( array $r ): int => (int) $r['count'], $before ) );
+
+		$this->seed_subscription_line_item( '200.00', 'pending' );
+
+		$after = $this->provider->trend_for_partner( $this->partner_a_id, new FilterCriteria(), 'day' );
+		$after_profit = array_sum( array_map( static fn( array $r ): float => (float) $r['profit'], $after ) );
+		$after_count  = array_sum( array_map( static fn( array $r ): int => (int) $r['count'], $after ) );
+
+		$this->assertSame( $before_count, $after_count, 'trend 的筆數不得因訂閱物件而增加' );
+		$this->assertEqualsWithDelta( $before_profit, $after_profit, 0.001, 'trend 的金額不得因訂閱物件而增加' );
+	}
+
+	/**
+	 * 🔴 security：settlements 列表不得把訂閱物件上的品項計入
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_find_by_partner_excludes_shop_subscription_line_items(): void {
+		$before = $this->provider->find_by_partner( $this->partner_a_id, new FilterCriteria( per_page: 100 ) );
+
+		$subscription_item_id = $this->seed_subscription_line_item( '200.00', 'pending' );
+
+		$after = $this->provider->find_by_partner( $this->partner_a_id, new FilterCriteria( per_page: 100 ) );
+
+		$this->assertCount( count( $before ), $after, '列表筆數不得因訂閱物件而增加' );
+
+		$returned_ids = array_map( static fn( array $r ): int => (int) $r['order_item_id'], $after );
+		$this->assertNotContains(
+			$subscription_item_id,
+			$returned_ids,
+			'訂閱物件上的 line item 不得出現在結算列表中'
+		);
+	}
+
+	/**
+	 * 🔴 edge：三個查詢的 placeholder 數與 args 數必須相等
+	 *
+	 * `$wpdb->prepare()` 在 placeholder 與 args 數量不符時**回空字串**，
+	 * 查詢因此回 0 筆——夥伴報表整片歸零，而且 `phpcs` 與 `phpunit` 都不會紅，
+	 * 沒有任何錯誤訊息。這條測試對三個方法各跑一次真實查詢並斷言**回傳非空**，
+	 * 是防這種靜默失效最直接的守門。
+	 *
+	 * （partner_A 在 fixture 中必然有資料；若 prepare 失敗，三者都會變成空。）
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_all_three_queries_have_matching_placeholder_and_arg_counts(): void {
+		$kpi = $this->provider->summary_for_partner( $this->partner_a_id, new FilterCriteria() );
+		$this->assertNotSame(
+			'0.00',
+			$kpi['profit_pending'],
+			'summary_for_partner 回全 0 可能代表 prepare() 因 placeholder/args 不符而回空字串'
+		);
+
+		$trend = $this->provider->trend_for_partner( $this->partner_a_id, new FilterCriteria(), 'day' );
+		$this->assertNotEmpty(
+			$trend,
+			'trend_for_partner 回空可能代表 prepare() 因 placeholder/args 不符而回空字串'
+		);
+
+		$list = $this->provider->find_by_partner( $this->partner_a_id, new FilterCriteria( per_page: 100 ) );
+		$this->assertNotEmpty(
+			$list,
+			'find_by_partner 回空可能代表 prepare() 因 placeholder/args 不符而回空字串'
+		);
+	}
+
+	/**
+	 * edge：三個查詢在帶了額外過濾條件時同樣不會 prepare 失敗
+	 *
+	 * 額外條件會往 args 追加元素，是 placeholder/args 最容易不同步的路徑。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_all_three_queries_survive_extra_filters(): void {
+		$criteria = new FilterCriteria(
+			date_start: strtotime( '2000-01-01' ),
+			date_end: strtotime( '2100-01-01' ),
+			shop_ids: [ $this->shop_a_id ],
+			statuses: [ SettlementRecord::STATUS_PENDING ],
+			per_page: 100,
+		);
+
+		$kpi = $this->provider->summary_for_partner( $this->partner_a_id, $criteria );
+		$this->assertNotSame( '0.00', $kpi['profit_pending'], '帶完整過濾條件時 summary 不得因 prepare 失敗而歸零' );
+
+		$this->assertNotEmpty(
+			$this->provider->trend_for_partner( $this->partner_a_id, $criteria, 'day' ),
+			'帶完整過濾條件時 trend 不得因 prepare 失敗而回空'
+		);
+		$this->assertNotEmpty(
+			$this->provider->find_by_partner( $this->partner_a_id, $criteria ),
+			'帶完整過濾條件時 list 不得因 prepare 失敗而回空'
+		);
 	}
 }
