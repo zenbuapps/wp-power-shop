@@ -337,6 +337,221 @@ final class OrderItemSettlementRepositoryTest extends TestCase {
 		);
 	}
 
+	// ========== is_refund_after_paid 持久化（spec §5.3 / §7.9） ==========
+
+	/**
+	 * `is_refund_after_paid` 必須存得下去也讀得回來
+	 *
+	 * ⚠️ 在本欄位補上之前，`SettlementRecord::$is_refund_after_paid` 是一個
+	 * **設得起來但存不下去**的旗標：`save()` 沒寫它、`find_by_order_item()` 讀回恆 false，
+	 * 全程沒有任何錯誤訊息。讀寫必須成套 —— 任一邊漏掉就會回到那個狀態，
+	 * 所以這條測試同時斷言「meta 真的落地」與「Entity 讀得回 true」兩件事。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_is_refund_after_paid_survives_save_and_find_round_trip(): void {
+		$item_id = $this->create_line_item();
+
+		$this->save_settlement(
+			$item_id,
+			[
+				'shop_id'              => 1932,
+				'partner_term_id'      => 5,
+				'rate'                 => 20,
+				'actual_price'         => '240.00',
+				'profit_amount'        => '144.00',
+				'status'               => SettlementRecord::STATUS_PAID,
+				'settled_at'           => 1754400000,
+				'settled_by'           => 1,
+				'is_refund_after_paid' => true,
+			]
+		);
+
+		$this->assertSame(
+			'1',
+			(string) \wc_get_order_item_meta( $item_id, '_profit_refund_after_paid', true ),
+			'旗標必須真的寫進 order itemmeta（底線前綴讓它不會出現在顧客的訂單頁 / email）'
+		);
+
+		$found = $this->repo->find_by_order_item( $item_id );
+
+		$this->assertInstanceOf( SettlementRecord::class, $found );
+		$this->assertTrue( $found->is_refund_after_paid );
+		$this->assertSame( SettlementRecord::STATUS_PAID, $found->status, '旗標不得連帶改動狀態' );
+	}
+
+	/**
+	 * false 時刪除 meta（而不是寫 '0'），讀回仍是 false
+	 *
+	 * 絕大多數結算紀錄這個旗標都是 false，寫 '0' 等於替每一筆訂單品項憑空多一列
+	 * order itemmeta；缺鍵與 '0' 的語意在讀取端完全相同。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_is_refund_after_paid_false_removes_the_meta_row(): void {
+		$item_id = $this->create_line_item();
+
+		$this->save_settlement(
+			$item_id,
+			[
+				'shop_id'              => 1932,
+				'partner_term_id'      => 5,
+				'rate'                 => 20,
+				'actual_price'         => '240.00',
+				'profit_amount'        => '144.00',
+				'status'               => SettlementRecord::STATUS_PAID,
+				'is_refund_after_paid' => true,
+			]
+		);
+
+		// 再存一次、這次旗標為 false —— 必須把先前那一列清掉，不是留著 '1'。
+		$this->save_settlement(
+			$item_id,
+			[
+				'shop_id'              => 1932,
+				'partner_term_id'      => 5,
+				'rate'                 => 20,
+				'actual_price'         => '240.00',
+				'profit_amount'        => '144.00',
+				'status'               => SettlementRecord::STATUS_PAID,
+				'is_refund_after_paid' => false,
+			]
+		);
+
+		$this->assertSame( '', (string) \wc_get_order_item_meta( $item_id, '_profit_refund_after_paid', true ) );
+
+		$found = $this->repo->find_by_order_item( $item_id );
+
+		$this->assertInstanceOf( SettlementRecord::class, $found );
+		$this->assertFalse( $found->is_refund_after_paid );
+	}
+
+	/**
+	 * 既有資料（沒有這個 meta key）讀為 false，且其餘欄位照常讀得出來
+	 *
+	 * 這個欄位是後加的，2026-08 之前寫入的結算紀錄都沒有它。缺鍵一律正規化為 false，
+	 * **不需要 migration**（同 Phase 9 `inflated_count` 缺鍵讀為 0 的做法）。
+	 *
+	 * ⚠️ 刻意一併斷言其他欄位仍正確 —— 否則「整筆記錄被丟棄所以碰巧拿到預設值 false」
+	 * 這種偽綠燈會通過。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_legacy_record_without_refund_after_paid_meta_reads_as_false(): void {
+		$item_id = $this->create_line_item();
+
+		$this->save_settlement(
+			$item_id,
+			[
+				'shop_id'              => 1932,
+				'partner_term_id'      => 5,
+				'rate'                 => 20,
+				'actual_price'         => '240.00',
+				'profit_amount'        => '144.00',
+				'status'               => SettlementRecord::STATUS_PAID,
+				'settled_at'           => 1754400000,
+				'settled_by'           => 7,
+				'is_refund_after_paid' => true,
+			]
+		);
+
+		// 模擬「本欄位存在之前寫入的舊資料」：把 meta 整列刪掉。
+		\wc_delete_order_item_meta( $item_id, '_profit_refund_after_paid' );
+
+		$found = $this->repo->find_by_order_item( $item_id );
+
+		$this->assertInstanceOf( SettlementRecord::class, $found );
+		$this->assertFalse( $found->is_refund_after_paid, '缺鍵應正規化為 false' );
+
+		// 防偽綠燈：其餘欄位必須完好，證明不是整筆讀取失敗才拿到預設值。
+		$this->assertSame( 1932, $found->shop_id );
+		$this->assertSame( 5, $found->partner_term_id );
+		$this->assertSame( 20, $found->rate->value() );
+		$this->assertSame( '240.00', $found->actual_price );
+		$this->assertSame( '144.00', $found->profit_amount );
+		$this->assertSame( SettlementRecord::STATUS_PAID, $found->status );
+		$this->assertSame( 1754400000, $found->settled_at );
+		$this->assertSame( 7, $found->settled_by );
+	}
+
+	/**
+	 * `flag_refund_after_paid()` 只寫旗標，不得動到狀態與撥款欄位
+	 *
+	 * 🔴 這正是它存在的理由：`save()` 會把 `_settlement_status` / `_settled_at` /
+	 * `_settled_by` 用呼叫端讀取當下的舊值寫回去，若站長此刻剛把該筆人工沖回成
+	 * `refunded`，就會被推回 `paid` ⇒ 重複撥款。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_flag_refund_after_paid_does_not_touch_status_or_settled_fields(): void {
+		$item_id = $this->create_line_item();
+
+		$this->save_settlement(
+			$item_id,
+			[
+				'shop_id'         => 1932,
+				'partner_term_id' => 5,
+				'rate'            => 20,
+				'actual_price'    => '240.00',
+				'profit_amount'   => '144.00',
+				'status'          => SettlementRecord::STATUS_PAID,
+				'settled_at'      => 1754400000,
+				'settled_by'      => 9,
+			]
+		);
+
+		$this->repo->flag_refund_after_paid( $item_id );
+
+		$found = $this->repo->find_by_order_item( $item_id );
+
+		$this->assertInstanceOf( SettlementRecord::class, $found );
+		$this->assertTrue( $found->is_refund_after_paid );
+		$this->assertSame( SettlementRecord::STATUS_PAID, $found->status );
+		$this->assertSame( 1754400000, $found->settled_at );
+		$this->assertSame( 9, $found->settled_by );
+		$this->assertSame( '144.00', $found->profit_amount, '旗標不得連帶改動金額' );
+	}
+
+	/**
+	 * `update_profit_amount()` 只改金額，其餘欄位一律不動
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_update_profit_amount_only_changes_the_amount(): void {
+		$item_id = $this->create_line_item();
+
+		$this->save_settlement(
+			$item_id,
+			[
+				'shop_id'         => 1932,
+				'partner_term_id' => 5,
+				'rate'            => 20,
+				'actual_price'    => '240.00',
+				'profit_amount'   => '144.00',
+				'status'          => SettlementRecord::STATUS_PAID,
+				'settled_at'      => 1754400000,
+				'settled_by'      => 9,
+			]
+		);
+
+		$this->repo->update_profit_amount( $item_id, '96.00' );
+
+		$found = $this->repo->find_by_order_item( $item_id );
+
+		$this->assertInstanceOf( SettlementRecord::class, $found );
+		$this->assertSame( '96.00', $found->profit_amount );
+		$this->assertSame( SettlementRecord::STATUS_PAID, $found->status );
+		$this->assertSame( '240.00', $found->actual_price, '凍結的實際單價不得被改動' );
+		$this->assertSame( 20, $found->rate->value(), '凍結的比例不得被改動' );
+		$this->assertSame( 1754400000, $found->settled_at );
+		$this->assertSame( 9, $found->settled_by );
+	}
+
 	// ========== Helpers ==========
 
 	/**

@@ -9,15 +9,21 @@ namespace J7\PowerShop\Domains\ProfitShop;
 
 use J7\PowerShop\Domains\ProfitShop\Application\Service\CartPriceSignatureService;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\PageRateLimitService;
+use J7\PowerShop\Domains\ProfitShop\Application\Service\SettlementAuditRecorder;
 use J7\PowerShop\Domains\ProfitShop\Domain\Service\OverridePriceResolver;
 use J7\PowerShop\Domains\ProfitShop\Domain\Service\ProfitCalculator;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\OrderItemSettlementRepository;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\PartnerSettledLogRepository;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementStatusMutator;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\AddToCartHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\CartPriceOverrideHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\MoneyFormatter;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\OrderLineItemSettlementHook;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\RefundAfterPaidNotice;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\RenewalProfitHook;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\SettlementReversalHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\SingleProductPriceHook;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\WcDecimalRounding;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
@@ -59,6 +65,13 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpTransientStore;
  * 2026-08：加上 OrderLineItemSettlementHook——結帳時把驗過章的 cart item `_profit_*` meta
  *           凍結成 order itemmeta 快照（spec §2.5 / §5.2）。這是整條分潤結算鏈路的第一環，
  *           在此之前訂單成立後完全沒有分潤紀錄，夥伴報表永遠是空的且無任何錯誤訊息。
+ * 2026-08：加上 SettlementReversalHook——退款 / 取消訂單時回沖結算紀錄（spec §5.3）。
+ *           pending 直接翻狀態；paid **不自動改**，只寫稽核 + 後台待辦（§7.9，錢已經出去了，
+ *           要不要向夥伴追討是業務決策）；部分退款重算 `_profit_amount` 並維持 pending（D-3）。
+ * 2026-08：加上 RenewalProfitHook——訂閱續訂單的分潤重置（spec §5.4）。職責是「重置」而非
+ *           「複製」：WCS 會把母訂單的 `_profit_*` **整組複製**過去（含 `_settlement_status='paid'`
+ *           與 `_settled_at`），不清掉會讓站長對同一筆分潤重複撥款、或以為已付而讓夥伴這期
+ *           一毛都拿不到。WooCommerce Subscriptions 未安裝時整段不註冊。
  */
 final class Loader {
 
@@ -138,5 +151,30 @@ final class Loader {
 		$rounding = new WcDecimalRounding();
 
 		OrderLineItemSettlementHook::instance( CptProfitShopRepository::instance(), OrderItemSettlementRepository::instance(), $signatures, new ProfitCalculator( $rounding ), new MoneyFormatter( $rounding ) );
+
+		/*
+		* 結算鏈路的「反向」與「續期」兩環（下面兩行刻意各自獨立，彼此不相鄰、也不共用
+		* 中間變數的宣告行——它們由不同工作項平行開發，合併時才不會撞在同一行）。
+		*
+		* 退款 / 取消回沖（設計 §5.3）：顧客退款或訂單取消時，把還沒撥出去的分潤收回來。
+		* 少了它，站長會對一筆已經退還給顧客的交易照樣付出分潤，且結算頁完全看不出異常。
+		*
+		* 🔴 這兩個 hook **不可**加 `is_admin()` guard：退款與取消必然發生在 wp-admin，
+		* 照抄 cart hook 的守門等於整個功能不會執行，而且沒有任何錯誤訊息。
+		*/
+		$settlement_calculator = new ProfitCalculator( $rounding );
+		$settlement_money      = new MoneyFormatter( $rounding );
+
+		SettlementReversalHook::instance( OrderItemSettlementRepository::instance(), WpSettlementStatusMutator::instance(), new SettlementAuditRecorder( PartnerSettledLogRepository::instance(), SystemClock::instance() ), $settlement_calculator, $settlement_money, RefundAfterPaidNotice::instance() );
+
+		/*
+		* 訂閱續訂帶入（設計 §5.4）。WooCommerce Subscriptions 是**選用**外掛：未安裝時
+		* 整段不註冊，否則引用不存在的函式會 fatal、整個 power-shop 掛掉。
+		* `RenewalProfitHook` 的建構子內另有同一道守門（結構保證），這裡再檢查一次是為了
+		* 讓 Loader 讀起來就看得出這是選用相依。
+		*/
+		if ( RenewalProfitHook::is_supported() ) {
+			RenewalProfitHook::instance( CptProfitShopRepository::instance(), OrderItemSettlementRepository::instance(), $settlement_calculator, $settlement_money );
+		}
 	}
 }

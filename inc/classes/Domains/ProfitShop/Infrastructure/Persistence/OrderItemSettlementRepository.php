@@ -44,6 +44,12 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 	 * 註：_override_regular_price / _override_sale_price / _override_signup_fee 為 write-only，
 	 * 由 `save_to_item()`（結帳建立 line item 時）填入，本 Repository 不直接讀回 Entity
 	 * （spec §2.5）——它們是給站長 / 對帳查核用的快照，不參與任何計算。
+	 *
+	 * 🔴 **全部維持 private**：meta key 的字面值是本 Repository 獨佔的知識。外部若需要
+	 * 只改寫其中某一個欄位（`SettlementReversalHook` 的兩個情境），一律透過下方的
+	 * `update_profit_amount()` / `flag_refund_after_paid()` 這類**具名的窄寫入方法**，
+	 * 不是把常數開成 public 讓呼叫端自己 `wc_update_order_item_meta()`——後者會讓
+	 * 「寫哪個 key」與「怎麼寫」散到兩個檔案，而那正是本專案反覆吃虧的漂移來源。
 	 */
 	private const META_SHOP_ID           = '_profit_shop_id';
 	private const META_PARTNER_TERM_ID   = '_profit_partner_term_id';
@@ -56,6 +62,31 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 	private const META_SETTLEMENT_STATUS = '_settlement_status';
 	private const META_SETTLED_AT        = '_settled_at';
 	private const META_SETTLED_BY        = '_settled_by';
+
+	/**
+	 * 「已撥款後才發生退款」旗標的 meta key
+	 *
+	 * 對應 `SettlementRecord::$is_refund_after_paid`（spec §5.3 / §7.9）。
+	 *
+	 * ═══ 為什麼一定要持久化，只有 audit log 不夠 ═══
+	 *
+	 * 這種品項的 `_settlement_status` **仍然是 `paid`**（我方刻意不自動改——錢已經匯出去了，
+	 * 要不要向夥伴追討是業務決策）。少了這個旗標，結算頁**完全無從分辨**它與一筆正常的
+	 * 已撥款品項有何不同：站長只能靠 `error_log` / WC logger 去翻，而那是他不會主動看的地方。
+	 *
+	 * ⚠️ 在本欄位存在之前，`SettlementRecord::$is_refund_after_paid` 是一個
+	 *    **設得起來但存不下去**的旗標——`save()` 沒寫它、`find_by_order_item()` 讀回恆 false，
+	 *    全程沒有任何錯誤訊息。讀寫必須成套，任一邊漏掉就會回到那個狀態。
+	 *
+	 * ⚠️ 底線前綴不可省略：WooCommerce 的 `get_formatted_meta_data()` 預設濾掉底線開頭的
+	 *    meta，所以它不會出現在顧客看得到的訂單頁與訂單 email。
+	 *
+	 * ⚠️ 既有資料沒有這個 key。`find_by_order_item()` 對缺鍵一律正規化為 `false`
+	 *    （同 Phase 9 `inflated_count` 缺鍵讀為 0 的做法），**不需要 migration**。
+	 *
+	 * @var string
+	 */
+	private const META_REFUND_AFTER_PAID = '_profit_refund_after_paid';
 
 	/**
 	 * 唯一納入結算查詢的訂單型別
@@ -137,6 +168,16 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 		$settled_at = ( '' === $settled_at_raw || null === $settled_at_raw ) ? null : (int) $settled_at_raw;
 		$settled_by = ( '' === $settled_by_raw || null === $settled_by_raw ) ? null : (int) $settled_by_raw;
 
+		/*
+		* 「已撥款後退款」旗標。既有資料沒有這個 key，缺鍵時 `wc_get_order_item_meta()`
+		* 回空字串 ⇒ `wc_string_to_bool('')` 為 false，等同「不需要 migration」的正規化。
+		* 用 `wc_string_to_bool()` 而非 `'1' === $raw`：它同時吃 `1` / `'1'` / `'yes'` / `true`，
+		* 對「別的地方用 WooCommerce 慣例寫進來」有容錯，且不會把任何字串誤判成 true。
+		*/
+		$is_refund_after_paid = \wc_string_to_bool(
+			(string) \wc_get_order_item_meta( $order_item_id, self::META_REFUND_AFTER_PAID, true )
+		);
+
 		// rate 容錯：0-100 範圍外退回 0。
 		$rate_value = ( $rate_raw < 0 || $rate_raw > 100 ) ? 0 : $rate_raw;
 
@@ -151,7 +192,7 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 				status: $status,
 				settled_at: $settled_at,
 				settled_by: $settled_by,
-				is_refund_after_paid: false
+				is_refund_after_paid: $is_refund_after_paid
 			);
 		} catch ( \DomainException $e ) {
 			// 資料毀損（如 status 不在 VALID_STATUSES、rate 異常等）：
@@ -205,8 +246,74 @@ final class OrderItemSettlementRepository implements SettlementRepositoryInterfa
 			\wc_update_order_item_meta( $item_id, self::META_SETTLED_BY, $record->settled_by );
 		}
 
+		/*
+		* 「已撥款後退款」旗標：false 時**刪除** meta 而不是寫 '0'。
+		*
+		* 兩個理由：(1) 與上面 settled_at / settled_by 的 null ⇒ delete 一致；
+		* (2) 絕大多數結算紀錄這個旗標都是 false，寫 '0' 等於替每一筆訂單品項憑空多一列
+		*     order itemmeta。缺鍵由 `find_by_order_item()` 正規化為 false，語意完全相同。
+		*/
+		if ( $record->is_refund_after_paid ) {
+			\wc_update_order_item_meta( $item_id, self::META_REFUND_AFTER_PAID, 1 );
+		} else {
+			\wc_delete_order_item_meta( $item_id, self::META_REFUND_AFTER_PAID );
+		}
+
 		// 確保 override 三欄存在（write-only，未必每次都需要更新）—— 略過：
 		// 由上游 OrderHooks 在第一次寫入時填入；本 Repository 不負責這三欄的 lifecycle。
+	}
+
+	/**
+	 * 只改寫 `_profit_amount` 一個欄位（部分退款重算的唯一寫入出口）
+	 *
+	 * ═══ 🔴 為什麼不能直接用 `save()` ═══
+	 *
+	 * `save()` 會把 `_settlement_status` / `_settled_at` / `_settled_by` 一起用**呼叫端讀取
+	 * 當下的舊值**寫回去。部分退款發生在顧客端，而站長可能正在結算頁按撥款——
+	 * 若在那個瞬間 `save()` 把狀態推回 `pending`，那筆已經撥出去的款會重新出現在待撥款清單，
+	 * 站長再撥一次 ⇒ **重複撥款**，而且沒有任何錯誤訊息。這正是 D-4 引入 CAS 要消滅的場景。
+	 *
+	 * ⇒ 需要「只動一個欄位」時一律用這種**具名的窄寫入方法**，不要把 meta key 開成 public
+	 *   讓呼叫端自己組 `wc_update_order_item_meta()`。
+	 *
+	 * ⚠️ 本方法**不做任何狀態檢查**——它只忠實寫入一個欄位。呼叫端負責先確認狀態
+	 *   （`SettlementReversalHook` 用 `SettlementStatusMutatorInterface::current_status()`
+	 *    直接讀 DB 再確認一次）。
+	 *
+	 * @param int    $order_item_id 訂單品項 ID
+	 * @param string $amount        新的分潤金額（十進位字串，呼叫端已收斂到站台貨幣小數位）
+	 *
+	 * @return void
+	 */
+	public function update_profit_amount( int $order_item_id, string $amount ): void {
+		if ( $order_item_id <= 0 ) {
+			return;
+		}
+
+		\wc_update_order_item_meta( $order_item_id, self::META_PROFIT_AMOUNT, $amount );
+	}
+
+	/**
+	 * 標記「已撥款後才發生退款」（只寫這一個欄位，不動狀態）
+	 *
+	 * 這種品項的 `_settlement_status` **維持 `paid`** —— 錢已經匯給夥伴了，要不要向夥伴
+	 * 追討是業務決策（spec §7.9），程式無權決定。本旗標的用途是讓結算頁能把它**標示出來**
+	 * 讓站長人工處理；少了它，結算頁完全無從分辨它與一筆正常已撥款品項的差異。
+	 *
+	 * 同樣**不走 `save()`**，理由與 `update_profit_amount()` 完全相同（見該方法 docblock）。
+	 *
+	 * ⚠️ 冪等：重複標記同一筆只是重寫相同的值，不會累積。
+	 *
+	 * @param int $order_item_id 訂單品項 ID
+	 *
+	 * @return void
+	 */
+	public function flag_refund_after_paid( int $order_item_id ): void {
+		if ( $order_item_id <= 0 ) {
+			return;
+		}
+
+		\wc_update_order_item_meta( $order_item_id, self::META_REFUND_AFTER_PAID, 1 );
 	}
 
 	/**
