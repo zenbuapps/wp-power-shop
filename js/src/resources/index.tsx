@@ -7,6 +7,7 @@ import {
 	TagsOutlined,
 	ShopOutlined,
 	ImportOutlined,
+	WalletOutlined,
 } from '@ant-design/icons'
 import { ResourceProps } from '@refinedev/core'
 import { Tag } from 'antd'
@@ -145,6 +146,15 @@ export const resources: ResourceProps[] = [
 		meta: {
 			label: '分潤夥伴',
 			icon: <UserOutlined />,
+		},
+	},
+	{
+		parentName: 'marketing',
+		name: 'profit-settlement',
+		list: '/profit-settlements',
+		meta: {
+			label: '分潤結算',
+			icon: <WalletOutlined />,
 		},
 	},
 	{

@@ -10,6 +10,7 @@ import { TOrderRecord, TOrderBaseRecord } from '@/pages/admin/Orders/List/types'
 
 import { Detail } from './Detail'
 import { IsEditingContext, RecordContext } from './hooks'
+import { ProfitPanel } from './ProfitPanel'
 
 const EditComponent = () => {
 	const { id } = useParsed()
@@ -93,6 +94,14 @@ const EditComponent = () => {
 							</div>
 							<Detail />
 						</Form>
+
+						{/*
+						 * 分潤資訊面板放在 <Form> **之外**：它是唯讀的凍結紀錄，
+						 * 不參與訂單表單的送出。放進 Form 內雖然也能運作，
+						 * 但會讓人誤以為這些欄位可以編輯。
+						 * 沒有分潤品項的訂單，這個元件回傳 null、完全不佔版面。
+						 */}
+						<ProfitPanel />
 					</Edit>
 				</div>
 			</RecordContext.Provider>

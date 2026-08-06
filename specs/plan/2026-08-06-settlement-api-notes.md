@@ -392,3 +392,83 @@ docblock 也還寫著「已過濾」。這正是本次要防的那種「靜默�
 | 6 | **前端尚未實作**（任務 #10）。回應都是 `{code, message, data}`，只能用 `useCustom` / `useCustomMutation` + `dataProviderName: 'power-shop'`（Pitfall #10）；快取失效必須用 `useInvalidateProfitQueries`。前端**必須**呈現 `skipped`（含原因）、`audit_log_failed_partner_ids`、`needs_manual_rate`、`order-ids` 的 `truncated`——這四個欄位若被忽略，各自對應一種站長會做出錯誤決策的情境。 |
 | 7 | **未跑 e2e / 真實站台驗證**。本次只到 Unit + Integration，端到端留給任務 #13。 |
 | 8 | **設計文件 §6.1 與 feature 的權限不一致**（前者 `manage_woocommerce`、後者 `manage_options`）。我以 feature 為準，建議回頭同步設計文件以免下一個人又踩。 |
+
+---
+
+## 8. 收工狀態（凍結點，2026-08-06）
+
+本節為交接凍結點。此後不再編輯任何檔案。
+
+### 8.1 探針清除驗證（零命中）
+
+```console
+$ grep -rn "OR 1=1\|OR TRUE\|1 = 1\|if ( false )\|實證\|暫時版本" inc/
+ZERO MATCHES
+```
+
+三個中性化點皆已還原並逐一確認：
+
+| 中性化點 | 還原後現況 |
+|---|---|
+| `WpSettlementStatusMutator::compare_and_set()` | `$wpdb->update()` 的 WHERE 含 `'meta_value' => $from`（3 個 format `[ '%d', '%s', '%s' ]`） |
+| `MarkSettlementsPaidUseCase` | `compare_and_set` 出現 3 次（import / 呼叫 / docblock） |
+| `WpSettlementSummaryProvider` | `AND {$order_type_col} = %s` × 3（KPI / trend / settlements） |
+
+⚠️ team lead 亦曾自行中性化 `compare_and_set()` 做實證，凍結前已再次確認為 CAS 版本。
+
+### 8.2 完成 / 未完成（誠實列出）
+
+**已完成**
+
+| 項目 | 佐證 |
+|---|---|
+| 7 個 REST endpoint（含 D-6 `order-ids`） | `V2Api.php` 244-275 行 7 個 route |
+| 7 個 callback + DI 接線 | 三個 mutation callback 皆傳 `mutator: WpSettlementStatusMutator::instance()`（1372 / 1406 / 1439） |
+| CAS（Port + Infrastructure + 3 UseCase） | `SettlementStatusMutatorInterface` / `WpSettlementStatusMutator` |
+| **D-6 `ListSettlementOrderIdsUseCase`** | 已完成且可運作（cap 200 + `truncated` 誠實回報） |
+| 修補 2：`WpSettlementSummaryProvider` 三段 SQL 型別過濾 | 3 處齊全（變數 + WHERE + args） |
+| `WpAdminSettlementQuery` 型別過濾 | 6 處（list / count / summary / order-ids / count_order_ids） |
+| 測試 fake ×4、Unit 90 條、IT 47+5 條 | §2 檔案清單 |
+| `specs/api/api.yml` 7 path + 8 schema | 全檔 `$ref` 可解析、`yaml.safe_load` 通過 |
+| red-green 實證 ×3 + 探針掃描 | §4 |
+
+**未完成 / 刻意不做**
+
+| 項目 | 說明 |
+|---|---|
+| e2e / 真實站台驗證 | 只做到 Unit + Integration（任務 #13 範圍） |
+| `is_refund_after_paid` 持久化 | 屬任務 #7；本次未動 `OrderItemSettlementRepository` |
+| 前端（結算頁 SPA） | 任務 #10 |
+| 設計文件 §6.1 權限與 feature 同步 | 我以 feature 為準實作，但**未回頭改設計文件**，兩份仍不一致 |
+
+### 8.3 🔴 CAS 測試的能力邊界（team lead 指出，必須誠實記錄）
+
+`test_cas_guard_lives_in_sql_where_clause_not_in_php` 能區分的是
+**CAS vs 無條件 UPDATE**，**區分不了 CAS vs 正確實作的 read-check-write**——
+後者會先讀到 `cancelled`、判斷與 `from` 不符、不寫入，同樣回 `false`，測試照樣綠。
+
+各層目前的實際保護範圍：
+
+| 層 | 測試 | 擋得住 | 擋不住 |
+|---|---|---|---|
+| UseCase | `test_transition_goes_through_compare_and_set`（斷言 `cas_calls`） | 有人把 UseCase 改回自己在 PHP 判斷 + `save()` | — |
+| Infrastructure | `test_cas_guard_lives_in_sql_where_clause_not_in_php` | `$wpdb->update()` 變成無條件 | **在 `compare_and_set()` 內部改用 PHP 讀-判斷-寫** |
+
+⇒ **目前沒有任何自動化測試能防止有人把 `compare_and_set()` 的內部實作換成 read-check-write。**
+要真正鎖住需要白盒斷言（例如檢查 `$wpdb->last_query` 的 WHERE 是否含 `meta_value`），屬後續工作。
+
+另外 team lead 實測確認：`test_concurrent_mark_paid_does_not_double_count` 與
+`test_running_same_batch_twice_does_not_double_count` 在 read-check-write 下**仍然通過**
+——它們是循序呼叫，證明不了 CAS 有在守門。這與我在 §4 RG-1 的觀察一致。
+
+### 8.4 凍結點測試數字（最後一次執行）
+
+| 層級 | 結果 | 判定 |
+|---|---|---|
+| Unit | **503 tests / 1160 assertions / 1 failure** | failure 為 pre-existing TD-2 |
+| Integration | **359 tests / 1759 assertions / 15 failures / 3 skipped** | 15 條逐條與 baseline 同名，無一在本次改動的檔案內 |
+| `vendor/bin/phpcs inc/` | **0 error / 0 warning** | 全綠 |
+
+⚠️ **多 agent 平行作業期間，單次測試結果不可信**：本輪實測同一 testsuite 曾出現
+15 / 14 / 36 failures 與 25 / 27 tests 的浮動，成因是並行 agent 在執行期間寫入同一批檔案
+（伴隨 `Deadlock found` / `Record has changed since last read`）。上表為重跑確認後的穩定值。

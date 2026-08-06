@@ -49,6 +49,7 @@ import {
 	ProfitPartnerList,
 	ProfitPartnerEdit,
 	ProfitPartnerCreate,
+	ProfitSettlementList,
 	ProfitMigrationList,
 } from '@/pages/admin'
 import { resources } from '@/resources'
@@ -151,6 +152,10 @@ function App() {
 							<Route index element={<ProfitPartnerList />} />
 							<Route path="create" element={<ProfitPartnerCreate />} />
 							<Route path="edit/:id" element={<ProfitPartnerEdit />} />
+						</Route>
+
+						<Route path="profit-settlements">
+							<Route index element={<ProfitSettlementList />} />
 						</Route>
 
 						<Route path="profit-migration">
