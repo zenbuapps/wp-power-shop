@@ -315,6 +315,18 @@ export const VARIATION_PAGE_LIMIT = 100
  */
 export type TShopVariationInfo = Omit<TProductVariation, 'attributes'> & {
 	attributes: TSimpleAttribute[]
+
+	/**
+	 * 低庫存門檻
+	 *
+	 * WC 的 variation schema 自 3.5 起就有這個欄位，但本地 `TProductBase` 只把它
+	 * 宣告在 `TProduct`（父商品）上、沒宣告在 variation。補在這裡，庫存欄才能
+	 * 與 `#/products` 一樣區分「庫存充足 / 低庫存」，而不是一律顯示「尚有庫存」。
+	 *
+	 * 標成 optional 是因為它同時也可能是 `null`（站長沒設，走站台全域設定）——
+	 * `ProductStock` 對 `null` 的處理是「不判低庫存」，正是我們要的降級行為。
+	 */
+	low_stock_amount?: number | null
 }
 
 /**

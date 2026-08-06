@@ -37,6 +37,55 @@ final class ProfitShopFrontView {
 	 */
 	public const SCRIPT_HANDLE = 'power-shop-profit-shop-front';
 
+	/**
+	 * 具備變體的商品型別（單一真相）
+	 *
+	 * 🔴 **不要**再寫 `'variable' === $type` 這種嚴格字串比較。
+	 * `variable-subscription` 曾因此完全落在守門之外：卡片價格區塊印成空的 `<p>`、
+	 * `data-ps-disabled="0"` 可點、Modal 開得起來卻沒有任何屬性選項，而加入購物車按鈕
+	 * 是啟用的——按下去整頁 reload、什麼都沒發生、**沒有任何錯誤訊息**。
+	 *
+	 * 有 `WC_Product` 物件的地方（`ProfitShopFrontData`）請用
+	 * `$product->is_type( self::VARIABLE_TYPES )`；只拿得到 payload 字串的地方
+	 * （兩個 partial）用 `self::is_variable( $type )`。
+	 *
+	 * @var array<int, string>
+	 */
+	public const VARIABLE_TYPES = [ 'variable', 'variable-subscription' ];
+
+	/**
+	 * 依 payload 的 type 字串判斷是否為變體商品
+	 *
+	 * @param string $type 商品型別字串。
+	 *
+	 * @return bool
+	 */
+	public static function is_variable( string $type ): bool {
+		return \in_array( $type, self::VARIABLE_TYPES, true );
+	}
+
+	/**
+	 * 這個 payload 商品是否「是變體商品但一個可購買規格都沒有」
+	 *
+	 * 成因是所有變體既沒有自己的定價、賣場也沒有替它們設覆寫價，於是全部被
+	 * WooCommerce 在 `get_available_variations()`（includes/class-wc-product-variable.php
+	 * 的 `variation_is_visible()` 過濾）擋掉，`variations` 是空陣列。
+	 * 這是**合法**狀態，不是資料損毀。
+	 *
+	 * 🔴 卡片（`partials/profit-shop-card.php`）與 Modal 迴圈
+	 * （`templates/profit-shop-front.php`）**必須用同一份判斷**。兩處各寫一次
+	 * `is_variable() && empty($product['variations'])`，日後條件一改就會出現
+	 * 「卡片停用、Modal 卻照印」——那正是 TD-65 的成因。
+	 *
+	 * @param array<string, mixed> $product `ProfitShopFrontData::build_products()` 的單筆 payload。
+	 *
+	 * @return bool
+	 */
+	public static function has_no_purchasable_variation( array $product ): bool {
+		return self::is_variable( (string) ( $product['type'] ?? '' ) )
+		&& empty( $product['variations'] );
+	}
+
 	/*
 	* ⚠ 這裡曾經有 `BTN_SIZE_SM` / `BTN_SIZE_XS` / `INPUT_SIZE` 三個常數，
 	* 內容是 `h-8 min-h-8 px-3 text-sm` 這類 Tailwind utility，用途是把 daisyUI

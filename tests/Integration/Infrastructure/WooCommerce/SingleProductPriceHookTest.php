@@ -475,16 +475,65 @@ final class SingleProductPriceHookTest extends TestCase {
 		);
 	}
 
+	/**
+	 * 【N-1 / TD-57 回歸鎖】已結束販售的賣場，單品頁不得註冊任何 filter
+	 *
+	 * 第 5 輪只把販售期間閘門補在 AddToCartHook，但本類是**同一個賣場情境的另一個
+	 * 入口**，而且對「自身無定價、只靠覆寫價出售」的商品，它直接決定 is_purchasable()。
+	 *
+	 * 缺這道閘門的實測後果：單品頁 price='27' / purchasable=true ⇒ 加得進購物車，
+	 * 但 AddToCartHook 正確拒絕注入 ⇒ **無分潤歸屬的銷售**，且下一個請求會被閘門 ③
+	 * 靜默移除（顧客看到剛加的東西不見了）。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_closed_shop_registers_no_filter_and_keeps_priceless_variation_unpurchasable(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+
+		$shop_id = $this->create_shop(
+			[
+				new OverrideItem(
+					product_id: $product->get_id(),
+					override: new PriceOverride( '30', '27', null ),
+					inflated_count: new InflatedCount( 0 )
+				),
+			],
+			'publish',
+			'closed-window-shop',
+			// 已於一小時前結束販售
+			[ 'endTime' => ( \time() - 3600 ) * 1000 ]
+		);
+
+		$hook = $this->activate_hook_for( $product->get_id(), $shop_id );
+
+		$this->assertFalse(
+			\has_filter( 'woocommerce_product_get_price', [ $hook, 'filter_price' ] ),
+			'已結束販售的賣場不得註冊任何價格 filter'
+		);
+
+		$fresh = \wc_get_product( $product->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $fresh );
+		$this->assertSame( '', (string) $fresh->get_price(), '無定價商品在販售期間外必須維持無價' );
+		$this->assertFalse( $fresh->is_purchasable(), '⇒ 也就加不進購物車、不會產生無歸屬銷售' );
+	}
+
 	// ========== Helpers ==========
 
 	/**
 	 * 建立一個含指定 items 的賣場並回傳 ID
 	 *
-	 * @param OverrideItem[] $items  商品覆寫項目
-	 * @param string         $status 賣場狀態
-	 * @param string         $slug   賣場 slug
+	 * @param OverrideItem[]       $items    商品覆寫項目
+	 * @param string               $status   賣場狀態
+	 * @param string               $slug     賣場 slug
+	 * @param array<string, mixed> $settings 賣場設定（排程 startTime / endTime 等；預設無排程 ⇒ shopStatus 為 published）
 	 */
-	private function create_shop( array $items, string $status = 'publish', string $slug = 'single-price-shop' ): int {
+	private function create_shop(
+		array $items,
+		string $status = 'publish',
+		string $slug = 'single-price-shop',
+		array $settings = []
+	): int {
 		$shop = new ProfitShop(
 			id: 0,
 			title: '單品頁價格測試賣場',
@@ -494,7 +543,7 @@ final class SingleProductPriceHookTest extends TestCase {
 			partner_term_id: 1,
 			rate: new ProfitRate( 10 ),
 			items: $items,
-			settings: []
+			settings: $settings
 		);
 
 		$id = $this->repo->save( $shop );

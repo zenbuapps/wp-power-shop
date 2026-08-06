@@ -145,14 +145,15 @@ final class CartPriceSignatureServiceTest extends TestCase {
 	/**
 	 * 簽章格式為 'v{n}.{64 字元 lowercase hex}'，便於未來金鑰輪替與演算法升級
 	 *
-	 * Phase 13：sign() 一律產出 v2（payload 含 regular / sale）。
+	 * Phase 13：sign() 產出 v2（payload 含 regular / sale）。
+	 * 2026-08 第 6 輪：sign() 一律產出 v3（payload 另含 product_id / variation_id）。
 	 */
 	public function test_signature_format_is_version_dot_hex(): void {
 		$service = $this->make_service();
 
 		$sig = $service->sign( 100, 200, '1234.56' );
 
-		$this->assertStringStartsWith( 'v2.', $sig, '簽章必須以現行版本前綴開頭（v2.）' );
+		$this->assertStringStartsWith( 'v3.', $sig, '簽章必須以現行版本前綴開頭（v3.）' );
 
 		$hash_part = substr( $sig, 3 );
 		$this->assertSame( 64, strlen( $hash_part ), '版本前綴後應為 64 字元 sha256 hash' );
@@ -180,7 +181,8 @@ final class CartPriceSignatureServiceTest extends TestCase {
 	 * 確保未來 refactor 不會誤刪 domain prefix（會讓 salt 與其他 hash_hmac 用途相撞）。
 	 *
 	 * Phase 13 追加：同時斷言 'v1' 仍存在——那是 legacy 驗證分支存在的證明。
-	 * v1 分支若被當成死碼刪掉，所有既有購物車的分潤價會**靜默消失**（見 class docblock）。
+	 * 2026-08 第 6 輪追加：'v2' 也降級為 legacy，同樣必須存在。
+	 * 舊版分支若被當成死碼刪掉，所有既有購物車的分潤價會**靜默消失**（見 class docblock）。
 	 */
 	public function test_payload_includes_domain_prefix_to_prevent_cross_protocol_collision(): void {
 		$reflection = new \ReflectionClass( CartPriceSignatureService::class );
@@ -197,9 +199,14 @@ final class CartPriceSignatureServiceTest extends TestCase {
 			'payload 必須含 domain prefix（cart-signature）以防 cross-protocol HMAC collision'
 		);
 		$this->assertStringContainsString(
+			"'v3'",
+			$source,
+			'payload 必須含現行版本標記（v3）'
+		);
+		$this->assertStringContainsString(
 			"'v2'",
 			$source,
-			'payload 必須含現行版本標記（v2）'
+			'必須保留 legacy 版本標記（v2）——移除舊驗證分支會讓既有購物車的分潤價靜默消失'
 		);
 		$this->assertStringContainsString(
 			"'v1'",
@@ -384,7 +391,8 @@ final class CartPriceSignatureServiceTest extends TestCase {
 	public function test_payload_version_detects_version_prefix(): void {
 		$service = $this->make_service();
 
-		$this->assertSame( 'v2', $service->payload_version( $service->sign( 1, 2, '3' ) ), 'sign() 產出應為 v2' );
+		$this->assertSame( 'v3', $service->payload_version( $service->sign( 1, 2, '3' ) ), 'sign() 產出應為 v3' );
+		$this->assertSame( 'v3', $service->payload_version( 'v3.' . str_repeat( 'a', 64 ) ) );
 		$this->assertSame( 'v2', $service->payload_version( 'v2.' . str_repeat( 'a', 64 ) ) );
 		$this->assertSame( 'v1', $service->payload_version( 'v1.' . str_repeat( 'a', 64 ) ) );
 	}
@@ -400,7 +408,7 @@ final class CartPriceSignatureServiceTest extends TestCase {
 
 		$this->assertNull( $service->payload_version( '' ), '空字串應回 null' );
 		$this->assertNull( $service->payload_version( str_repeat( 'a', 64 ) ), '裸 hash（無版本前綴）應回 null' );
-		$this->assertNull( $service->payload_version( 'v3.' . str_repeat( 'a', 64 ) ), '未知版本應回 null' );
+		$this->assertNull( $service->payload_version( 'v4.' . str_repeat( 'a', 64 ) ), '未知版本應回 null' );
 		$this->assertNull( $service->payload_version( 'v1' ), '缺少 . 分隔符應回 null' );
 		$this->assertNull( $service->payload_version( 'xv1.' . str_repeat( 'a', 64 ) ), '前綴不在開頭應回 null' );
 	}
@@ -542,6 +550,76 @@ final class CartPriceSignatureServiceTest extends TestCase {
 			'hash_equals',
 			$source,
 			'verify() 必須使用 hash_equals 做常數時間比較（防 timing oracle）'
+		);
+	}
+
+	// ---------------------------------------------------------------------
+	// 2026-08 第 6 輪：v3 payload（product_id / variation_id 納入簽章）
+	// ---------------------------------------------------------------------
+
+	/**
+	 * 【S-2 / TD-58 回歸鎖】v3 綁定商品身分：product_id / variation_id 不符必須失敗
+	 *
+	 * 簽章原本只保護「多少錢」；2026-08 起它同時是「不可購買的商品變不變成可購買」的
+	 * 唯一授權來源，因此必須綁住「是哪個商品」。
+	 *
+	 * @group security
+	 */
+	public function test_v3_binds_product_identity(): void {
+		$service = $this->make_service();
+
+		$sig = $service->sign( 7, 9, '27.00', '30.00', '27.00', 101, 202 );
+
+		$this->assertStringStartsWith( 'v3.', $sig, 'sign() 一律產出 v3' );
+		$this->assertTrue(
+			$service->verify( 7, 9, '27.00', $sig, '30.00', '27.00', 101, 202 ),
+			'身分一致時必須驗得過'
+		);
+
+		$this->assertFalse(
+			$service->verify( 7, 9, '27.00', $sig, '30.00', '27.00', 999, 202 ),
+			'product_id 不符必須失敗'
+		);
+		$this->assertFalse(
+			$service->verify( 7, 9, '27.00', $sig, '30.00', '27.00', 101, 999 ),
+			'variation_id 不符必須失敗'
+		);
+		$this->assertFalse(
+			$service->verify( 7, 9, '27.00', $sig, '30.00', '27.00' ),
+			'省略身分（預設 0 / 0）必須失敗——不得因為「沒傳」就跳過比對'
+		);
+	}
+
+	/**
+	 * 【S-2 回歸鎖】v1 / v2 既有簽章仍必須驗得過（TD-35：持久化購物車永不過期）
+	 *
+	 * 兩條 legacy 分支只准增加、永遠不准減少。拿掉任何一條，那些購物車的分潤價會
+	 * **靜默消失**（strip_profit_meta + reset_to_original_price，無任何錯誤訊息）。
+	 *
+	 * @group security
+	 */
+	public function test_legacy_v1_and_v2_signatures_remain_verifiable(): void {
+		$service = $this->make_service();
+		$salt    = $this->salt_provider->get( 'auth' );
+
+		$v1 = 'v1.' . hash_hmac( 'sha256', 'cart-signature:v1|7|9|27.00', $salt );
+		$this->assertTrue( $service->verify( 7, 9, '27.00', $v1 ), 'v1 必須永遠驗得過' );
+		$this->assertSame( 'v1', $service->payload_version( $v1 ), 'v1 前綴必須被辨識' );
+
+		$v2 = 'v2.' . hash_hmac( 'sha256', 'cart-signature:v2|7|9|27.00|30.00|27.00', $salt );
+		$this->assertTrue( $service->verify( 7, 9, '27.00', $v2, '30.00', '27.00' ), 'v2 必須永遠驗得過' );
+		$this->assertSame( 'v2', $service->payload_version( $v2 ), 'v2 前綴必須被辨識' );
+
+		// v2 分支必須完全忽略身分參數（payload 裡沒有這兩個欄位，簽章從未保護過它們）
+		$this->assertTrue(
+			$service->verify( 7, 9, '27.00', $v2, '30.00', '27.00', 12345, 67890 ),
+			'v2 分支不得因為傳了身分參數而驗證失敗'
+		);
+
+		// 跨版本不可互通：把 v2 簽章硬改成 v3 前綴必須失敗
+		$this->assertFalse(
+			$service->verify( 7, 9, '27.00', 'v3.' . substr( $v2, 3 ), '30.00', '27.00', 0, 0 ),
+			'v2 簽章換上 v3 前綴必須失敗（三版 hash 天然不互通）'
 		);
 	}
 }

@@ -57,11 +57,26 @@ $card_nojs_label = $card_is_simple
 : \__( '前往選購', 'power_shop' );
 
 $card_action_url = \add_query_arg( 'profit_shop_id', (string) $ps_shop_id, $card_permalink );
+
+/*
+* 變體商品但**一個可購買的規格都沒有**。
+*
+* 成因是所有變體既沒有自己的定價、賣場也沒有替它們設覆寫價，於是全部被
+* WooCommerce 在 get_available_variations()（class-wc-product-variable.php:335 的
+* variation_is_visible()）過濾掉，`variations` 是空陣列。這是**合法**狀態，不是資料損毀。
+*
+* 必須顯式印一句話而不是讓價格區塊靜靜地印成空的：修法前這裡三個 if 全部不成立，
+* 卡片上沒有價格、沒有任何說明，站長要點進 Modal 才會發現按鈕永遠停用，而畫面與
+* console 都不會有任何線索。動作元素也一併停用，避免使用者點開一個必然失敗的 Modal。
+*/
+$card_has_no_purchasable_variation = ProfitShopFrontView::has_no_purchasable_variation( $ps_product );
+
+$card_actionable = $is_shop_open && ! $card_has_no_purchasable_variation;
 ?>
 <div
 	data-ps-product-id="<?php echo \esc_attr( (string) $card_id ); ?>"
-	data-ps-disabled="<?php echo $is_shop_open ? '0' : '1'; ?>"
-	class="group relative pb-12<?php echo $is_shop_open ? ' cursor-pointer' : ' pointer-events-none opacity-60'; ?>"
+	data-ps-disabled="<?php echo $card_actionable ? '0' : '1'; ?>"
+	class="group relative pb-12<?php echo $card_actionable ? ' cursor-pointer' : ' pointer-events-none opacity-60'; ?>"
 >
 	<div class="w-full aspect-square overflow-hidden">
 		<?php if ( '' !== $card_image ) : ?>
@@ -80,7 +95,7 @@ $card_action_url = \add_query_arg( 'profit_shop_id', (string) $ps_shop_id, $card
 
 	<div>
 		<?php
-		if ( 'variable' === $card_type ) :
+		if ( ProfitShopFrontView::is_variable( $card_type ) ) :
 			/*
 			* 變體商品：價格區間。
 			* 顯示規則照搬 legacy：單一價 → 一行；有折扣 → 劃線原價 + 紅字實售；
@@ -91,7 +106,12 @@ $card_action_url = \add_query_arg( 'profit_shop_id', (string) $ps_shop_id, $card
 			$range_max   = $range['max'];
 			$max_regular = $range['max_regular'];
 
-			if ( null !== $range_min && $range_min === $range_max ) :
+			if ( $card_has_no_purchasable_variation ) :
+				// 沒有任何可購買規格：據實告知，不要留一塊空白（見上方 $card_has_no_purchasable_variation 的說明）。
+				?>
+				<p class="mb-0 mt-1 text-sm text-base-content/60"><?php echo \esc_html__( '暫無可購買規格', 'power_shop' ); ?></p>
+				<?php
+			elseif ( null !== $range_min && $range_min === $range_max ) :
 				if ( $range_min === $max_regular ) :
 					?>
 					<p class="mb-0 mt-1"><?php echo \esc_html( ProfitShopFrontView::currency( $range_min ) ); ?></p>
@@ -157,9 +177,17 @@ $card_action_url = \add_query_arg( 'profit_shop_id', (string) $ps_shop_id, $card
 		</p>
 	<?php endif; ?>
 
-	<?php if ( ! $is_shop_open ) : ?>
+	<?php if ( ! $card_actionable ) : ?>
+		<?php
+		// 賣場關閉 → 印排程文案；賣場開著但沒有可購買規格 → 印「暫無可購買規格」。
+		// 兩者都只印一顆停用按鈕、**不印任何可送出的表單**（表單存在就有被改掉
+		// disabled 屬性送出的空間，而 AddToCartHook 的三道閘門不檢查這兩種狀態）。
+		$card_blocked_label = $is_shop_open
+		? \__( '暫無可購買規格', 'power_shop' )
+		: $closed_label;
+		?>
 		<button type="button" disabled class="pc-btn pc-btn-primary pc-btn-sm w-full absolute bottom-0">
-			<span><?php echo \esc_html( $closed_label ); ?></span>
+			<span><?php echo \esc_html( $card_blocked_label ); ?></span>
 		</button>
 	<?php elseif ( $card_is_simple ) : ?>
 		<?php // 無 JS 時這張表單就是完整的加購路徑；有 JS 時卡片的 click handler 會 preventDefault 改開 Modal。 ?>

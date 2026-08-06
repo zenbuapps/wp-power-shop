@@ -91,6 +91,32 @@ type TItemsEditorProps = {
 const DASH = <span className="text-gray-400">—</span>
 
 /**
+ * 可變商品 / 可變訂閱在「商品層」那幾格顯示的提示
+ *
+ * 這類商品的庫存、覆寫價格、灌水購買人數一律改到展開列逐變體設定 ——
+ * 父商品本身沒有單一價格、也沒有單一庫存數字，在商品層填那三格
+ * 對站長而言是沒有對應物的操作。
+ */
+const VARIATION_LEVEL_HINT = (
+	<span className="text-xs text-gray-400">依變體設定</span>
+)
+
+/** 商品層價格覆寫是否還留著值（三欄任一非 null） */
+const hasProductLevelOverride = (override: TPriceOverride): boolean =>
+	null !== override.regular_price ||
+	null !== override.sale_price ||
+	null !== override.signup_fee
+
+/** 把商品層殘留的覆寫值描述成一行人話，例如「原價 300、特價 240」 */
+const describeOverride = (override: TPriceOverride): string => {
+	const parts: string[] = []
+	if (null !== override.regular_price) parts.push(`原價 ${override.regular_price}`)
+	if (null !== override.sale_price) parts.push(`特價 ${override.sale_price}`)
+	if (null !== override.signup_fee) parts.push(`註冊費 ${override.signup_fee}`)
+	return parts.join('、')
+}
+
+/**
  * 收斂 antd-toolkit 對 `type` 欄位的型別宣告落差
  *
  * `TProductRecord.type` 被宣告成 `Omit<TProductType, 'variation' | …>` —— `Omit` 套在
@@ -690,7 +716,15 @@ const ItemsEditorComponent = ({
 			align: 'center',
 			render: (_: unknown, record) => {
 				const { product } = resolveDisplay(record)
-				return product ? <ProductStock record={product} /> : DASH
+				if (!product) return DASH
+
+				/*
+				 * 可變商品 / 可變訂閱：父層的庫存狀態多半只是「所有變體的彙總」，
+				 * 站長真正需要看的是逐變體庫存 —— 改到展開列顯示。
+				 */
+				if (isVariable(product.type as string)) return VARIATION_LEVEL_HINT
+
+				return <ProductStock record={product} />
 			},
 		},
 		{
@@ -698,8 +732,55 @@ const ItemsEditorComponent = ({
 			key: 'override',
 			width: 260,
 			render: (_: unknown, record) => {
+				const { product } = resolveDisplay(record)
 				const { regular_price: regular, sale_price: sale } = record.override
 				const invalid = isSaleOverRegular(record.override)
+
+				/*
+				 * 可變商品 / 可變訂閱：商品層不再提供輸入框，一律到展開列逐變體設定。
+				 *
+				 * ⚠️ 但**不能只是把輸入框藏起來** —— 商品層覆寫對這類商品仍然會生效：
+				 * `OverridePriceResolver::resolve()` 在「該變體沒有任何覆寫」時會 fallback
+				 * 回商品層 override（`Domain/Service/OverridePriceResolver.php:66-73`）。
+				 * 靜默隱藏會讓站長看不到一個仍在影響售價的設定；而且
+				 * `validateItemsPriceOverride` 是連商品層一起驗的，殘留值若剛好是
+				 * 「特價 > 原價」，送出會被擋下卻**找不到任何欄位可以改**，形成死結。
+				 * 因此殘留值一律顯示出來，並給一鍵清除。
+				 */
+				if (isVariable(product?.type as string)) {
+					if (!hasProductLevelOverride(record.override)) {
+						return VARIATION_LEVEL_HINT
+					}
+
+					return (
+						<div className="text-xs leading-5">
+							<div className={invalid ? 'text-red-500' : 'text-orange-500'}>
+								仍有商品層覆寫：{describeOverride(record.override)}
+							</div>
+							<div className="text-gray-400">
+								{invalid
+									? '特價高於原價，送出會被擋下，請先清除。'
+									: '未個別覆寫的變體會沿用這組價格。'}
+							</div>
+							<Button
+								size="small"
+								type="link"
+								className="px-0"
+								onClick={() =>
+									handlePatchOverride(record.product_id, {
+										regular_price: null,
+										sale_price: null,
+										signup_fee: null,
+									})
+								}
+								disabled={disabled}
+							>
+								清除商品層覆寫
+							</Button>
+						</div>
+					)
+				}
+
 				return (
 					<div>
 						<div className="mb-2">
@@ -777,20 +858,57 @@ const ItemsEditorComponent = ({
 			),
 			dataIndex: 'inflated_count',
 			width: 170,
-			render: (n: number, record) => (
-				<InputNumber
-					size="small"
-					min={0}
-					value={n}
-					onChange={(v) =>
-						handleUpdate(record.product_id, {
-							inflated_count: typeof v === 'number' ? v : 0,
-						})
-					}
-					disabled={disabled}
-					style={{ width: 110 }}
-				/>
-			),
+			render: (n: number, record) => {
+				const { product } = resolveDisplay(record)
+
+				/*
+				 * 可變商品 / 可變訂閱：商品層不再提供輸入框（同覆寫價格）。
+				 *
+				 * ⚠️ 已設定的值仍會在賣場前台生效 —— 商品卡片的「已售 N 件」＝
+				 * 真實銷量 + 商品層 inflated_count（`templates/profit-shop-front.php`）。
+				 * 相對地，變體層的灌水人數目前**沒有任何顯示位置**（賣場前台只渲染父商品
+				 * 卡片，變體選擇整段發生在 WC 單品頁，見 specs/tech-debt.md TD-15）。
+				 * 因此殘留值必須顯示 + 可清除，不能靜默隱藏。
+				 */
+				if (isVariable(product?.type as string)) {
+					if (n <= 0) return VARIATION_LEVEL_HINT
+
+					return (
+						<div className="text-xs leading-5">
+							<div className="text-orange-500">仍有商品層 {n} 人</div>
+							<div className="text-gray-400">
+								賣場卡片的「已售 N 件」會加上這個數字。
+							</div>
+							<Button
+								size="small"
+								type="link"
+								className="px-0"
+								onClick={() =>
+									handleUpdate(record.product_id, { inflated_count: 0 })
+								}
+								disabled={disabled}
+							>
+								清除
+							</Button>
+						</div>
+					)
+				}
+
+				return (
+					<InputNumber
+						size="small"
+						min={0}
+						value={n}
+						onChange={(v) =>
+							handleUpdate(record.product_id, {
+								inflated_count: typeof v === 'number' ? v : 0,
+							})
+						}
+						disabled={disabled}
+						style={{ width: 110 }}
+					/>
+				)
+			},
 		},
 		{
 			title: '操作',
@@ -886,6 +1004,7 @@ const ItemsEditorComponent = ({
 									onRemoveOrphan={(variationId) =>
 										handleRemoveOrphanVariation(record.product_id, variationId)
 									}
+									productOverride={record.override}
 									disabled={disabled}
 								/>
 							),

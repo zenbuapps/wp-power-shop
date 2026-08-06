@@ -318,6 +318,21 @@ $templates  = __DIR__;
 		*/
 		if ( $is_shop_open ) :
 			foreach ( $ps_products as $ps_product ) :
+				/*
+				* N-4 / TD-65：卡片已因「暫無可購買規格」而停用的商品，不印 Modal。
+				*
+				* 與上面 313-317 行的論證一致——Modal 內含一張真正的 `<form method="post">`，
+				* 「表單存在就有被改掉 disabled 屬性送出的空間」。實測目前**不可利用**
+				* （父商品 `is_purchasable()` 為 false，`variation_id=0` 會被 WC 擋下），
+				* 但註解與實作不一致本身就是 TD-20 / TD-54 / TD-62 那類缺陷的溫床，
+				* 順帶也省下一整段沒有任何用途的 DOM。
+				*
+				* 判斷與卡片共用 ProfitShopFrontView::has_no_purchasable_variation()，
+				* 兩處各寫一份就會再次分歧。
+				*/
+				if ( ProfitShopFrontView::has_no_purchasable_variation( $ps_product ) ) {
+					continue;
+				}
 				require $templates . '/partials/profit-shop-modal.php';
 			endforeach;
 		endif;

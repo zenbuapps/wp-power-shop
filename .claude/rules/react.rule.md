@@ -472,6 +472,69 @@ onClick: (e) => {
 
 **任何未來要把 antd `<Form>`（尤其含 `type="submit"` 按鈕）放進 `SimpleModal` 的元件，都要套用這個包法**，不要等撞到才想起來。這條連同 Modal 情境其他必須關閉的元素，整理成清單見 `admin-list-ui.rule.md` §7。
 
+### ⚠️ SimpleModal 內的所有 antd 浮層預設被遮罩蓋住（2026-08-05 踩坑，與上一條是同一個元件的兩個獨立缺陷）
+
+**症狀**：`ProductPickerModal` 內「商品類型」的 Select 點下去**不出現下拉選單**，同一個
+`ProductFilter` 元件在 `#/products` 卻完全正常。沒有任何 console error。
+
+**根因是純 z-index 比較，兩個數字都寫死在別人的程式碼裡**：
+
+| 元素 | zIndex | 出處 |
+|------|--------|------|
+| `SimpleModal` 遮罩 | **2000** | `antd-toolkit` `SimpleModal/index.js` 的 `zIndex: d = 2e3` 預設值 |
+| antd Select 下拉 | **1050** | `zIndexPopupBase`（seed token 預設 1000）+ 50，見 `antd/es/select/style/token.js` |
+
+1050 < 2000 → 下拉 portal 到 `document.body` 後，**整片被 Modal 的白色內容框蓋住**。
+DOM 其實有正常渲染、Select 也確實進入 open 狀態（`showSearch` 的 Select 在展開時箭頭會
+換成放大鏡 icon，這是肉眼可辨的線索），只是使用者看不到，於是看起來像「點了沒反應」。
+
+**為什麼 antd 自己的 `<Modal>` 沒這個問題**：antd v5 的 `useZIndex`（`antd/es/_util/hooks/useZIndex.js`）
+會讀 `zIndexContext`，把 Modal 內的子浮層自動疊到 Modal 之上。但那個 context 只有 antd 官方的
+`Modal` / `Drawer` / `Popover` 等容器元件會 provide——`SimpleModal` 是 `antd-toolkit` 自刻的
+`div`，`parentZIndex` 為 `undefined`，浮層因此退回 CSS 的 1050。
+
+**修法**：在 `SimpleModal` 的 children 外包一層 `ConfigProvider`，把 `zIndexPopupBase` 抬到
+遮罩之上。**不要**逐個元件傳 `getPopupContainer`：
+
+```tsx
+const SIMPLE_MODAL_DEFAULT_Z_INDEX = 2000 // antd-toolkit 寫死、未匯出
+
+<SimpleModal {...modalProps}>
+  <ConfigProvider
+    theme={{
+      token: {
+        zIndexPopupBase:
+          (modalProps?.zIndex ?? SIMPLE_MODAL_DEFAULT_Z_INDEX) + 100,
+      },
+    }}
+  >
+    <div onClick={(e) => e.stopPropagation()}>{children}</div>
+  </ConfigProvider>
+</SimpleModal>
+```
+
+三個設計理由：
+
+1. **一次涵蓋所有浮層**——`zIndexPopupBase` 是 seed token，Select / DatePicker / Dropdown /
+   Menu 的 `zIndexPopup` 都是它 `+50`，Tooltip / Popover 是 `+100`（見 `useZIndex.js` 的
+   `consumerBaseZIndexOffset` / `containerBaseZIndexOffset`）。改一個值全部到位。
+2. **`getPopupContainer` 在這裡行不通**——`ProductFilter` 來自 `antd-toolkit`，props 只有
+   `searchFormProps` / `options` / `mobileWidth`，沒開放這個洞；就算開放了，`SimpleModal`
+   的內容區是 `at-overflow-auto`，把浮層塞進捲動容器只會換成被裁切。
+3. **從 `modalProps.zIndex` 推導而非寫死**——呼叫端若自訂了 Modal 的 zIndex，浮層基準會跟著走。
+
+**ConfigProvider theme 是淺層合併**（`antd/es/config-provider/hooks/useTheme.js` 的
+`token: Object.assign({}, parentThemeConfig.token, themeConfig.token)`），`main.tsx` 設的
+`colorPrimary` / `borderRadius` 不受影響，只覆寫 `zIndexPopupBase` 這一個 key。
+
+**為什麼這個坑到現在才被發現**：`SimpleModal` 全專案只有兩個消費點，`TaxonomyModal` 裡面
+只有 `SortableTree` / `SortableList`，**沒有任何會產生浮層的 antd 元件**，所以一直沒撞上。
+`ProductPickerModal` 是第一個把 Select 放進 `SimpleModal` 的地方。
+
+**任何未來要把 Select / DatePicker / Dropdown / Tooltip 放進 `SimpleModal` 的元件，都要套用
+這層 ConfigProvider**——上一條的 `stopPropagation` 保護表單送出，這條保護浮層可見性，
+兩者互相獨立、缺一不可。
+
 ### `showCard` prop：antd-toolkit `Card` 的 `showCard={false}` 會連 `title` / `className` 一起消失（三輪改造踩坑）
 
 `ProductTableBody` 新增 `showCard?: boolean`（預設 `true`）。`antd-toolkit` 的 `Card` 元件在 `showCard={false}` 時是**直接回傳 `children`，整張 `Card` 不渲染**——這代表 `title` 與 `className`（包含用來留間距的 `mb-4`）會**一併消失**，不是「隱藏外框但保留內距」。
@@ -956,6 +1019,31 @@ WC REST `per_page` 硬上限（100）截斷時，用 `variations.length >= VARIA
 `x-wp-total` header 時會把 `total` fallback 成 `1`，拿它當截斷判斷條件會讓「真的被截斷」
 的情況因為 `total` 是假的 `1` 而完全不觸發截斷提示，使用者會以為變體清單完整，其實只看到
 前 100 筆。
+
+### 可變商品在「商品層」不給輸入框，但殘留值必須顯示（2026-08-05）
+
+`ItemsEditor` 對 `isVariable(product.type)` 的列，把**庫存 / 覆寫價格 / 灌水購買人數**
+三欄換成灰字「依變體設定」，輸入框整組移除——這三件事改到展開列逐變體做
+（`VariationOverrideEditor` 因此新增「庫存」欄，且移除了原本那張說明四種顧客動線的
+info `<Alert>`，說明搬進元件 docblock 保留）。
+
+⚠️ **關鍵在於「不能只是把輸入框藏起來」**，這是本次改動裡唯一有實質風險的一段：
+
+| 欄位 | 藏起來之後仍然生效嗎 | 為什麼 |
+|------|---------------------|--------|
+| 覆寫價格 | **會** | `OverridePriceResolver::resolve()` 在「該變體完全沒有任何覆寫」時 fallback 回商品層 override |
+| 灌水購買人數 | **會** | 賣場卡片的「已售 N 件」讀的就是商品層 `inflated_count`（變體層零顯示點，TD-15） |
+| 庫存 | 不會（純唯讀顯示） | — |
+
+前兩欄若靜默隱藏，站長會看不到一個**仍在影響售價 / 前台數字**的設定；更糟的是
+`validateItemsPriceOverride` 連商品層一起驗，殘留值若是「特價 > 原價」，送出會被擋下
+卻**找不到任何欄位可以改**——死結。因此有殘留值時一律印出「仍有商品層覆寫：原價 X、
+特價 Y」+ 說明 + 一鍵清除鈕；沒有殘留值才顯示「依變體設定」。
+
+這條與「孤兒鍵必須顯示出來、不可靜默隱藏」（同檔 `VariationOverrideEditor` 一節）
+是同一條紀律的兩個案例：**會影響後端行為的狀態，UI 上一定要有對應物**。
+
+連帶的功能落差已登記 `specs/tech-debt.md` TD-48（可變商品的「已售 N 件」現在無法從 0 設成 N）。
 
 ### 多 Tab 表單：驗證失敗**絕不能靜默 return**
 

@@ -31,6 +31,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\InflatedCount;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\PriceOverride;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ProfitRate;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ShopMode;
+use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\VariationOverride;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopFrontData;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopShortcode;
@@ -773,6 +774,206 @@ final class ProfitShopShortcodeTest extends TestCase {
 			$shape( $missing_hint ),
 			'「草稿無權限」與「不存在」的提示必須無法區分，否則會洩漏草稿賣場的存在性'
 		);
+	}
+
+	// ========== 無定價變體（2026-08 修法）==========
+
+	/**
+	 * 【回歸鎖】自身無定價、但賣場設了變體覆寫價的可變商品，兩條路徑都要印出價格與變體資料
+	 *
+	 * 修法前：`get_available_variations()` 會在
+	 * woocommerce/includes/class-wc-product-variable.php:335 把無定價變體全部過濾掉
+	 * （`variation_is_visible()` 的條件含 `'' !== get_price()`），於是 `variations` 是空陣列——
+	 * 卡片連價格節點都不印、`ps-variations-data` 是 `[]`、Modal 永遠停在「此組合無法購買」，
+	 * 而且畫面與 console 都沒有任何線索。
+	 *
+	 * @test
+	 * @group happy
+	 * @group smoke
+	 */
+	public function test_priceless_variations_with_override_render_prices_on_both_paths(): void {
+		$product = $this->createVariableProduct(
+			[
+				'name'       => '無定價變體商品',
+				'variations' => [
+					[ 'regular_price' => '' ],
+					[ 'regular_price' => '' ],
+				],
+			]
+		);
+		$ids     = array_values( array_map( 'intval', $product->get_children() ) );
+		$this->assertCount( 2, $ids, '測試前置：應建立兩個變體' );
+
+		$shop_id = $this->create_shop(
+			[
+				new OverrideItem(
+					product_id: $product->get_id(),
+					override: new PriceOverride( null, null, null ),
+					inflated_count: new InflatedCount( 0 ),
+					variations: [
+						$ids[0] => new VariationOverride( new PriceOverride( '30', '27', null ), new InflatedCount( 0 ) ),
+						$ids[1] => new VariationOverride( new PriceOverride( '50', '45', null ), new InflatedCount( 0 ) ),
+					]
+				),
+			]
+		);
+		$shop    = $this->repo->find( $shop_id );
+		$this->assertInstanceOf( ProfitShop::class, $shop, '測試前置：賣場應可讀回' );
+
+		$html = $this->render( $shop_id );
+
+		$this->assertStringContainsString( '無定價變體商品', $html, '防空斷言：商品應被渲染' );
+		$this->assertStringContainsString( '27', $html, '卡片應印出覆寫後的最低價' );
+		$this->assertStringContainsString( '45', $html, '卡片應印出覆寫後的最高價' );
+		$this->assertStringNotContainsString( '暫無可購買規格', $html, '有覆寫價時不得落進「無可購買規格」分支' );
+		$this->assertStringContainsString(
+			'"id":' . $ids[0],
+			$html,
+			'Modal 的 ps-variations-data 必須含被覆寫的變體（修法前這裡是空陣列）'
+		);
+
+		// 兩條渲染路徑必須逐字相同——修法在 build_variations()，兩條路徑共用同一份 payload。
+		$this->assertSame(
+			$this->render_template_as_renderer( $shop ),
+			$html,
+			'獨立頁面與 shortcode 兩條路徑的 DOM 必須完全相同'
+		);
+	}
+
+	/**
+	 * 【誠實狀態】完全沒有可購買規格時，卡片必須明說，且不得印出可送出的加購表單
+	 *
+	 * 這是修法後**唯一**仍然「不可購買」的合法組合（變體沒定價、賣場也沒設覆寫價）。
+	 * 沒有這段文案的話，站長只會看到一張沒有價格的卡片，點進去才發現按鈕永遠停用。
+	 *
+	 * @test
+	 * @group edge
+	 * @group security
+	 */
+	public function test_variable_product_without_any_purchasable_variation_says_so(): void {
+		$product = $this->createVariableProduct(
+			[
+				'name'       => '全無定價商品',
+				'variations' => [
+					[ 'regular_price' => '' ],
+					[ 'regular_price' => '' ],
+				],
+			]
+		);
+
+		$shop_id = $this->create_shop( [ $this->item_for( $product->get_id() ) ] );
+
+		$html = $this->render( $shop_id );
+
+		$this->assertStringContainsString( '全無定價商品', $html, '防空斷言：卡片本身仍要印出來' );
+		$this->assertStringContainsString( '暫無可購買規格', $html, '必須據實告知，不可留一塊空白' );
+		$this->assertStringContainsString(
+			'data-ps-disabled="1"',
+			$html,
+			'卡片必須停用，避免使用者點開一個必然失敗的 Modal'
+		);
+		/*
+		* 卡片上不得留下任何可觸發的動作元素。
+		*
+		* `data-ps-js-label` 只出現在卡片的加購 form / 連結上（見 profit-shop-card.php
+		* 的兩條可動作分支），停用分支印的是一顆純粹的 disabled button。
+		*
+		* ⚠️ 這裡刻意**不**斷言整份輸出沒有 `name="add-to-cart"`：賣場仍在販售期間，
+		* 商品 Modal 照常印出（Modal 的 gate 是 `$is_shop_open`，本次未動）。那張表單
+		* 的按鈕本來就因為「variable 且尚未選定變體」而 disabled，就算被手動送出，
+		* WooCommerce 自己也會在 class-wc-cart.php:1229 擋下（父商品無可見子變體
+		* ⇒ 價格為空 ⇒ is_purchasable() 為 false）。與「閉店」情境不同——那裡的販售
+		* 起訖時間是 WooCommerce 完全不知道的規則，所以才必須整段不印。
+		*/
+		$this->assertStringNotContainsString(
+			'data-ps-js-label',
+			$html,
+			'沒有可購買規格時，卡片不得留下可送出的表單或可點擊的連結'
+		);
+	}
+
+	/**
+	 * 【F-2】`variable-subscription` 且無任何可購買變體 → 卡片必須停用並據實告知
+	 *
+	 * 舊版 `'variable' === $card_type` 的嚴格字串比較讓這個型別完全落在守門之外：
+	 * 價格區塊印成**空的 `<p>`**、`data-ps-disabled="0"` 可點、Modal 開得起來卻沒有任何
+	 * 屬性選項，而加入購物車按鈕是啟用的——按下去整頁 reload、什麼都沒發生、
+	 * **沒有任何錯誤訊息**（站台商品 #742「K8S 開戰」實測）。
+	 *
+	 * @test
+	 * @group edge
+	 * @group security
+	 */
+	public function test_variable_subscription_without_purchasable_variation_renders_disabled_card(): void {
+		if ( ! class_exists( '\WC_Product_Variable_Subscription' ) ) {
+			$this->markTestSkipped( 'WooCommerce Subscriptions 未啟用，無法建立 variable-subscription 商品' );
+		}
+
+		$parent = new \WC_Product_Variable_Subscription();
+		$parent->set_name( 'F-2 無定價訂閱商品' );
+		$parent->set_status( 'publish' );
+		$parent->save();
+
+		foreach ( [ 1, 2 ] as $ignored ) {
+			$variation = new \WC_Product_Variation();
+			$variation->set_parent_id( $parent->get_id() );
+			$variation->set_status( 'publish' );
+			$variation->set_regular_price( '' );
+			$variation->save();
+		}
+
+		$shop_id = $this->create_shop( [ $this->item_for( $parent->get_id() ) ] );
+		$html    = $this->render( $shop_id );
+
+		$this->assertStringContainsString( 'F-2 無定價訂閱商品', $html, '防空斷言：卡片本身仍要印出來' );
+		$this->assertStringContainsString( '暫無可購買規格', $html, 'variable-subscription 也必須據實告知' );
+		$this->assertStringContainsString( 'data-ps-disabled="1"', $html, '卡片必須停用' );
+		$this->assertStringNotContainsString(
+			'name="add-to-cart"',
+			$html,
+			'不得留下任何可送出的加購欄位'
+		);
+	}
+
+	/**
+	 * 【回歸鎖】閉店賣場即使商品有可購買的變體，仍然整段不印 Modal
+	 *
+	 * `AddToCartHook` 的三道閘門**不檢查販售起訖時間**，接不住「把 disabled 屬性拔掉
+	 * 再送出」，所以唯一可靠的做法是連表單都不要印。無定價變體的救援不得鬆動這條。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_closed_shop_never_renders_modal_for_rescued_variations(): void {
+		$product = $this->createVariableProduct(
+			[
+				'name'       => '閉店無定價變體商品',
+				'variations' => [ [ 'regular_price' => '' ] ],
+			]
+		);
+		$ids     = array_values( array_map( 'intval', $product->get_children() ) );
+
+		$shop_id = $this->create_shop(
+			[
+				new OverrideItem(
+					product_id: $product->get_id(),
+					override: new PriceOverride( null, null, null ),
+					inflated_count: new InflatedCount( 0 ),
+					variations: [
+						$ids[0] => new VariationOverride( new PriceOverride( '30', '27', null ), new InflatedCount( 0 ) ),
+					]
+				),
+			],
+			'publish',
+			[ 'endTime' => ( \time() - 86400 ) * 1000 ]
+		);
+
+		$html = $this->render( $shop_id );
+
+		$this->assertStringContainsString( '閉店無定價變體商品', $html, '防空斷言：閉店仍會印卡片' );
+		$this->assertStringContainsString( '27', $html, '防空斷言：變體確實被救回來了（否則本測試等於沒驗到東西）' );
+		$this->assertStringNotContainsString( '<dialog', $html, '閉店賣場不得印出任何商品 Modal' );
+		$this->assertStringNotContainsString( 'name="add-to-cart"', $html, '閉店賣場不得印出可送出的加購表單' );
 	}
 
 	// ========== Helpers ==========

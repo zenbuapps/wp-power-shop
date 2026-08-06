@@ -13,8 +13,9 @@
  * 安全規則（防偽造）：
  *   1. shop_id 必須存在
  *   2. shop status = 'publish'（draft 不允許）
- *   3. product_id 必須存在於 shop->items()（防止「持 shop_A token，加 shop_B 商品」）
- *   4. 任一條件失敗 → 不注入 profit_shop_id（cart 仍正常加入，走商品原價）
+ *   3. 賣場必須在販售期間內（Phase 16 的 startTime / endTime；2026-08 第 5 輪新增）
+ *   4. product_id 必須存在於 shop->items()（防止「持 shop_A token，加 shop_B 商品」）
+ *   5. 任一條件失敗 → 不注入 profit_shop_id（cart 仍正常加入，走商品原價）
  */
 
 declare(strict_types=1);
@@ -23,6 +24,7 @@ namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce;
 
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\ProfitShop;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterface;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopFrontData;
 
 /**
  * 從 query string `profit_shop_id` 注入到 cart_item_data
@@ -74,6 +76,32 @@ final class AddToCartHook {
 
 		$shop = $this->try_find_shop( $shop_id );
 		if ( null === $shop ) {
+			return $cart_item_data;
+		}
+
+		/*
+		* 第三道閘門：販售期間（2026-08 第 5 輪新增）
+		*
+		* 在此之前，「賣場尚未開賣 / 已結束販售」**完全沒有任何後端檢查**——前台靠
+		* Phase 16 的「Modal 整段不印」擋住，但那只是 UI 層防呆，接不住手工 POST。
+		* `.claude/rules/profit-shop.rule.md` §7 明寫「Modal 必須整段不印」的理由正是
+		* 「三道閘門不檢查時間」，本行把那個缺口補上。
+		*
+		* 🔴 定義刻意與 template 的 $is_shop_open **共用同一份實作**
+		* （ProfitShopFrontData::settings() 的 shopStatus）。安全閘門依賴呈現層 helper
+		* 看似分層不純，但兩者若各寫一份就會回到「畫面說關店、後端卻收單」——這個
+		* codebase 已經在「兩條渲染路徑必須傳同一組變數」吃過一次同型的虧。
+		* 兩者同屬 Infrastructure 層，依賴方向合法；settings() 便宜、不組 products。
+		*
+		* 未設定開始 / 結束時間 ⇒ shopStatus 為 'published' ⇒ 不限制（絕大多數賣場）。
+		* 一律以**伺服器時間**（time()）判斷；startTime/endTime 是 epoch 毫秒、與時區無關，
+		* 永遠不讀任何客戶端時間。
+		*
+		* ⚠️ 已在購物車內的品項刻意**不**受此閘門影響（閘門 ③ 只驗簽章）：活動結束的
+		* 那一秒靜默清空所有顧客的購物車，比放行更糟，且與「v1 簽章分支永久保留」
+		* 是同一條紀律（不要讓既有購物車的分潤價無聲消失）。
+		*/
+		if ( ! ProfitShopFrontData::is_sale_window_open( $shop ) ) {
 			return $cart_item_data;
 		}
 

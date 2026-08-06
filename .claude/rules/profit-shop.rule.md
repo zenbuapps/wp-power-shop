@@ -594,7 +594,17 @@ codebase 已經在兩個不同場景吃過虧：資料形狀錯誤時，寧可�
    fallback 回商品原價的安全保護**——那個 fallback 存在的意義就是「簽章對不上就不能相信
    這個覆寫價」，若單品頁的 filter 不看簽章、無條件套用，這道防線會被繞過。
 
-**價格語意必須與 `CartPriceOverrideHook::resolve_effective_price()` 逐字一致**：變體只要有
+⚠️ **本段（Phase 9 原文）已被兩次改動疊加，讀的時候要一起看 §12.8**：
+(1) 上面第 3 點說的三道閘門，2026-08-06 第 6 輪起是**四道**——多了「賣場在販售期間內」
+（TD-57；缺了它，期間外仍可從單品頁把無定價變體加進購物車，且**零分潤歸屬**）。
+(2) 🔴 **「只在對的時機註冊」不是唯一的防線，也不足以保證安全**：filter 一旦在
+`template_redirect` prio 20 掛上就**整個 request 都不解除**，而購物車與商品頁**在同一個
+request 裡並存** ⇒ 曾實測到一筆完全沒有簽章的 cart item 被套上覆寫價（1000 → 27）。
+真正的防線是 §12.8 那條不變量 + `is_cart_item_object()` 的**物件身分**比對（TD-62）。
+(3) 下一段提到的 `resolve_effective_price()` 已於 Phase 13 更名為 `resolve_override_prices()`
+並改為委派 `OverridePriceResolver`；「逐字一致」現在是**結構保證**，不再是靠人維持的紀律。
+
+**價格語意必須與 cart 端逐字一致**：變體只要有
 任一覆寫欄位（原價或特價），就**整組**採用變體層的 override，**不與商品層逐欄混用**。
 `SingleProductPriceHook::resolve_prices()` 的判斷順序（先看變體層 `sale_price` /
 `regular_price` 是否非 null，有就整組回傳變體層值；否則才 fallback 到商品層 override）
@@ -1795,6 +1805,619 @@ pc-input-bordered pc-input-sm pc-join-item`）。`ProfitShopFrontView` 內留了
 `showConfetti` 與 legacy 未知 key 會被整批清掉）、清空的時間寫 `0` 而非刪 key
 （`base` 裡的舊值不會被覆蓋，症狀是「時間清掉了，存檔後又跑回來」）。前端細節見
 `react.rule.md` §6.5。
+
+#### 變體比對：任意 (Any) 屬性是 wildcard，但具體變體必須優先（2026-08-05）
+
+賣場前台商品 Modal 的變體比對（`inc/assets/js/profit-shop-front.js` 的 `matchVariation()` /
+`findBestVariation()` / `isAllAttributesChosen()` / `hasAnyAttribute()`）在 2026-08-05 分三輪
+修復。這段邏輯決定「使用者選了哪些屬性 → 送哪一個 `variation_id` 進購物車」，而 **Phase 9 的
+變體層價格覆寫是以 variation_id 為鍵**——挑錯變體在本專案不是顯示瑕疵，是**收錯錢**，因此
+紀律比 WooCommerce 官方更嚴。
+
+三輪的分工：第一輪修「Any 屬性被當成必須等於空字串」的主 bug（該類商品結構性無解）；
+第二輪修「wildcard 豁免沒有配對具體優先」而少收錢；第三輪把第二輪的兩趟法換成
+**單趟 + 具體度計分**（兩趟法只分兩級，仍有一整類會挑錯的情境，見下）。
+⚠️ 讀舊 commit / 舊文件時若看到「兩趟」「`findVariation( allowWildcard )`」「第一趟 / 第二趟」
+「三個以上屬性才會有極限」「結果與陣列順序無關」——**那些敘述已經全部作廢**，以本節為準。
+
+##### WooCommerce 的「任意 (Any)」表示法：空字串，且**每個變體都一定帶滿全部屬性鍵**
+
+`wc_get_product_variation_attributes()`（`woocommerce/includes/wc-product-functions.php:862`）
+先把父商品**全部** `is_variation` 屬性 seed 成 `''`（原始碼註解逐字寫著
+`// Add it - 'any' will be assumed.`），再用該變體自己的 postmeta 逐一覆蓋。沒被覆蓋到的那
+一格就維持空字串 = 「任意」。
+
+兩個推論，兩個都被本專案的程式碼依賴：
+
+1. 變體的 `attributes` 物件**必定含有父商品全部的變體屬性鍵**（缺鍵代表資料異常或被第三方
+   `woocommerce_available_variation` filter 動過）。
+2. 空字串**不是**「值為空」，是 **wildcard**。把它當成「必須等於空字串」來比對，該屬性就
+   **沒有任何使用者輸入能匹配**（使用者在 UI 上永遠選不出空字串）——這正是第一輪修復前的
+   bug：含 Any 屬性的商品在 Modal 內**結構性無解**，按鈕永遠停用，且沒有任何錯誤訊息。
+
+##### 「選滿」與「值比對」是兩件獨立的事，不可擠進同一個 if
+
+官方 `add-to-cart-variation.js` 也把這兩件事分開放：
+
+| 官方位置 | 做什麼 | 對應本專案 |
+|---|---|---|
+| `:200` `attributes.count && attributes.count === attributes.chosenCount` | 使用者是否**每一組屬性都選了具體值** | `isAllAttributesChosen()` |
+| `:575` `isMatch()` 的 `val1.length !== 0 && val2.length !== 0` 才比對值 | 空字串**豁免**，不參與否決 | `findBestVariation()` 內 `expected === ''` 的 `continue` 分支 |
+
+⚠️ **Any 屬性一樣要求使用者選出具體值**——`WC_Cart::add_to_cart()`
+（`class-wc-cart.php:1091`）的註解寫得很白：`// Filter out 'any' variations, which are empty,
+as they need to be explicitly specified while adding to cart.`。所以豁免只發生在**比對**這一層，
+不能連帶放寬**選滿**那一層；混寫成一個判斷式的話，只選 Color 不選 Size 也會匹配成功、按鈕啟用，
+送出後被 WooCommerce 判「缺少必填屬性」拒絕——症狀從「按鈕永遠停用」變成「按了換頁還報錯」，
+只是換一個 bug。
+
+##### 「選滿」判斷刻意以 DOM 為來源，不從變體 JSON 的鍵集反推
+
+`attributeNames` 數的是畫面上 distinct 的 `data-ps-attr-name`，**不是** `Object.keys(variation.attributes)`。
+三個理由，第二個是關鍵：
+
+1. 需求本身就是「選滿**畫面上**所有屬性欄位」，畫面上有幾組，DOM 說了算。
+2. 🔴 **兩道防線不可押在同一個假設上**。上面推論 1（變體必含全部鍵）正是 wildcard 比對賴以
+   成立的前提；若「選滿」也從變體 JSON 反推，第三方 filter 一旦剝掉空值鍵，**兩道防線會同時
+   失效**——畫面上有兩組屬性、JSON 裡只剩一組，使用者只選一組就被判定「已選滿」，接著把一個
+   實際上是 catch-all 的變體送進購物車。
+   （「挑哪一個變體」這件事計分法本身不受剝鍵影響，理由見下節；但「選滿」是另一道關卡，
+   它會失效。兩者不要混為一談。）
+3. 官方 `getChosenAttributes()`（`:526`）數的也是 DOM 欄位。
+
+`attributeNames` 用 `indexOf` 而非 `{}` 當 set：屬性名若剛好叫 `toString` / `constructor`，
+物件查表會命中 `Object.prototype` 的成員而被誤判為重複、少算一組。`isAllAttributesChosen()`
+內同理用 `typeof value !== 'string'` fail-closed。
+
+##### 🔴 挑選規則：具體屬性數最多者勝（單趟計分）——刻意偏離官方
+
+`findBestVariation()` **掃完全部候選**（不 early return），對每個匹配成功的變體算一個
+`score` = 它的 `attributes` 中**值非空字串**的屬性個數（＝它釘死了幾個條件），取最高分者；
+`matchVariation()` 只多加一道 `isAllAttributesChosen()` 前提。`expected === ''` 走 `continue`
+（wildcard，**不計分**），這一行與 `score++` 就是具體度差異的唯一來源。
+
+**為什麼不能是「第一個命中者勝」：**
+
+```
+#1 { color: '',    size: '' }  ← 全域 catch-all，售價 500
+#2 { color: 'red', size: '' }  ← 紅色專屬覆寫，售價 800
+選 red + l →  #2 的約束集是 #1 的嚴格超集，語意上毫無歧義，#2 是唯一正解
+```
+
+而 `get_available_variations()` 的順序是 `menu_order ASC, ID ASC`——先建 catch-all 是很自然
+的操作順序，「命中即回傳」就會拿到 #1。後果有四層，**四層都沒有任何錯誤訊息**：
+
+| # | 後果 |
+|---|------|
+| 1 | **金額直接錯**：站長為 red 設的 800 被繞過，Modal 顯示 500、實收 500 |
+| 2 | **Phase 9 變體層覆寫一併失效**：`OverrideItem::$variations` 以 variation_id 為鍵，針對 #2 設的 `VariationOverride`（原價／特價／灌水人數）永遠套不到。`SingleProductPriceHook` / `CartPriceOverrideHook` 只會忠實按 #1 算——**三道閘門沒有任何一道會發現拿錯了變體** |
+| 3 | **AJAX 分流跟著錯**：`hasAnyAttribute()` 判斷的是「選中的那一個」，挑錯就可能該走 AJAX 卻降級換頁，或反之 |
+| 4 | **原生降級路徑同樣錯**：hidden input 的 `variation_id` 寫進去的是錯的那個 |
+
+⚠️ **官方就是「第一個命中者勝出」**——`findMatchingVariations()`（`:553`）收集全部匹配者後，
+呼叫端（`:231-232`）直接 `.shift()` 取第一個，完全不分具體與 wildcard。**本專案刻意比官方
+嚴謹**，因為官方沒有分潤價格覆寫這一層：在官方那裡挑錯變體只是顯示差異，在本專案等於**少收
+錢**。這是明示的產品決策，**不是**沒讀官方原始碼。
+
+⚠️ **連帶的已知取捨**：同一個「catch-all + 部分具體覆寫」商品，賣場 Modal 會選 #2、WC 單品頁
+（官方 `.shift()`）會選 #1，**兩處顯示價可能不同**。可達性低（variable 卡片雖連向 permalink，
+但 JS 啟用時被攔截改開 Modal），且 #2 才是語意正確解，因此接受；日後若有人回報「Modal 800、
+單品頁 500」，那是這個取捨、不是新 bug。
+
+**🔴 兩趟法（第二輪的作法）為什麼不夠——這是最容易被「簡化」回去的地方**
+
+第二輪曾用 `findVariation( false ) || findVariation( true )`：第一趟排除所有含空字串的變體、
+第二趟才放行。它只分**兩級**——「全具體」與「其餘全部」（1 個 wildcard、2 個、全 wildcard
+混為一談）。只要**參與競爭的兩個變體都不是全具體**，它們就一起落到第二趟，回到陣列順序決勝。
+上面那個 `#1` / `#2` 反例正是如此：**兩個屬性就會壞，不需要三個**。
+
+命中率不是理論風險（第三輪以窮舉 + 隨機差分實測，裁判函式獨立實作、不共用受測程式碼）：
+
+| 樣本 | 兩趟法挑到「非唯一最佳解」 | 計分法 |
+|---|---|---|
+| 3 屬性隨機差分（22401 個有匹配樣本） | 2768 次（**12.4%**） | **0** |
+| 2 屬性窮舉（104 組） | 4 | **0** |
+| 形狀庫窮舉 11760 案例（含剝鍵變形） | 960 | **0** |
+
+**為什麼計分法完整而兩趟法不完整**：全具體變體的 score = 屬性總數 = 最大可能值，所以
+「全具體必勝」是計分法的**自然推論**、不需要特例；而兩趟法把「全具體 vs 其餘」寫死成二元
+分級，其餘級別全部混為一談。更一般地：若 X 釘死的屬性集合是 Y 的**嚴格超集**，則
+`score(X) > score(Y)`，**被支配者永不勝出**——這是可證的，不只是統計結果。
+
+**📌 平局取陣列第一個，而那正是唯一沒有客觀正解的情況**
+
+`{red, ''}` vs `{'', large}`、使用者選 red + large：兩者 score 都是 1、誰也不是誰的超集，
+站長的兩條規則本身就衝突，資料裡沒有任何欄位承載「哪條優先」。此時退回 WooCommerce 官方
+`.shift()` 的行為（取陣列第一個，實際順序由 `menu_order ASC, ID ASC` 決定）是合理且可預期
+的——而且與單品頁一致。**唯一保留順序決勝的情況，正好是唯一沒有客觀正解的情況。**
+（顯示價會依變體建立順序而定，已登記 `specs/tech-debt.md` TD-53；真要消歧義應該在後台偵測
+並警告這種互相衝突的 Any 配置，而不是在前端 JS 猜。）
+
+**📌 對「第三方 filter 剝掉空值鍵」天然免疫（僅限挑選這一層）**
+
+若有外掛在 `woocommerce_available_variation` 上把空字串的屬性鍵整個刪掉，
+`#90 {color:'red'}`（size 鍵被剝掉）在「有沒有空字串」的**二元**判斷下會被誤認為「全具體」
+而直接勝出，蓋掉真正更具體的 `#91 {color:'red', size:'large'}`——兩趟法會踩，實測確認。
+計分法比的是**具體屬性數的絕對值**（#90 = 1 < #91 = 2），不看有沒有空字串，因此不受影響。
+⚠️ **但這條免疫只涵蓋「挑哪一個」**：`hasAnyAttribute()` 仍是靠「有沒有空字串」判斷的，
+剝鍵情境下它會誤判為全具體 → 走 AJAX → 伺服器端 `get_variation_attributes()` 仍拿回帶 `''`
+的完整集合 → 被 `WC_Cart::add_to_cart()` 判缺必填屬性而拒絕。這是既有弱點，非本輪引入。
+
+**⚠️ 三條不要做的事：**
+
+1. **不要改回「命中即 `return`」**（不論單趟或分級多趟）。全 Any 商品在任何寫法下表面上都會
+   動，手測極易誤判「沒差」；真正壞掉的是上面那種混合商品，而且只在特定陣列順序下才壞。
+2. **不要為了「對齊官方 `.shift()`」而改**。理由見上：官方沒有分潤覆寫這一層。
+3. **不要拿效能當理由。** 計分法因為不能提早 return，在多數情境其實**比兩趟法慢**（實測：
+   真實規模 ≤ 24 變體差距 < 0.01 ms；最壞的人造情境 1000 變體全 Any 為 2.1 ms），只有「完全
+   無命中」時較快。但兩者都遠低於一幀（16 ms），而 `refresh()` 每次點選只呼叫一次。
+   **選計分法的理由是正確率（12.4% → 0），不是速度。**
+   ⚠️ `matchVariation()` 的 docblock 目前有一句「單趟計分比舊的兩趟法**更快**」與實測相反，
+   已登記 `specs/tech-debt.md` TD-54，下次動這個檔案時順手改掉。
+
+##### 兩條不可刪的守門
+
+| 守門 | 職責 | 誤刪的後果 |
+|---|---|---|
+| `keys.length > 0`（`findBestVariation()` 尾端，與 `score > bestScore` 同一個 `if`） | 防 **vacuous truth**：`attributes` 為 `{}` 時內層迴圈一次都不跑、`matched` 保持初值 `true`、`score` 保持 `0` | 那個空殼變體會以 score 0 成為候選，在「全部候選都是 0 分」時勝出（例如全 Any 商品）。**它不是「已選滿」檢查**（那是 `isAllAttributesChosen()` 的職責），兩者不可互相取代 |
+| `picked === null`（內層迴圈） | 第二道 fail-closed：變體宣告了某屬性、但畫面上沒有對應的選項群組（`is_variation` 屬性未指派任何 term） | 這種商品在官方單品頁同樣選不齊、WooCommerce 後端也會拒收，放行只是把錯誤延後到送出時 |
+
+##### `hasAnyAttribute()` 在第一輪修好之前是不可達死碼
+
+它負責「選中的變體含 Any 屬性 → 不走 AJAX，交給原生表單送出」。理由在 WooCommerce 原始碼
+裡是硬的：`WC_AJAX::add_to_cart()` **全文不讀 `$_POST['attribute_*']`**，它偵測到傳入的是
+variation 之後，一律用 `$product->get_variation_attributes()` 自己反查——對 Any 屬性拿回來
+的就是**空字串**，接著 `WC_Cart::add_to_cart()` 濾掉空值、判定缺少必填屬性而拒收。前端就算
+把 `attribute_*` 一起送過去也沒有用（那條通道根本不看）。原生表單送的是使用者實際選的值，
+不受影響——所以降級走原生表單是這條路徑唯一可行的解。
+
+但第一輪修好之前，含 Any 屬性的變體**根本匹配不出來**，這個函式因此從未被執行過（不可達
+死碼），第一輪之後才第一次真正跑到。
+
+⇒ **「Any 屬性商品加購會換頁、沒有 toast」是正確結果，不是回歸。** 不要因為「Phase 15 明明做了
+AJAX 加購，怎麼這個商品還在換頁」就把這道降級拿掉——拿掉之後那筆加購會被 WooCommerce 直接
+拒絕，使用者看到的是「按了沒反應」。⚠️ 換頁之後**目前也不會有成功提示**（`.ps-shop-notices`
+容器有印、內容是空的），那是另一個獨立的缺陷，見 `specs/tech-debt.md` TD-49。
+
+#### 無定價商品：四道閘門與 per-cart-item 授權（2026-08-06）
+
+「商品／變體**自身沒有價格**（`_price` 為空字串），只靠賣場覆寫價出售」——這個組態從 Phase 9
+開放變體層覆寫起就設定得出來，但**前台從頭到尾買不到**，而且沒有任何錯誤訊息。
+
+2026-08-06 共四輪：第 4 輪找根因並修好顯示層；第 5 輪把 cart 層授權從「product ID × 整個
+request」收斂成「**單一 cart item**」；第 6 輪收斂 11 條驗證缺口（TD-56～62 / 65）；
+第 7 輪修掉兩條**第 6 輪自己引入或沿用**的缺陷（判準未對齊、`apply_override()` 巢狀重入）。
+⚠️ 讀第 4 輪的 commit / 註解時若看到 `$priceless_rescue`、`rescue_for()`、`build_rescue_map()`、
+`read_cart_source()`——**那整組已刪檔、不存在**，以本節為準。
+
+##### 🔴 三條跨輪教訓（每一條都是實際踩過才寫下來的，優先於下面所有細節）
+
+**(a) 一條規則若同時存在「顯示」與「加購」兩條路徑，必須兩邊都實作。**
+R-4 裁決（「商品層覆寫不救半成品變體」）第一次只實作在顯示層，前台正確顯示「暫無可購買規格」、
+卡片停用——**而 `POST /?wc-ajax=add_to_cart` 帶那個變體 ID 加購成功、帶合法簽章、產生真實訂單**
+（TD-56）。最惡毒的部分是：**顯示層探針會回報 PASS**，因為它問的是「畫面對不對」，
+而畫面確實是對的。判斷一個「該不該賣」的規則有沒有實作完整，唯一可靠的問法是
+「**繞過畫面直接送 POST 會怎樣**」。
+
+**(b) 抽共用 helper 統一呼叫端，不等於對齊了語意。**
+第 6 輪把顯示層與加購層的行內判斷抽成 `PricelessRescuePolicy`，確實消滅了「兩個呼叫端各寫一份」
+——**但從未與真正決定行為的那個下游（`OverridePriceResolver`）對齊**：政策用「條目**存在**」、
+resolver 用「條目存在**且有 ≥1 個非 null 價格**」，於是「全 null 空條目」被政策放行、
+再由 resolver fallback 到商品層覆寫，正好構成 R-4 禁止的組合（TD-66）。
+兩份定義還在，只是換了位置繼續放著。**抽共用 helper 時要對齊的不是「其他呼叫端」，
+而是這個判斷最終服務的那個決策。**
+
+**(c) 凡是寫進註解的行為斷言，都必須有當次實測支撐。**
+本專案已經因此吃虧**三次**：TD-20（`<Alert>` 文案宣稱「單品頁仍顯示原價」，而同一次改動的
+`SingleProductPriceHook` 已讓它顯示覆寫價）、TD-54（docblock 宣稱單趟計分「更快」，實測慢 2.55×）、
+TD-67（`reset_to_original_price()` 註解宣稱 `remove_cart_item()` **不會**呼叫 `calculate_totals()`
+——與實際行為相反，且被第 5 輪當成「已驗證事實」沿用進第 6 輪的設計）。
+這類缺陷 `phpcs` / PHPUnit / `tsc` **一個都攔不到**，只有這條紀律擋得住。
+⚠️ 連帶紀律：**引用第三方原始碼行號時必須寫出版本**——本節行號一律以本機站台的
+**WooCommerce 10.1.4** 為準（已逐行核對），而 wp-env 容器裝的是另一個版本
+（實測 11.0.0-rc.1，同兩行分別位移到 `:135` / `:1476`）。行號對不上時先確認 WC 版本，
+不要直接認定註解寫錯。
+
+##### 根因：四道閘門，同一個條件 `'' !== get_price()`
+
+行號以 WooCommerce 10.1.4 為準（見上方 (c) 的版本警告）。
+
+| # | 位置 | 何時跑 | 不通過的後果 |
+|---|---|---|---|
+| ① 顯示 | `class-wc-product-variable.php:335` → `variation_is_visible()`（`class-wc-product-variation.php:593`） | `get_available_variations()` | 該變體被 `continue` 跳過，**不進前台 payload** |
+| ② 加購 | `class-wc-cart.php:1228` `is_purchasable()` | `WC_Cart::add_to_cart()` | 直接 throw、加不進去 |
+| ③ 每次載入購物車 | `class-wc-cart-session.php:183` `woocommerce_cart_item_is_purchasable` | 每一個載入購物車的請求（`wp_loaded`） | **把品項移除**（`:184-214`）並顯示「已無法購買」 |
+| ④ Store API / Block | `StoreApi/Utilities/CartController.php:270`（加購）/ `:688`（`validate_cart_item`） | Cart Block / Store API / Block 結帳 | `NotPurchasableException` |
+
+**為什麼覆寫價「疊不上去」**：賣場覆寫價是在「拿到變體清單**之後**」才逐筆疊上去的
+（`ProfitShopFrontData::build_variations()` 的 foreach）。閘門 ① 把清單濾成空的，那個 foreach
+一次都不會進迴圈，`$item->get_variation_override()` 從未被呼叫——**沒有東西可以疊**。
+所以修法必須是**修根因**（讓這些商品在對的範圍內 `get_price()` 回覆寫價），而不是逐一拆掉四道
+閘門；拆閘門會把「真的不可購買」的商品（下架、父商品未發佈、庫存耗盡）一起放行。
+
+##### 🔴 授權粒度是本題的核心：綁「一筆 cart item」，不是「一個 product ID」
+
+第 4 輪用一張 request 級的「product ID → 價格」救援表，等於對整個請求宣告
+「這個商品在這裡到處都值 27 元」。授權本來只該是「**這一筆通過 HMAC 驗章的 cart item** 值 27 元」。
+三個獨立 lens（安全 / 回歸 / 真實站台）各自驗到同一批後果，**全部沒有任何錯誤訊息**：
+
+| 第 4 輪的後果 | 實測症狀 |
+|---|---|
+| **無歸屬銷售**（最嚴重） | 從賣場合法加購一次建立救援表後，**同一個請求內**該商品在一般單品頁變成可購買；不帶 `profit_shop_id` 再加一次 → 顧客付到分潤價、**cart item 零 `_profit_*` meta、零簽章、零分潤紀錄**。夥伴拿不到結算 |
+| **一般情境的 `get_sale_price()` 被污染** | 守門是**逐欄位**判空字串，而絕大多數正常商品的 `get_sale_price()` 本來就回 `''` → 整批正常商品被拖進救援邏輯。實測：原價 999 無特價的變體，在購物車有該賣場品項時，一般單品頁顯示 `~~$999~~ $999`、`is_on_sale()` 由 false 翻 true → 帶 `exclude_sale_items` 的優惠券整批失效 |
+| **陳舊簽章價格復活** | 救援表無條件合併持久化購物車 usermeta（WooCommerce 自己的條件在 `class-wc-cart-session.php:116`，只在 session cart 為 null 或帶合併旗標時才做）。而 usermeta 永不過期、簽章也沒有時效 → 站長把覆寫價改高之後，舊價仍可在全站復活 |
+
+⇒ **支點是 WooCommerce 免費提供的**：`WC_Product_Factory::get_product()` 每次都
+`return new $classname(...)`，`wc_get_product()` **不做實例快取**。因此對「某一筆 cart item
+自己的 `WC_Product` 實例」呼叫 `set_price()`，**在結構上不可能**外溢到同一請求內任何其他地方——
+一般單品頁 / 商店彙整 / 搜尋結果 / 相關商品拿到的都是**另一個物件**，價格仍是 `''`、
+`is_purchasable()` 仍是 false。第 4 輪把這個免費的隔離性丟掉，改用全域 filter 自己重建了一個
+更差的版本。
+
+**不要**因為「一張表比較快 / 比較好懂 / 少一次驗章」就改回去。上表三條會一起回來，而且
+自動化測試不會紅——它們全都發生在「不帶 `profit_shop_id` 的一般情境」，是既有測試的盲區。
+
+##### 各閘門的介入點與授權來源
+
+| # | 介入方式 | 授權綁在什麼上 | 驗證失敗時 |
+|---|---|---|---|
+| ① | `OverridePriceFilters::arm()` / `disarm()`，`try/finally` 包住**單次** `get_available_variations()` | 單次函式呼叫 × 單一 (shop, product) | resolver 回 `null` → filter 原樣放行 → `get_price()` 仍 `''` → 正確被擋 |
+| ② | 一次性 `$pending_add`（見下） | 單一 `variation_id ?: product_id` × 單次 `add_to_cart()` | 未 arm → WC 照常 throw |
+| ③ | `woocommerce_cart_item_is_purchasable`（`authorize_cart_item()`） | **該筆 cart item 自己的 `_profit_*` meta + HMAC 驗章** | 回傳**原始** `$purchasable`（false）→ WooCommerce 自己移除品項（**fail-closed**） |
+| ④ | 無 per-item filter（見下），靠 ③ 已對同一個 `$product` 實例 `set_price()` | 同 ③ | 同 ③ |
+
+**閘門 ③ 的 hook 是唯一正解**：`grep -rn "woocommerce_cart_item_is_purchasable"` 全 WooCommerce
+**只有 `class-wc-cart-session.php:183` 一處**，而且是唯一帶 `$key` / `$values` / `$product` 的
+per-item purchasable hook——可以直接從 `$values` 讀該筆的 `_profit_*` meta 驗簽章，授權因此天然
+綁在單一 cart item 上。三道早退缺一不可，**第二道就是「一般商品被污染」的直接修法**：
+
+1. `$purchasable` 已為 true → 不介入（一般商品完全不進入後續邏輯）
+2. `$product->get_price( 'edit' ) !== ''` → 不介入。它不可購買是**別的原因**（下架 / 父商品未發佈 / 缺貨），那些理由我們無權推翻。⚠️ **守門條件是「這個商品自身有沒有價格」，不是逐欄位判空字串**
+3. 驗章不過 → 回傳**原始** `$purchasable`，**絕不回 `true`**——回 true 會製造「`is_purchasable()` 為真但 `get_price()` 為空」這種 WooCommerce 從未預期的狀態，接著 `reset_to_original_price()` 的 `set_price('')` 就會變成 0 元商品
+
+**閘門 ④ 不需要另外的 hook**（讀過原始碼確認，不是猜的）：`CartController::validate_cart_item()`
+讀的是 `$cart_item['data']`（`:681-688`），而那個物件正是 `class-wc-cart-session.php:234` 的
+`'data' => $product`——**與閘門 ③ callback 收到的 `$product` 是同一個實例**。在 ③ 就地
+`set_price()` 等於同時修好 ④。另有第二層保險：`StoreApi/Routes/V1/Checkout.php:425-436` 的順序是
+`calculate_totals()`（→ `apply_override()` 999）在 `validate_cart()` **之前**。
+⚠️ Store API 的 `cart/add-item`（`:270`）**刻意讓它失敗**——那條通道不帶 `profit_shop_id`、
+沒有 cart item 可驗章，無定價商品經它加購必然被拒，這是正確的 fail-closed，不是漏了一個 hook。
+
+##### 閘門 ② 的一次性授權：四個關閉點取代 try/finally
+
+`add_cart_item_data`（`class-wc-cart.php:1191`）拿不到 `WC_Product` 物件，只有 id，所以這一道
+只能用旗標。四個必須照做的點：
+
+1. **比對鍵一律是 `variation_id ?: product_id`**。WC 自己在 `:1073` 就把傳入的 variation 換算成
+   「父商品 + 變體」，`:1228` 檢查的是 `wc_get_product( $variation_id ?: $product_id )`。
+   用父商品 ID 比對會讓**同父商品的其他變體**一起被放行 = 重新製造一個小號的「無歸屬銷售」。
+2. **只在 `$target->get_price( 'edit' ) === ''` 時才 arm**。全站 99.9% 的加購不會進這個分支，
+   「一般商品的價格永遠不經過我方 filter」因此是可斷言的性質。
+3. **關閉點 (1) 是 `add_cart_item_data()` 的第一行無條件清空**——這是我們能取得的最強
+   try/finally 等價保證（arm 與 consume 之間是 WooCommerce 的本體，包不住）。它同時涵蓋
+   grouped 商品一個請求內多次加購，以及上一次 add 在 `:1200`–`:1318` 之間拋例外的殘留。
+   **⇒ 旗標在結構上無法被用來加購第二件商品**：任何第二次 `add_to_cart()` 都必先觸發
+   `add_cart_item_data()`（`:1191` 早於 `:1228`），第一行就清掉了。
+4. 關閉點 (2) `woocommerce_add_to_cart`（`:1338`）prio 1 —— 同一個 callback 順便把價格釘在
+   `cart_contents[$key]['data']` 上（否則同請求後續的 mini-cart / fragments 會顯示 NT$0）；
+   關閉點 (4) `wp_loaded`（`PHP_INT_MIN`）/ `woocommerce_cart_emptied` 是給 worker-mode PHP
+   （FrankenPHP / RoadRunner / Swoole）的不變量宣告，本站 PHP-FPM 用不到但不可刪。
+
+**關閉點 (3)：`template_redirect`（`PHP_INT_MIN`）——加購失敗後的殘留上限**（N-3，第 6 輪補上）。
+`WC_Cart::add_to_cart()` 整個包在 try/catch 內（`class-wc-cart.php:1347`），失敗時自己
+`wc_add_notice` + `return false`，**失敗路徑上沒有任何 hook 會跑到**（`woocommerce_add_to_cart`
+在 `:1343`，只在成功路徑）。所以 arm 與 disarm 之間一旦失敗，旗標本來會留到請求結束，
+該請求內任何 `wc_get_product($target_id)` 都會拿到覆寫價且 `is_purchasable()` 為 true。
+這一行把上限收斂到「`template_redirect` 之前」，兩條落地路徑都涵蓋：
+
+- **表單加購**：`WC_Form_Handler::add_to_cart_action` 掛 `wp_loaded` prio 20
+  （`class-wc-form-handler.php:33`），失敗後請求繼續往下 ⇒ 本行在**任何頁面渲染之前**清乾淨。
+- **`?wc-ajax=add_to_cart`**：`WC_AJAX::do_wc_ajax` 掛 `template_redirect` prio 0
+  （`class-wc-ajax.php:36`），`PHP_INT_MIN` 排在它**之前**，因此**不會誤清當次加購的授權**；
+  而該路徑失敗後立刻 `wp_send_json` 結束、沒有任何渲染，殘留無從被消費。
+
+⇒ `wp_loaded` 與 `template_redirect` 之間（`parse_request` / `send_headers` / `wp`）沒有任何價格
+渲染，**殘留視窗內不存在可觀察的效果**。⚠️ 這條 prio 的**方向性**是關鍵：排在 `do_wc_ajax`
+之後就會把當次合法加購的授權一起清掉，變成「AJAX 加購無定價商品永遠失敗」。
+
+⚠️ **`wc_get_cart_item_data_hash()` 不含價格**（`wc-cart-functions.php:591-604`，只 hash `type` +
+`variation_attributes`），所以「加購時價格被 arm、下次載入時沒有」**不會**觸發
+`class-wc-cart-session.php:204` 的 data_hash 不符移除。這件事必須寫在註解裡，否則下一個人會以為
+漏處理了 hash 一致性。
+
+##### 驗章失敗時不可變成 0 元——守門與還原值都必須取 `_price`
+
+`reset_to_original_price()` 對「商品自身沒有原價可以退回」（`get_price('edit') === ''`）的情況
+**把品項移出購物車**。若照舊 `set_price('')`，WooCommerce 會當 0 計算，
+把「竄改 ⇒ 付原價」倒轉成「竄改 ⇒ **免費**」。
+
+🔴 **守門欄位必須是 `get_price('edit')`，不可寫成「sale 與 regular 皆空」**（S-4 / TD-60，
+第 6 輪已修）。兩者**不等價**：只寫 `_price` 是 WooCommerce 明文承認的合法狀態
+（`class-wc-product-data-store-cpt.php:818-823` 的註解寫「`_price` can also be set as a
+temporary active price」），匯入 / 程式建立的商品常見 `price='500' / regular='' / sale='' /
+is_purchasable()=true`——用舊守門，這種**完全正常販售中**的商品一旦驗章失敗就被直接刪出購物車。
+
+⚠️ **只改守門、不改還原值等於沒修**：還原那一行若用 `sale ?: reg` 推導，對這類商品會得到空字串
+→ `set_price('')` → 下一個請求被閘門 ③ 判定不可購買而移除，顧客看到的症狀完全一樣，
+只是從「立刻消失」延後成「下一個請求消失」。兩處都要取 `$own = get_price('edit')`。
+
+⚠️ **觸發不需要攻擊者**：輪替 `AUTH_SALT`（標準資安事件處置動作）會讓**全站簽章一次失效**
+⇒ 所有這類品項同時走進這條路。這也是下面那條重入缺陷會在真實世界被引爆的場景。
+
+##### 🔴 `remove_cart_item()` **會**遞迴回本 hook——`$applying` 旗標是必要的
+
+本檔曾經斷言「`WC_Cart::remove_cart_item()` **不會**呼叫 `calculate_totals()`，所以不會遞迴回本
+hook」。**那句話是錯的**，而且被第 5 輪當成已驗證事實沿用。逐行查證（WooCommerce 10.1.4）：
+
+```
+includes/class-wc-cart.php:1372  do_action( 'woocommerce_cart_item_removed', $cart_item_key, $this );
+includes/class-wc-cart.php:131   add_action( 'woocommerce_cart_item_removed',
+                                    array( $this, 'calculate_totals' ), 20, 0 );
+```
+
+⇒ `reset_to_original_price()` 內的 `remove_cart_item()` 會**從 `apply_override()` 自己的 foreach
+內部**再次觸發 `woocommerce_before_calculate_totals` → 回到本 hook（priority 999）。
+實測（探針夾在 998 / 1000 量測**真實堆疊深度**）：
+
+| 驗章失敗的無定價品項數 N | 修正前巢狀深度 | 修正後 |
+|---|---|---|
+| 2 | **2** | `calculate_totals` 2、`apply_override` body **1** |
+| 6 | **6** | 同上 |
+| 12 | **12** | 同上 |
+| 16 / 50 | —（1:1 成長） | 同上，真實堆疊峰值恆為 28 frames |
+
+**與 N 1:1 成長**，每一層都是完整的 `calculate_totals()`（正式環境含稅金 / 優惠券 / 運費）；
+Xdebug 預設 256 frame 限制下大購物車會 fatal。正確性在修正前後**逐格相同**（混合購物車實測：
+合法品項留存、覆寫價未漏套、error notice 每筆剛好 1 則、總額一致），所以**不是**定價或授權繞過
+——但它會在上面那個 `AUTH_SALT` 場景全站同時觸發。
+
+**修法選 re-entrancy 旗標（`private bool $applying`），不選「收集 key、迴圈後再刪」**：
+後者同樣能把深度壓到 2，但**沒有消滅重入**——重入時仍會對剩下每筆品項重新驗一次 HMAC（O(N×M)）；
+旗標讓巢狀呼叫在第一行 `return`，且不需要新增「待刪清單」這個狀態。
+**`try/finally` 不可省略**：旗標若因例外卡在 `true`，本 request 後續的 `calculate_totals()`
+會完全跳過套價 ⇒ 錯誤定價且無錯誤訊息。
+
+⚠️ 迴圈內移除的安全性靠**兩件事**，不是一件：(1) 迴圈跑的是 `$cart->get_cart()` 回傳的陣列
+**複本**（沒有「邊迭代邊改集合」問題）；(2) 旗標擋下重入。**若日後移除旗標，就必須改成
+「收集 key、迴圈結束後再刪」**，否則深度立刻回到 1:1 成長。
+
+⚠️ **量測方式本身踩過一次坑**：第一版回歸測試用 reflection 讀 `$applying` 判斷「body 有沒有跑」
+——把守門改成 `if ( false )` 之後旗標**仍然會被設成 `true`**，測試回報「深度 1」**全綠 = 假綠燈**。
+改成夾 998 / 1000 量測真實堆疊深度才騙不過（紅燈實測 N=8 → 深度 8），而且與實作解耦
+（換成收集-後刪同樣適用）。另需 `remove_action` 拿掉 `set_up()` 用 `new` 額外註冊的第二個實例，
+否則量到的深度比正式環境多一層（正式環境走 `Loader` 的 `::instance()`，恆為 1 個實例）。
+回歸鎖：`CartPriceOverrideHookTest::test_apply_override_never_re_enters_itself` +
+`test_reentrancy_guard_preserves_mixed_cart_correctness`。（TD-67）
+
+##### R-4 裁決：變體層無覆寫就不救（政策已抽成 `PricelessRescuePolicy`，兩條路徑共用）
+
+**裁決**：站長只設了**商品層**覆寫時，「自身從未定價的半成品變體」**不該**因此變成商品。
+理由：站長設商品層覆寫的意圖是「這個商品在我的賣場賣 X 元」，不會預期連沒填價格的半成品變體
+都一起上架；而 `ItemsEditor` 的展開列本來就提供逐變體設定的入口，要救就明確設變體層覆寫，
+操作與結果一一對應。
+
+🔴 **判斷的唯一實作是 `Infrastructure/WooCommerce/PricelessRescuePolicy::should_rescue_priceless(
+WC_Product, OverrideItem ): bool`**，兩個執行點各自呼叫它、**不各留一份**：
+
+| 執行點 | 何時判斷 |
+|---|---|
+| `OverridePriceFilters::resolve_for_product()`（顯示層） | 三個 `filter_*` 與三個 `variation_prices_*` 的共同收斂點，`SingleProductPriceHook`（單品頁）與 `build_variations()`（賣場卡片）共用 |
+| `CartPriceOverrideHook::add_cart_item_data()`（加購層） | **必須在 `resolve_override_prices()` 之前** |
+
+⚠️ **加購層不能用「resolver 解不解得出價格」判斷**——`OverridePriceResolver` 照 Phase 13 契約
+會 fallback 到商品層覆寫，對半成品變體一樣解得出價格。這正是 TD-56 的成因：R-4 第一次實作時
+只放在顯示層，前台正確顯示「暫無可購買規格」、卡片停用，但
+`POST /?wc-ajax=add_to_cart` 帶半成品變體 ID **加購成功並帶合法簽章**——站長從未定價、
+在自己賣場頁上看不到的 SKU 會產生真實訂單。安全 / 回歸 / 真實站台三個 lens 各自獨立驗到。
+
+⚠️ 加購層把載好的 `WC_Product`（`variation_id ?: product_id`）**往下傳給 `arm_pending_add()`**，
+兩者因此必然看到同一個實例（淨查詢數不變）。分兩次 `wc_get_product()` 目前結果相同是巧合，
+而兩者不一致的後果是「政策拒絕、旗標卻開了」。
+
+回傳 `true` **不代表「正在救援」**——商品自身有價格時也回 `true`，意思是「這道政策不阻擋」。
+只有唯一一種組合回 `false`：**變體**自身無定價 **且** 沒有變體層覆寫**價**。
+
+##### 🔴 判準必須與 `OverridePriceResolver` 逐字相同（TD-66，第 7 輪）
+
+```php
+// PricelessRescuePolicy::has_variation_price_override()
+// 必須與 OverridePriceResolver:54-57 完全一致
+null !== $override && ( null !== $override->regular_price || null !== $override->sale_price )
+```
+
+**「條目存在」不是判準**。`OverrideItem::get_variation_override()` 回的是
+`$this->variations[$vid]?->override`——**只要那個鍵存在就回一個 `PriceOverride` 物件**，
+即使三個價格欄位全是 null。用「條目存在」判斷，會讓「全 null 空條目」被政策放行，
+接著 `OverridePriceResolver` 照 Phase 13 契約 fallback 到**商品層**覆寫
+——正好構成 R-4 / S-1 明文禁止的那個組合。
+
+⚠️ **空條目不需要竄改就會出現，是站長正常後台操作的產物**：`ItemsEditor.tsx` 在站長替某個變體
+設定**灌水購買人數**時，用 `emptyVariationOverride()`（三個價格皆 null）建出條目；
+「打了價格又清空」同樣留下空條目。送出路徑原樣送 `variations`，後端 `ItemValidator` 只驗
+「變體存在且屬於該商品」，沒有任何一處會清掉它。
+**「設了灌水人數但不覆寫價格」是合法狀態——要修的是判準，不是資料**，
+所以**不要**改成「在前端 prune 空條目」。
+
+實測後果（判準對齊前，wp-env 端到端）：variable 商品兩個變體皆無定價、賣場只設**商品層**覆寫
+500/450、變體[0] 帶一個空條目 + `inflated_count 7` ⇒ 政策 `should_rescue=true` ⇒ 該變體以
+**NT$450 加購成功**、`regular=500`、分潤 meta 齊全、v3 簽章合法、session reload 後授權仍為
+`true`；`build_products()` 的 `variations` 有 1 筆、卡片 `data-ps-disabled="0"` 可點、Modal 照印
+——**顧客不需要偽造任何請求，賣場頁自己就把它送上門**（比原始 S-1 需要手工 POST 更容易觸發）。
+對齊後三個消費端一起關上：政策 `false` / 加購被擋（件數 0）/ `variations` 為 `[]`。
+
+⚠️ **`signup_fee` 刻意排除**：resolver 取價時本來就不看它，納入會再度造成判準分歧。
+⚠️ **不可改成呼叫 `OverridePriceResolver` 來判斷**：它會 fallback 到商品層，對空條目一樣解得出
+價格，等於把守門變成恆真。判斷必須發生在 resolve **之前**。
+
+三個必須知道的性質：
+
+1. `get_price( 'edit' )` **不會遞迴**——`abstract-wc-data.php:880` 只在 `'view'` context 才
+   `apply_filters`。
+2. 🔴 **這道守門只在「變體自身無定價」時成立**。變體自身有價格時守門不成立，
+   `OverridePriceResolver` 既有的商品層 fallback 語意（Phase 13 的**唯一取價真相**）
+   一個字都沒有變。**絕不可**把這段邏輯搬進 `OverridePriceResolver`——那會同時改掉購物車的
+   取價語意，讓「已經合法存在、變體自身無定價但吃商品層覆寫」的既有 cart item 失去價格。
+3. 它依賴 `OverrideItem::get_variation_override()` 回傳 `?PriceOverride`（Phase 9 的委派法契約）。
+   若有人把回傳型別改成 `?VariationOverride`，`->regular_price` / `->sale_price` 會直接讀不到、
+   守門靜默失效——`OverrideItemTest` 的 `assertNotInstanceOf` 就是這條相依的鎖。
+   ⚠️ 注意這裡**不能**再寫成「無覆寫時為 `null`」——那正是 TD-66 的錯誤前提：
+   鍵存在就非 null，與「有沒有覆寫價」是兩件事。
+
+回歸鎖（四條，缺任一條都留下缺口）：
+
+| 測試 | 鎖住什麼 |
+|---|---|
+| `test_parent_level_override_never_rescues_priceless_variation_on_add_to_cart` | R-4 本體，三段：手工 POST（四道閘門完整跑）/ `add_to_cart()` 第 5 參數（short-circuit 路徑）/ 變體層覆寫對照組 |
+| `test_empty_variation_entry_is_not_treated_as_variation_level_override` | 空條目判準，fixture 刻意帶 `inflated_count 7`，同時鎖政策 / 加購 / `build_products()` payload 三個消費端 |
+| `test_real_variation_level_override_still_rescues_priceless_variation` | **正向對照**，防止守門被寫成一律拒絕的假綠燈 |
+| `test_price_only_product_survives_signature_failure_and_falls_back_to_own_price` | S-4 守門欄位（fixture 必須「先正常存檔、再直接改 meta」——`handle_updated_props()` 會把 `_price` 覆寫成 `sale ?: regular`，用 CRUD 造不出這個狀態） |
+
+⚠️ 第一條**抓不到** TD-66：它建的賣場**完全沒有 `variations` 條目**，只走到 `null` 分支。
+新增回歸鎖時要問的是「這個 fixture 走到的是哪一條分支」，不是「有沒有測到這個功能」。
+（TD-56 / TD-66 皆已解決，見 `specs/tech-debt.md` 已解決章節。）
+
+⚠️ **已知且刻意不修**：所有變體都不可購買時，variable **父商品**在單品頁
+（`/product/x/?profit_shop_id=…`）仍會顯示商品層覆寫價。不可利用——`WC_Cart::add_to_cart()`
+（`class-wc-cart.php:1178-1188`）對 variable 父商品且 `variation_id` 不是它的變體時直接
+`throw`（實測 `variation_id=0` 加購回件數 0）；而修法唯一的落點會**遞迴回正在執行的那組 filter**
+（`get_available_variations()` → `variation_is_visible()` → `get_price()` view context）。
+賣場前台不會連到那裡（卡片已是「暫無可購買規格」且不印 Modal）。見 `specs/tech-debt.md` TD-68。
+
+##### 第四道閘門：販售期間（`AddToCartHook`）
+
+`AddToCartHook` 新增第三道檢查（安全規則編號 1–5 的第 3 條）：賣場必須在販售期間內。
+在此之前**後端完全沒有任何時間檢查**——`profit-shop.rule.md` 先前明寫「非販售期間 Modal 必須
+整段不印」，理由正是「三道閘門不檢查販售起訖時間，接不住把 `disabled` 拔掉再送出」。這道閘門
+把那個缺口補上，手工 POST 對已結束 / 尚未開賣的賣場不再注入 `profit_shop_id`。
+
+三條紀律：
+
+1. **定義必須與 template 的 `$is_shop_open` 共用同一份實作**——`ProfitShopFrontData::is_sale_window_open()`
+   內部就是 `settings()['shopStatus'] === 'published'`。安全閘門依賴呈現層 helper 看似分層不純，
+   但兩者若各寫一份，就會回到「畫面說關店、後端卻收單」；正規化語意（壞資料 → 0 = 未設定、
+   四種 start/end 組合分支）也只有 `resolve_shop_status()` 這一份是對的。
+2. **一律以伺服器時間判斷**（`time()`）。`startTime` / `endTime` 是 epoch 毫秒、與時區無關，
+   不受站台 `timezone_string` 或瀏覽器時區影響（TD-44 講的是**顯示**時區，與此無關）。
+   **永不讀任何客戶端時間**——這與 Phase 10 修掉 legacy「前端 `dayjs()` 重算 shopStatus」是同一條紀律。
+3. **未設定開始 / 結束時間 ⇒ 不限制**（絕大多數賣場的 `settings` 裡根本沒有這兩個 key）。
+   已實測：未設排程與販售期間內的賣場，加購行為與這道閘門上線前**逐字相同**。
+
+**`is_sale_window_open()` 目前有四個消費端，其中三個是安全閘門**（2026-08-06 第 6 輪起）：
+
+| 消費端 | 角色 |
+|---|---|
+| `AddToCartHook::inject_profit_shop_id()` | 第三道閘門（原始那一道） |
+| `CartPriceOverrideHook::add_cart_item_data()` | **重驗**，涵蓋上游 short-circuit 的路徑（TD-59） |
+| `SingleProductPriceHook::maybe_register_filters()` | 單品頁入口（TD-57） |
+| `CartPriceOverrideHook::rescue_still_authorized()` | 只靠救援才有價的品項的授權回查（TD-61） |
+
+⚠️ 這代表 **TD-63（壞資料 fail-open）的範圍已擴大**：那個 helper 原本只是呈現層取捨，
+現在同時決定「後端收不收單」。改動 `resolve_shop_status()` 的正規化語意前必須同時評估這四處。
+
+🔴 **「已在購物車內的品項受不受此閘門影響」分成兩條規則，差異點才是關鍵**：
+
+| 品項 | 販售期間結束後 | 為什麼 |
+|---|---|---|
+| **商品自身有價格** | **不撤銷**（閘門 ③ 只驗簽章、不看時間） | 活動結束的那一秒靜默清空所有顧客的購物車比放行更糟，與「v1 簽章分支永久保留」同一條紀律；「加入購物車 = 價格已鎖定」是一般電商的正常行為。要收緊應該是產品決策 + 明確 notice，不是安全修補 |
+| **只靠救援才有價**（`get_price('edit') === ''`） | **撤銷**（`rescue_still_authorized()`） | 三條理由：(1) 那個品項在賣場之外**根本不是商品**，它沒有價格，保留等於保留一個沒有定價依據的可成交項目；(2) 移除**不是靜默的**——WooCommerce 自己在 `class-wc-cart-session.php:184-214` 會加一則 error notice 告知顧客；(3) blast radius 極小，這類商品是 2026-08 才第一次變得可購買 |
+
+⚠️ 這兩條看起來矛盾，**併成一條就會壞掉**：併成「都不撤銷」＝站長把賣場整個下架都停不掉那些
+訂單（TD-61）；併成「都撤銷」＝翻掉 Phase 3-D 既有邊界、大量正常購物車在活動結束當下被清空。
+`rescue_still_authorized()` 因此**只**掛在 `authorize_cart_item()` 走完前兩道早退之後的窄路徑上，
+一般商品連查詢都不會發生（實測 0 queries）。
+
+##### 簽章版本遷移 v2 → v3：綁定商品身分（2026-08-06 第 6 輪）
+
+```
+v1： cart-signature:v1|{shop}|{partner}|{price}
+v2： cart-signature:v2|{shop}|{partner}|{price}|{regular}|{sale}
+v3： cart-signature:v3|{shop}|{partner}|{price}|{regular}|{sale}|{product_id}|{variation_id}
+```
+
+**為什麼要綁**：簽章原本只保護「多少錢」，一組錯配的 meta 頂多把「本來就可購買的商品」標錯價；
+但 2026-08 起簽章同時是**「不可購買的商品變不變成可購買」的唯一授權來源**。探針實測：
+把 A 商品的整組 `_profit_*` meta 原封套到「不在任何賣場」的 B 商品上，`authorize_cart_item()`
+回 `true`、B 的 `get_price()` 變成 `'27.00'`。
+
+**兩個 id 都簽、不是只簽 `target_id`**：只簽 `variation_id ?: product_id` 在數學上已足以阻擋
+搬移；額外簽 `product_id` 另外鎖住「同一個 target 不能被宣稱屬於另一個父商品」——第四道閘門
+（`has_item()`）與 `rescue_still_authorized()` 的賣場回查用的都是**父商品 ID**，那個欄位若不在
+簽章內，改掉它就能讓回查指向錯誤的 `OverrideItem`。成本是零。
+
+**不新增任何 meta**：`product_id` / `variation_id` 是 WooCommerce cart item 的原生欄位，
+複製一份成 `_profit_*` meta 只會多一個可以互相矛盾的來源。
+
+**v3 另做一次身分交叉比對**：`verify_item()` 比對「cart 陣列欄位」與
+「`cart_contents[$key]['data']` 這個實際被定價的物件」，脫鉤即 fail-closed。正常路徑必然一致
+（WC 自己就是用 `variation_id ?: product_id` 建出那個物件），但授權現在決定可購買性，
+不該把一致性當成外部保證。
+
+過渡期行為矩陣：
+
+| cart item | 版本 | regular/sale meta | 身分比對 | 結果 |
+|---|---|---|---|---|
+| Phase 13 之前加入 | v1 | 無 | **不做** | ✅ 只套 price；注入的 regular/sale 一律忽略 |
+| Phase 13 ～ 本輪之間 | v2 | 有 | **不做** | ✅ 全套用。⚠️ 商品身分不受保護——TD-58 對 v2 **仍然成立** |
+| v2 簽章被搬到別的商品 | v2 | 有 | 不做 | ⚠️ **仍會通過**。窄化在「本輪之前建立的既有 cart item」，且無 HTTP 可達寫入點 |
+| 本輪之後新加購 | v3 | 有 | ✅ | ✅ 全套用 |
+| v3 被搬到別的商品 / id 被改 | v3 | 有 | ✅ | ❌ fail-closed → fallback 原價 |
+| 舊簽章硬改成 `v3.` 前綴 | 偽 v3 | 任意 | ✅ | ❌ domain prefix 內含版本字串，hash 天生不互通 |
+| 一台車混合 v1 + v2 + v3 | 混合 | 混合 | 逐筆 | ✅ 逐品項獨立判版 |
+
+🔴 **為什麼不順手把 v2 也加上身分比對**：v2 payload 從未包含那兩個欄位，能拿來比對的兩個來源
+（cart 陣列、cart 物件）**都在攻擊者的同一個控制面內**，比對零安全增益；反而會把「陣列欄位與
+物件因任何第三方外掛而暫時不一致」的既有購物車誤殺。這與 v1 分支拒絕碰 regular/sale 是**同一條
+推理**：舊版本只驗它自己簽過的欄位。
+
+🔴 **`LEGACY_PAYLOAD_VERSIONS` 只准增加、永遠不准減少**（TD-35 同一條理由：持久化購物車無過期
+機制）。版本判斷一律用 `payload_version()`，**絕不可**用「某個 meta 在不在」——那是已知的繞過
+手法（保留合法舊簽章 + 注入偽造欄位 → 新分支驗失敗 → 落回舊分支 → 通過 → 套用一組從未被簽章
+保護的值），Phase 13 已經修過一次同型漏洞。
+
+##### 🔴 不變量：`OverridePriceFilters` 永遠不影響任何一筆 cart item 的價格
+
+cart item 的價格由 `CartPriceOverrideHook` + HMAC 簽章**獨佔**決定。
+
+這條不變量取代了原本那段**錯誤的**安全論證（「購物車 / 結帳**請求**不會走到這兩條路徑」）——
+前提是「請求類型」，但**購物車與商品頁在同一個 request 裡並存**：`SingleProductPriceHook` 在
+`template_redirect` prio 20 掛上 filter 後**整個 request 都不解除**，佈景主題 / 外掛
+（mini-cart fragments、免運進度條、幣別切換器）只要在渲染期再呼叫一次 `calculate_totals()`，
+一筆**完全沒有 `_profit_*` meta、沒有簽章**的 cart item 就會被套上覆寫價（探針實測
+1000 → 27），而 `apply_override()` 根本沒碰它（`isset(META_SHOP_ID)` 就 `continue`）⇒ 整條
+HMAC 保護被繞過；`woocommerce_after_calculate_totals` prio 1000 的 `set_session()` 還會把被
+污染的 `line_total` 寫進 session。（TD-62；與 TD-20 / TD-54 是同一種失效模式。）
+
+**執行點**：`resolve_for_product()` 開頭的 `is_cart_item_object()`，判準是**物件身分**（`===`）
+而非 product ID——`WC_Product_Factory::get_product()`（`class-wc-product-factory.php`）每次
+`return new $classname( ... )`、**不做實例快取** ⇒ 購物車裡的實例與單品頁 /
+`get_available_variations()` 拿到的必然是不同物件，零誤判：同一個商品在單品頁照樣套覆寫價，
+只有「購物車裡的那一份」被排除。**用 product ID 比對會把單品頁一起排掉、直接廢掉 Phase 9。**
+
+註冊時機仍然照舊收斂，但那是**縱深防禦的第二層、不是唯一一層**。
+被否決的兩個替代方案：「`before_calculate_totals` 前解除、after 重掛」只擋 `calculate_totals()`
+一條路（mini-cart 走 `wc_get_price_to_display()`、Store API schema 走 `get_price()`，都不在裡面），
+且會讓 `has_filter()` 斷言變得依賴呼叫時機；「每次價格渲染 arm/disarm」則沒有可掛的點。
+
+##### F-1：變體價格 transient 必須混入覆寫值本身
+
+`filter_variation_prices_hash()` 除了 `shop_id` 還要併入覆寫內容的指紋
+（`md5( wp_json_encode( $item->to_array() ) )`）。理由：WC 把變體價格陣列存在 transient，
+而站長改的是**賣場** post 的 `_profit_shop_items`，**不會**觸發 WooCommerce 對**商品** transient
+的任何清除。Phase 9 起就有這個缺口，但當時覆寫只是「平移既有區間」；本次改動後覆寫決定
+**變體存不存在**，後果從「數字不對」升級成**幽靈商品**（實測：清掉覆寫後單品頁仍顯示已不存在的
+價格區間，手動 DELETE transient 才恢復；加上指紋後改價即時生效、無需清快取）。
+
+##### F-2：`variable-subscription` 不可用嚴格字串比較
+
+`'variable' === $type` 這種寫法讓 `variable-subscription` 整段落在守門之外，實測症狀是：
+卡片價格區塊印成**空的 `<p>`**、`data-ps-disabled="0"` 可點、Modal 開得起來卻**沒有任何屬性選項、
+沒有價格，而加入購物車按鈕是啟用的**，按下去整頁 reload、什麼都沒發生、**沒有任何錯誤訊息**。
+
+單一真相是 `ProfitShopFrontView::VARIABLE_TYPES` / `is_variable()`（partial 只拿得到 payload
+字串時用它）；有 `WC_Product` 物件的地方（`ProfitShopFrontData::build_product()`）用 WC 自己的
+`$product->is_type( ProfitShopFrontView::VARIABLE_TYPES )`。
+`build_variations()` 的 `instanceof \WC_Product_Variable` 守門**不需要改**——已查證
+`WC_Product_Variable_Subscription extends WC_Product_Variable`。
 
 #### DRY：URL prefix 統一用 `RewriteRules::SHOP_REWRITE_PREFIX`
 

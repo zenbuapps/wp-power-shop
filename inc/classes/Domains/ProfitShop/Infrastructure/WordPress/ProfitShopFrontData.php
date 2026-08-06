@@ -11,6 +11,8 @@ namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress;
 
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\OverrideItem;
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\ProfitShop;
+use J7\PowerShop\Domains\ProfitShop\Domain\Service\OverridePriceResolver;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\OverridePriceFilters;
 
 /**
  * 把 ProfitShop 聚合根 + WooCommerce 商品資料組成前台 bundle 需要的 payload
@@ -175,6 +177,26 @@ final class ProfitShopFrontData {
 			'showProducts'    => \in_array( self::PART_PRODUCTS, $active_parts, true ),
 			'countdownTarget' => ( 'coming' === $status ) ? $start_time : 0,
 		];
+	}
+
+	/**
+	 * 賣場當下是否在販售期間內
+	 *
+	 * 供 `AddToCartHook` 的第三道閘門與 template 的 `$is_shop_open` 共用**同一份定義**。
+	 *
+	 * ⚠ **不要**在別處重新解析 `startTime` / `endTime`：正規化語意（`to_timestamp_ms()`
+	 * 的「非數字 / 負數 → 0 = 未設定」、`resolve_shop_status()` 的四種 start/end 組合分支）
+	 * 只有這一份是對的。更關鍵的是——「賣場現在開不開」的定義必須與「要不要印出商品
+	 * Modal」逐字相同，兩者分歧就會回到「畫面說關店、後端卻收單」或反之。
+	 *
+	 * 一律以**伺服器時間**判斷（`resolve_shop_status()` 用 `time()`）。
+	 *
+	 * @param ProfitShop $shop 賣場聚合根。
+	 *
+	 * @return bool 在販售期間內為 true（含「完全沒設排程」的絕大多數賣場）。
+	 */
+	public static function is_sale_window_open( ProfitShop $shop ): bool {
+		return 'published' === self::settings( $shop )['shopStatus'];
 	}
 
 	/**
@@ -404,7 +426,7 @@ final class ProfitShopFrontData {
 
 		$products = [];
 		foreach ( $loaded as [ $item, $product ] ) {
-			$products[] = self::build_product( $item, $product );
+			$products[] = self::build_product( $item, $product, (int) $shop->id );
 		}
 
 		return $products;
@@ -434,10 +456,11 @@ final class ProfitShopFrontData {
 	 *
 	 * @param OverrideItem $item    賣場內的商品覆寫項目。
 	 * @param \WC_Product  $product 已載入的 WooCommerce 商品（由 build_products 傳入，避免重複載入）。
+	 * @param int          $shop_id 賣場 post ID（變體清單取得時要暫時掛上覆寫價 filter，見 build_variations）。
 	 *
 	 * @return array<string, mixed>
 	 */
-	private static function build_product( OverrideItem $item, \WC_Product $product ): array {
+	private static function build_product( OverrideItem $item, \WC_Product $product, int $shop_id ): array {
 		$type = (string) $product->get_type();
 
 		$data = [
@@ -467,9 +490,24 @@ final class ProfitShopFrontData {
 			),
 		];
 
-		if ( 'variable' === $type ) {
+		/*
+		* F-2：`variable-subscription` 也是變體商品。
+		*
+		* 舊版寫 `'variable' === $type` 這種嚴格字串比較，於是 variable-subscription 完全
+		* 落在守門之外：卡片價格區塊印成空的 <p>、data-ps-disabled="0" 可點、Modal 開得
+		* 起來卻沒有任何屬性選項，而加入購物車按鈕是啟用的——按下去整頁 reload、什麼都沒
+		* 發生、沒有任何錯誤訊息。
+		*
+		* 這裡有 WC_Product 物件，所以用 WooCommerce 自己的 is_type()（吃陣列）；型別清單
+		* 與兩個 partial 共用 ProfitShopFrontView::VARIABLE_TYPES 單一真相。
+		*
+		* build_variations() 內的 `instanceof \WC_Product_Variable` 守門不需要改：已查證
+		* `class WC_Product_Variable_Subscription extends WC_Product_Variable`
+		* （vendor/woocommerce/subscriptions-core/includes/class-wc-product-variable-subscription.php:17）。
+		*/
+		if ( $product->is_type( ProfitShopFrontView::VARIABLE_TYPES ) ) {
 			$data['variation_attributes'] = $product->get_variation_attributes();
-			$data['variations']           = self::build_variations( $item, $product );
+			$data['variations']           = self::build_variations( $item, $product, $shop_id );
 		}
 
 		return $data;
@@ -528,15 +566,76 @@ final class ProfitShopFrontData {
 	 *
 	 * @param OverrideItem $item    賣場內的商品覆寫項目。
 	 * @param \WC_Product  $product 父商品（variable）。
+	 * @param int          $shop_id 賣場 post ID（覆寫價 filter 的快取分桶依據）。
 	 *
 	 * @return array<int, array<string, mixed>>
 	 */
-	private static function build_variations( OverrideItem $item, \WC_Product $product ): array {
+	private static function build_variations( OverrideItem $item, \WC_Product $product, int $shop_id ): array {
 		if ( ! $product instanceof \WC_Product_Variable ) {
 			return [];
 		}
 
+		/*
+		* 🔴 為什麼取變體清單前要暫時掛上覆寫價 filter
+		*
+		* get_available_variations() 會在
+		* woocommerce/includes/class-wc-product-variable.php:335 用
+		* `! $variation->variation_is_visible()` 過濾掉變體，而該判斷式
+		* （includes/class-wc-product-variation.php:593）是
+		* `post_status === publish && '' !== $this->get_price()`。
+		*
+		* ⇒ **商品自身沒有定價的變體，會在進到下面的 foreach 之前就被跳過**，
+		*   $item->get_variation_override() 因此一次都不會被呼叫——站長在後台設好的
+		*   變體覆寫價完全沒有機會被套上去。症狀是卡片連價格節點都不印
+		*   （price_range() 拿到空陣列）、Modal 的 ps-variations-data 是 []、
+		*   選了屬性永遠停在「此組合無法購買」，而且 console 與後台都零錯誤訊息。
+		*
+		* 覆寫價是「拿到變體清單**之後**才逐筆疊上去」的，清單是空的就一滴都疊不上。
+		* 唯一能救的位置就是讓 get_price() 在那道過濾器讀到覆寫價，也就是這裡。
+		*
+		* arm 之後：有覆寫的無定價變體 → get_price() 回覆寫價 → 通過 :335；
+		*          沒有覆寫的無定價變體 → OverridePriceResolver 回 null → filter 原樣放行
+		*          → get_price() 仍是 '' → 仍然被正確擋下（這是合法的「不可購買」狀態）。
+		*
+		* ⚠️ try/finally 不可省略，也不可改成常駐註冊：filter 若殘留到同一個 request 的
+		* 購物車階段，等於讓一組**未經 HMAC 簽章保護**的覆寫價生效，會抵銷
+		* CartPriceOverrideHook 在 priority 999 驗章失敗時刻意 fallback 回原價的保護
+		* （見 .claude/rules/profit-shop.rule.md §12.8）。get_available_variations() 內部
+		* 會跑第三方的 woocommerce_hide_invisible_variations / woocommerce_available_variation
+		* 等 filter，任何一個丟例外都可能跳過正常路徑，所以必須用 finally 而不是「用完再解」。
+		*/
+		$filters = new OverridePriceFilters( new OverridePriceResolver() );
+		$filters->arm( $shop_id, $item->product_id, $item );
+
+		try {
+			return self::collect_variations( $item, $product );
+		} finally {
+			$filters->disarm();
+		}
+	}
+
+	/**
+	 * 在覆寫價 filter 已 arm 的前提下組出變體清單
+	 *
+	 * ⚠️ 呼叫端必須已經 arm 且以 finally 保證 disarm，見 build_variations()。
+	 *
+	 * 迴圈刻意也留在 arm 範圍內（而不是取完清單就解除）：下面的 resolve_price() 只看
+	 * **變體層**的覆寫，沒有商品層 fallback。filter 若在此時已解除，「只設商品層覆寫」
+	 * 的無定價變體會通過可見性過濾進到 payload，卻帶著空字串價格——卡片的 price_range()
+	 * 因此算不出區間，畫面又變回「什麼價格都不印」，只是換一條路徑壞掉。
+	 *
+	 * 兩層不會互相打架：filter 的值來自 OverridePriceResolver，而 resolve_price() 的
+	 * 第一參數（變體層覆寫）在有值時本來就與 filter 的結果相同、在 null 時才吃 filter 的值——
+	 * 也就是「變體層沒設就退回商品層」，與 cart / 單品頁的 fallback 語意逐字一致。
+	 *
+	 * @param OverrideItem         $item    賣場內的商品覆寫項目。
+	 * @param \WC_Product_Variable $product 父商品。
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	private static function collect_variations( OverrideItem $item, \WC_Product_Variable $product ): array {
 		$variations = [];
+
 		foreach ( $product->get_available_variations() as $variation ) {
 			$variation_id = (int) ( $variation['variation_id'] ?? 0 );
 			if ( $variation_id <= 0 ) {

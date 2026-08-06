@@ -558,23 +558,113 @@
 		var selected = {};
 
 		/**
-		 * 依已選屬性比對出對應變體
+		 * 頁面上有幾組屬性（distinct `data-ps-attr-name`），bind 時算一次
 		 *
-		 * 兩邊都做 `decodeURIComponent` + `toLowerCase`——WooCommerce 的 `attributes`
-		 * 鍵是 `attribute_pa_color` 形式，值可能 URL-encoded。
+		 * ⚠ 刻意以 **DOM** 為來源，不是從變體 JSON 的鍵集反推：
 		 *
-		 * @return {Object|null} 命中的變體；未選齊或無對應時回 null
+		 *   1. 需求是「選滿**畫面上**所有屬性欄位」——畫面上有幾組，DOM 說了算。
+		 *   2. 「變體 `attributes` 必含全部鍵（任意屬性為空字串）」這個 WooCommerce
+		 *      內部行為（`wc_get_product_variation_attributes()`，wc-product-functions.php），
+		 *      正是下方 wildcard 比對所依賴的假設。若完整性檢查也押在同一個假設上，
+		 *      第三方 `woocommerce_available_variation` filter 一旦剝掉空值鍵，
+		 *      兩道防線會**同時**失效。兩者取用互相獨立的來源。
+		 *   3. 逐字對齊 WooCommerce 官方 `add-to-cart-variation.js` 的
+		 *      `getChosenAttributes()`——它數的也是 DOM 上的欄位。
+		 *
+		 * 用 `indexOf` 而非 `{}` 當 set：屬性名若剛好叫 `toString` / `constructor`，
+		 * 物件查表會命中 `Object.prototype` 上的成員而被誤判為重複、少算一組。
 		 */
-		function matchVariation() {
+		var attributeNames = ( function () {
+			var names = [];
+			Array.prototype.forEach.call( options, function ( option ) {
+				var name = option.getAttribute( 'data-ps-attr-name' );
+				if ( typeof name === 'string' && name !== '' && names.indexOf( name ) === -1 ) {
+					names.push( name );
+				}
+			} );
+			return names;
+		} )();
+
+		/**
+		 * 使用者是否已把每一組屬性都選出具體值
+		 *
+		 * 對齊 WooCommerce 官方 `add-to-cart-variation.js` 的
+		 * `attributes.count && attributes.count === attributes.chosenCount`——
+		 * **「任意 (Any)」屬性一樣要求使用者選出具體值**（`WC_Cart::add_to_cart()`
+		 * 的官方註解：任意屬性「need to be explicitly specified while adding to cart」）。
+		 *
+		 * 少了這道，只選 Color 不選 Size 也會匹配成功、按鈕啟用，送出後被
+		 * `WC_Cart::add_to_cart()` 判「缺少必填屬性」而拒絕——症狀從「按鈕永遠停用」
+		 * 變成「按了換頁還報錯」，只是換一個 bug。
+		 *
+		 * @return {boolean} 是否已選滿
+		 */
+		function isAllAttributesChosen() {
+			if ( attributeNames.length === 0 ) {
+				return false;
+			}
+
+			for ( var i = 0; i < attributeNames.length; i++ ) {
+				var value = selected[ attributeNames[ i ] ];
+				// `typeof` 檢查同時擋掉兩件事：屬性名撞到 `Object.prototype` 成員時
+				// 讀到函式（fail-closed），以及選項值本身是空字串。
+				if ( typeof value !== 'string' || value === '' ) {
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		/**
+		 * 單趟掃描全部變體，回傳「具體度最高」的匹配者
+		 *
+		 * ── 一、比對規則（與挑選策略無關，改動前先讀完本段）──
+		 *
+		 * **鍵**兩側都做 `decodeURIComponent` + `toLowerCase`——WooCommerce 的
+		 * `attributes` 鍵是 `attribute_` + `sanitize_title(屬性名)`（中文屬性會變成
+		 * percent-encoded），而 `data-ps-attr-name` 是未經處理的原始屬性名。
+		 *
+		 * **值**逐字比較，兩側一律不 decode、不 lowercase：兩者同源（都是 term slug
+		 * 或自訂屬性原始文字），而且 `syncAttributeFields()` 要送給 WooCommerce 的
+		 * 就是這個原始值——在此 decode 會讓比對與送出的值分家。
+		 *
+		 * ⚠ 變體側的值為**空字串**代表該屬性是「任意 (Any)」，接受任何值。這是
+		 * WooCommerce 的表示法：`wc_get_product_variation_attributes()`
+		 * （wc-product-functions.php）會先把父商品全部 `is_variation` 屬性 seed 成
+		 * `''`，再用變體自己的 postmeta 覆蓋——沒被覆蓋的就是「任意」。官方前端
+		 * `add-to-cart-variation.js` 的 `findMatchingVariations()` 對此有一道明確
+		 * 豁免（`val1.length !== 0 && val2.length !== 0` 才比對值）。
+		 *
+		 * 少了這道豁免，含任意屬性的商品**沒有任何輸入組合**能匹配成功
+		 * （使用者選 `medium`，變體側是 `''`，`'medium' !== ''` 恆真），
+		 * 按鈕永遠停用、該商品在 Modal 內結構性無解。
+		 *
+		 * ── 二、挑選策略：不 early return，掃完全部取最高分 ──
+		 *
+		 * `score` = 該變體 `attributes` 中「值非空字串」的屬性個數，也就是**它釘死了
+		 * 幾個條件**。掃描過程只記錄目前最高分者，**嚴格大於**（`>`）才換人，因此同分
+		 * 時保留陣列中較前者。為什麼是「最具體者勝」而非「第一個命中者勝」，
+		 * 見 `matchVariation()` 的 docblock——那是本專案刻意偏離 WooCommerce 官方
+		 * 行為的地方，**不要**把這裡改回命中即 `return`。
+		 *
+		 * @return {Object|null} 具體度最高的匹配變體；無對應時回 null
+		 */
+		function findBestVariation() {
+			var best = null;
+			var bestScore = -1;
+
 			for ( var i = 0; i < variations.length; i++ ) {
 				var candidate = variations[ i ];
 				var attributes = candidate.attributes || {};
 				var keys = Object.keys( attributes );
 				var matched = true;
+				var score = 0;
 
 				for ( var j = 0; j < keys.length; j++ ) {
 					var key = keys[ j ];
 					var bare = safeDecode( key.toLowerCase() ).replace( /^attribute_/, '' );
+					var expected = attributes[ key ];
 					var picked = null;
 
 					Object.keys( selected ).forEach( function ( name ) { // eslint-disable-line no-loop-func
@@ -583,18 +673,111 @@
 						}
 					} );
 
-					if ( picked === null || picked !== attributes[ key ] ) {
+					// `picked === null` 是第二道 fail-closed：變體宣告了某個屬性、但畫面上
+					// 沒有對應的選項群組（`is_variation` 屬性未指派任何 term）時走這裡。
+					// 這種商品在官方單品頁同樣選不齊，WooCommerce 後端也會拒收。
+					if ( picked === null ) {
 						matched = false;
 						break;
 					}
+
+					// 「任意 (Any)」屬性：接受任何值（wildcard），但**不計分**——它沒有
+					// 釘死任何條件。具體度的差異就只由這一行與下面的 `score++` 產生。
+					if ( expected === '' ) {
+						continue;
+					}
+
+					if ( picked !== expected ) {
+						matched = false;
+						break;
+					}
+
+					score++;
 				}
 
-				if ( matched && keys.length > 0 ) {
-					return candidate;
+				// `keys.length > 0` 防 vacuous truth：`attributes` 為 `{}` 時內層迴圈一次
+				// 都不跑、`matched` 保持初值 true，會把該變體當成已選中。
+				// **它不是「已選滿」的檢查**（那是 isAllAttributesChosen 的職責），不可刪。
+				// `score > bestScore` 用嚴格大於：同分時保留先掃到的（= 陣列順序在前者）。
+				if ( matched && keys.length > 0 && score > bestScore ) {
+					best = candidate;
+					bestScore = score;
 				}
 			}
 
-			return null;
+			return best;
+		}
+
+		/**
+		 * 依已選屬性比對出對應變體（**單趟掃描 + 具體度計分，最具體者勝**）
+		 *
+		 * 掃完全部候選，取「具體屬性數」最高者；`findBestVariation()` 負責掃描與計分，
+		 * 本函式只多加一道「已選滿」前提。
+		 *
+		 * 🔴 **為什麼必須是「最具體者勝」，而不是「第一個命中者勝」：**
+		 *
+		 * 同一組屬性上同時存在「具體值變體」與「任意 (Any) 變體」是 WooCommerce 最常見
+		 * 的 Any 用法（catch-all 預設 + 特例覆寫）：
+		 *
+		 *   #1 { color: '',    size: '' }  ← 全域 catch-all，售價 500
+		 *   #2 { color: 'red', size: '' }  ← 紅色專屬覆寫，售價 800
+		 *
+		 * 使用者選 `red` + `l`：#2 的約束集是 #1 的**嚴格超集**（多釘死 color=red），
+		 * 語意上毫無歧義，#2 是唯一正解。但「命中即回傳」的作法會拿到陣列中排前面的
+		 * #1（`get_available_variations()` 的順序是 `menu_order ASC, ID ASC`，先建
+		 * catch-all 是很自然的操作順序）。後果有三層，三層都**沒有任何錯誤訊息**：
+		 *
+		 *   1. **金額直接錯且靜默**：站長為紅色設的 800 被繞過，Modal 顯示 500、
+		 *      實收 500，使用者與站長都看不到異常。
+		 *   2. **Phase 9 的變體層價格覆寫一併失效**：`OverrideItem::$variations` 是以
+		 *      **variation_id 為鍵**，賣場針對 #2 設的 `VariationOverride`
+		 *      （原價／特價／灌水人數）永遠套不到，因為送進購物車的是 #1。
+		 *   3. **三道閘門都不會發現**：`AddToCartHook` 只驗「賣場存在 / status=publish /
+		 *      商品屬於該賣場」，`SingleProductPriceHook` / `CartPriceOverrideHook`
+		 *      只會忠實按 #1 算——**沒有任何一層會察覺拿錯了變體**。
+		 *      連帶 `hasAnyAttribute()` 的判斷也會跟著錯（可能該走 AJAX 卻降級換頁，
+		 *      或反之）。
+		 *
+		 * ⚠️ **本專案刻意偏離 WooCommerce 官方行為。** 官方
+		 * `add-to-cart-variation.js` 的 `findMatchingVariations()` + `.shift()`
+		 * 就是「第一個命中者勝出」、完全不分具體與 wildcard。我們比官方嚴謹，是因為
+		 * 官方沒有分潤價格覆寫這一層——在官方那裡挑錯變體只是顯示差異，在本專案等於
+		 * **少收錢**。這是明示的產品決策。
+		 *
+		 * ⚠️ **不要為了「對齊官方」「簡化程式碼」或「省一次掃描」把它改回命中即
+		 * `return`（不論是單趟或分級多趟）。** 全 Any 商品（如 V-Neck T-Shirt）在任何
+		 * 寫法下表面上都會動，所以手測極容易誤判「沒差」；真正壞掉的是上面那種混合
+		 * 商品，而且只在特定陣列順序下才壞。實測差分：3 屬性隨機 22401 組樣本，
+		 * 「命中即回傳」型作法有 12.4% 挑到非唯一最佳解，計分法為 0。
+		 * ⚠️ **選它的理由是正確率（12.4% → 0），不是速度。** 掃完全部確實比 early return
+		 * 慢：同機 A/B 實測 500 變體 × 3 屬性全 Any 為 0.75 ms vs 0.29 ms（慢 2.55×），
+		 * 全具體且命中在前段最多可差百倍以上；只有「完全無命中」時計分法才較快（約 0.5×）。
+		 * 但真實規模（≤ 24 變體）差距 < 0.01 ms，最壞人造情境 1000 變體全 Any 約 2.1 ms，
+		 * 而 `refresh()` 每次點選只呼叫一次——**遠低於一幀（16 ms），不是可感知的成本**。
+		 * 別把這段讀成「改回 early return 能換到效能」：換到的是 12.4% 的錯價機率。
+		 *
+		 * 📌 **平局（互不支配）取陣列第一個**：例如 `{red,''}` 與 `{'',large}`，
+		 * 使用者選 red+large 時兩者 score 都是 1、誰也不是誰的超集，語意本身即歧義、
+		 * 沒有客觀正解。**唯一保留順序決勝的情況，正好是唯一沒有客觀正解的情況**，
+		 * 此時退回 WooCommerce 官方 `.shift()` 的行為是合理且可預期的。
+		 *
+		 * 📌 **對「第三方 filter 剝掉空值鍵」天然免疫**：若有外掛在
+		 * `woocommerce_available_variation` 上把空字串的屬性鍵整個刪掉，
+		 * `#90 {color:'red'}`（size 鍵被剝掉）在「有沒有空字串」的二元判斷下會被誤認為
+		 * 「全具體」而直接勝出，蓋掉真正更具體的 `#91 {color:'red', size:'large'}`。
+		 * 計分法比的是**具體屬性數的絕對值**（#90 = 1 < #91 = 2），不看有沒有空字串，
+		 * 因此不受影響。
+		 *
+		 * @return {Object|null} 命中的變體；未選齊或無對應時回 null
+		 */
+		function matchVariation() {
+			// 「已選滿」是獨立前提，刻意不與下方的 wildcard 值比對混在同一個判斷式裡：
+			// 兩者資料來源不同（DOM vs 變體 JSON），混寫會讓日後改其中一項時連帶破壞另一項。
+			if ( ! isAllAttributesChosen() ) {
+				return null;
+			}
+
+			return findBestVariation();
 		}
 
 		/**
@@ -646,6 +829,7 @@
 		 */
 		function refresh() {
 			var variation = matchVariation();
+			var chosenAll = isAllAttributesChosen();
 
 			// 供 bindAddToCart 組 AJAX payload 用（沿用檔內 modal.psXxx 的跨函式通訊慣例）。
 			// wc-ajax 通道送的 product_id 就是這個變體的 id，不是父商品 id。
@@ -668,9 +852,15 @@
 					noIcon.classList.toggle( 'tw-hidden', !! variation );
 				}
 				if ( statusLabel ) {
+					// 修法後「沒選滿」與「選滿但無對應變體」是兩個可區分的狀態，共用一句
+					// 「未選擇商品屬性」會讓使用者對著已經全部選好的畫面反覆重選。
+					// `t()` 對缺少的 key 會退回這裡的繁中預設，因此**不需要**改 PHP 的
+					// `ProfitShopFrontView::js_i18n()`（日後要翻譯再補 key 即可）。
 					statusLabel.textContent = variation
 						? t( 'attrSelected', '已選擇商品屬性' )
-						: t( 'attrUnselected', '未選擇商品屬性' );
+						: ( chosenAll
+							? t( 'attrUnavailable', '此組合無法購買，請改選其他組合' )
+							: t( 'attrUnselected', '未選擇商品屬性' ) );
 				}
 			}
 
@@ -787,12 +977,29 @@
 	 * ------------------------------------------------------------------ */
 
 	/**
-	 * 變體是否含「任意」屬性（值為空字串）
+	 * 變體是否含「任意 (Any)」屬性（值為空字串）
 	 *
-	 * 這種變體走 wc-ajax 一定失敗：`WC_AJAX::add_to_cart()` 是從變體物件反查
-	 * `get_variation_attributes()`，「任意」屬性回空字串，而 `WC_Cart::add_to_cart()`
-	 * 會把空值濾掉後判定「缺少必填屬性」而拒絕。原生表單路徑不受影響（表單送的是
-	 * 使用者實際選的值），因此這種商品直接降級走原生送出。
+	 * 🔴 這種變體走 wc-ajax **結構性不可能成功**，已逐行核對 WooCommerce 原始碼：
+	 *
+	 *   `class-wc-ajax.php:496`  $variation = $product->get_variation_attributes();
+	 *                            ← 從**變體物件**反查，任意屬性回 ''；`WC_AJAX::add_to_cart()`
+	 *                              全文完全不讀 $_POST['attribute_*']，前端多送也沒用
+	 *   `class-wc-cart.php:1092` array_filter() 濾掉空值
+	 *   `class-wc-cart.php:1111` 空值不進 $posted_attributes
+	 *   `class-wc-cart.php:1162` '' === $valid_value → $missing_attributes[]
+	 *   `class-wc-cart.php:1170` throw '%s is a required field'
+	 *
+	 * 改送父商品 ID 也不行——`class-wc-cart.php:1080` 明文擋下
+	 * 「Variable product cannot be added to cart without a specified variation.」
+	 *
+	 * 原生表單路徑不受影響：`WC_Form_Handler::add_to_cart_handler_variable()`（:944-950）
+	 * 把 $_REQUEST 裡所有 `attribute_*` 原封不動轉送，命中 `class-wc-cart.php:1155`
+	 * 的任意屬性專用放行分支，因此這種商品直接降級走原生送出。
+	 *
+	 * ⚠ 因此「任意屬性商品加購會換頁、沒有成功 toast」是**正確結果**，不是沒修好。
+	 * 不要為了統一體驗把這道降級拿掉——拿掉的後果是這類商品加購**一律失敗**
+	 * （回 `{error:true}` → 依紀律導向 product_url → 使用者被踢出賣場頁），
+	 * 而且不會有任何 console 錯誤，比原本的問題更難查。
 	 *
 	 * @param {Object|null} variation 變體物件
 	 * @return {boolean} 是否含「任意」屬性

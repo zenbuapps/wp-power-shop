@@ -11,7 +11,8 @@ import {
 	Tooltip,
 	type TableProps,
 } from 'antd'
-import { memo, useMemo } from 'react'
+import { ProductStock } from 'antd-toolkit/wp'
+import { memo, useMemo, type ComponentProps } from 'react'
 
 import {
 	VARIATION_PAGE_LIMIT,
@@ -35,11 +36,55 @@ type TVariationOverrideEditorProps = {
 	onPatchOverride: (variationId: string, patch: Partial<TPriceOverride>) => void
 	onPatchInflated: (variationId: string, count: number) => void
 	onRemoveOrphan: (variationId: string) => void
+	/**
+	 * 商品層的價格覆寫
+	 *
+	 * 只用來判斷「這個未定價的變體到底賣不賣得出去」：
+	 * 變體沒有自己的覆寫時，`OverridePriceResolver` 會整組退回商品層，
+	 * 商品層也沒設才真的無價可賣。
+	 */
+	productOverride?: TPriceOverride
 	disabled?: boolean
 }
 
+/** 該覆寫是否至少設了一個欄位 */
+const hasAnyOverride = (override?: TPriceOverride): boolean =>
+	!!override &&
+	(null !== override.regular_price || null !== override.sale_price)
+
 /** WC 端查不到資料時的佔位 */
 const DASH = <span className="text-gray-400">—</span>
+
+/**
+ * `ProductStock` 要求的 record 形狀
+ *
+ * 直接從元件本身取回它要的型別，不引入 `any`
+ * （與 `ItemsEditor` 的 `TWpDisplayRecord` 同一手法）。
+ */
+type TStockRecord = ComponentProps<typeof ProductStock>['record']
+
+/** WC REST 的數值欄位可能是字串 / null / 空字串，統一收斂成 `number | null` */
+const toNullableNumber = (value: unknown): number | null => {
+	if (null === value || undefined === value || '' === value) return null
+	const parsed = Number(value)
+	return Number.isFinite(parsed) ? parsed : null
+}
+
+/**
+ * 變體 → `ProductStock` 的 record
+ *
+ * `ProductStock` 只讀 `stock_status` / `stock_quantity` / `low_stock_amount` 三欄，
+ * 並以 `Number.isInteger(stock_quantity)` 決定要不要在標籤後面帶出庫存數量。
+ *
+ * ⚠️ 本地型別把 `stock_quantity` 宣告成 `string | null`（`TProductBase`，實際 API 回 number），
+ * 不做這層轉型的話 `Number.isInteger('12')` 為 false ——
+ * 標籤照樣顯示，但**數量永遠不會出現，而且沒有任何錯誤訊息**。
+ */
+const toStockRecord = (record: TShopVariationInfo): TStockRecord => ({
+	stock_status: record.stock_status as TStockRecord['stock_status'],
+	stock_quantity: toNullableNumber(record.stock_quantity),
+	low_stock_amount: toNullableNumber(record.low_stock_amount),
+})
 
 /**
  * 表格的一列
@@ -60,7 +105,21 @@ type TVariationRow = {
  * 天然 lazy），所以變體查詢寫在這裡不會有 N+1；收合只是 `display:none`
  * 不會 unmount，重新展開也不會重查。
  *
- * 語意與商品層一致：價格欄留空 ＝ 沿用商品原價，填 0 ＝ 覆寫為 0 元。
+ * 價格欄留空 ＝ 不覆寫，填 0 ＝ 覆寫為 0 元。留空時的實際售價依
+ * `OverridePriceResolver::resolve()` 的 fallback：該變體**完全沒有**任何覆寫
+ * → 退回商品層 override → 商品層也沒設才是商品原價。
+ * （注意是「整組退回」，不是逐欄混用 —— 變體只要設了原價或特價其中一欄，
+ * 另一欄就維持 null，不會去撈商品層的值。）
+ *
+ * 四種顧客動線的價格差異（`SingleProductPriceHook` + `CartPriceOverrideHook` 負責）：
+ *   - 賣場前台卡片                                → 商品層覆寫價
+ *   - 從賣場點進商品單頁（URL 帶 profit_shop_id） → 變體覆寫價
+ *   - 加入購物車 / 結帳                            → 變體覆寫價
+ *   - 未經賣場直接開啟商品頁（無 profit_shop_id）  → 商品原始價格
+ *
+ * ⚠️ 最後一條是**刻意保留**的行為，不是缺口 —— 覆寫價綁定賣場，
+ * 沒帶 `profit_shop_id` 就不該套用。改動 `SingleProductPriceHook` 的作用範圍時，
+ * 這段說明要一併檢查（見 profit-shop.rule.md §7 記載的同型失誤模式）。
  *
  * ⚠️ 本元件位於外層 `ProfitShopForm` 那張大 `<Form>` 之內，
  * 所有按鈕一律走 `onClick`，**不得**出現 `htmlType="submit"`
@@ -72,6 +131,7 @@ const VariationOverrideEditorComponent = ({
 	onPatchOverride,
 	onPatchInflated,
 	onRemoveOrphan,
+	productOverride,
 	disabled,
 }: TVariationOverrideEditorProps) => {
 	const { variations, total, isLoading, isError } =
@@ -143,13 +203,47 @@ const VariationOverrideEditorComponent = ({
 			},
 		},
 		{
+			/*
+			 * 庫存改在這一層顯示 —— 商品層那格已移除。
+			 * 可變商品的庫存本來就是逐變體管理（父層那個狀態只是彙總），
+			 * 站長真正需要判斷「這個變體還能不能賣」的資訊在這裡。
+			 */
+			title: '庫存',
+			key: 'stock',
+			width: 130,
+			align: 'center',
+			render: (_: unknown, row) =>
+				row.record ? <ProductStock record={toStockRecord(row.record)} /> : DASH,
+		},
+		{
 			title: '目前價格',
 			key: 'current_price',
 			width: 130,
 			render: (_: unknown, row) => {
 				if (!row.record) return DASH
 				const { regular_price: regular, sale_price: sale } = row.record
-				if (!regular && !sale) return DASH
+				if (!regular && !sale) {
+					/*
+					 * 變體自己沒有定價。這在 WooCommerce 是「不可購買」——
+					 * `variation_is_visible()`（class-wc-product-variation.php:593）
+					 * 的條件含 `'' !== get_price()`，變體會連出現在前台的機會都沒有。
+					 *
+					 * 有覆寫（自己的或商品層的）時後端會補上價格，一切正常；
+					 * 兩邊都沒有才是真的賣不出去。站長只看到一個「—」不會知道這件事，
+					 * 因此在他設定的當下就講清楚——這是修法後**唯一**仍會靜默失敗的組合。
+					 */
+					const rescued =
+						hasAnyOverride(value?.[row.key]?.override) ||
+						hasAnyOverride(productOverride)
+
+					if (rescued) return DASH
+
+					return (
+						<Tag color="warning" className="whitespace-normal">
+							此變體未定價，且未設覆寫價 → 前台無法購買
+						</Tag>
+					)
+				}
 				return (
 					<div className="text-xs leading-5">
 						<div>原價 {regular || '—'}</div>
@@ -338,28 +432,10 @@ const VariationOverrideEditorComponent = ({
 	return (
 		<div className="flex flex-col gap-3">
 			{/*
-			 * 據實揭露四種顧客動線的價格差異（不為了畫面好看而簡化成一句，
-			 * 與 BasicTab 對 shortcode 模式的處理同一條紀律）：
-			 *
-			 *   賣場前台卡片                                → 父層覆寫價
-			 *   從賣場點進商品單頁（URL 帶 profit_shop_id）  → 變體覆寫價
-			 *   加入購物車 / 結帳                            → 變體覆寫價
-			 *   未經賣場直接開啟商品頁（無 profit_shop_id）  → 商品原始價格
-			 *
-			 * 單品頁那一段由 `Infrastructure/WooCommerce/SingleProductPriceHook` 負責，
-			 * 購物車 / 結帳那一段由 `CartPriceOverrideHook` 負責。
-			 *
-			 * ⚠️ 最後一條是**刻意保留**的行為，不是缺口 —— 覆寫價綁定賣場，
-			 * 沒帶 `profit_shop_id` 就不該套用，所以文案必須把這個條件講清楚，
-			 * 不能簡化成「覆寫價一律生效」。
+			 * 這裡原本有一張說明四種顧客動線價格差異的 info Alert，已依站長要求移除
+			 * （展開列已經夠長，那段說明每展開一個商品就重複一次）。
+			 * 內容沒有丟掉 —— 完整搬到本元件的 docblock，改動價格生效範圍時仍看得到。
 			 */}
-			<Alert
-				type="info"
-				showIcon
-				message="變體覆寫價會在顧客從本賣場進入商品頁後全程生效（商品單頁、購物車、結帳）。"
-				description="顧客若未經賣場直接開啟商品頁，看到的仍是商品原始價格。"
-			/>
-
 			{isTruncated ? (
 				<Alert
 					type="warning"

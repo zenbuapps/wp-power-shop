@@ -1,4 +1,4 @@
-import { Alert, Tag, type TableProps } from 'antd'
+import { Alert, ConfigProvider, Tag, type TableProps } from 'antd'
 import { SimpleModal } from 'antd-toolkit'
 import { isVariation } from 'antd-toolkit/wp'
 import { memo, useMemo, type ReactNode } from 'react'
@@ -165,6 +165,14 @@ const ProductPickerBodyComponent = ({
 
 const ProductPickerBody = memo(ProductPickerBodyComponent)
 
+/**
+ * `SimpleModal` 的預設遮罩 zIndex（antd-toolkit 寫死在元件內，沒有匯出）
+ *
+ * 只在 `modalProps.zIndex` 未指定時當 fallback 用；呼叫端若自訂了 zIndex，
+ * 下面的 popup 基準會跟著那個值走，不會因為這個常數過時而失準。
+ */
+const SIMPLE_MODAL_DEFAULT_Z_INDEX = 2000
+
 type TProductPickerModalProps = Pick<
 	TProductPickerModalState,
 	'modalProps' | 'selectedRecords' | 'setSelectedRecords' | 'existingIds'
@@ -184,31 +192,63 @@ const ProductPickerModalComponent = ({
 }: TProductPickerModalProps) => (
 	<SimpleModal {...modalProps}>
 		{/*
-		 * ⚠️ 這層 stopPropagation 不能拿掉，否則 Modal 內的「篩選」按鈕會失效。
+		 * ⚠️ 這層 ConfigProvider 不能拿掉，否則 Modal 內所有 antd 浮層
+		 * （篩選器的 Select 下拉、DatePicker 面板、Tooltip…）會整個看不見。
 		 *
-		 * SimpleModal 的背景遮罩對所有冒泡上來的 click 做 `e.preventDefault()`
-		 * （見 antd-toolkit SimpleModal 的 onClick），而 ProductFilter 的「篩選」是
-		 * `type="submit"` —— preventDefault 打在它的 click 上等同取消表單送出，
-		 * 結果就是按了沒反應、連請求都不會發。
+		 * antd 的浮層預設 `zIndex = zIndexPopupBase(1000) + 50 = 1050`，
+		 * 而 SimpleModal 的遮罩是 `zIndex: 2000` —— 浮層 portal 到 body 後，
+		 * 剛好被 Modal 的白色內容框整片蓋住，看起來就是「點了完全沒反應」，
+		 * 而且不會有任何錯誤訊息（DOM 其實有渲染出來，只是在 Modal 底下）。
 		 *
-		 * 在這裡截斷冒泡即可讓原生 submit 正常運作；遮罩的「點背景關閉」判斷是
-		 * `e.target === e.currentTarget`（只認直接點在遮罩上的 click），不受影響。
-		 * 同時這也保留了原本 preventDefault 想達成的效果：Portal 的 React 事件不會
-		 * 往上冒到賣場編輯頁的外層 <Form>。
+		 * antd 自己的 `<Modal>` 靠內部的 zIndexContext 自動把子浮層疊上去，
+		 * 但 SimpleModal 是 antd-toolkit 自刻的 div、不提供那個 context，
+		 * 所以必須由使用端把基準值抬到遮罩之上。
+		 *
+		 * 用 token 而非逐個 Select 傳 `getPopupContainer` 的理由有二：
+		 * 1. `ProductFilter` 來自 antd-toolkit，沒有開放 `getPopupContainer`
+		 * 2. Modal 內容區是 `overflow-auto`，把浮層塞進去會被捲動容器裁掉
+		 *
+		 * ConfigProvider 的 theme 是淺層合併，只覆寫 zIndexPopupBase，
+		 * `main.tsx` 設的 colorPrimary / borderRadius 不受影響。
 		 */}
+		<ConfigProvider
+			theme={{
+				token: {
+					zIndexPopupBase:
+						(modalProps?.zIndex ?? SIMPLE_MODAL_DEFAULT_Z_INDEX) + 100,
+				},
+			}}
+		>
+			{/*
+			 * ⚠️ 這層 stopPropagation 不能拿掉，否則 Modal 內的「篩選」按鈕會失效。
+			 *
+			 * SimpleModal 的背景遮罩對所有冒泡上來的 click 做 `e.preventDefault()`
+			 * （見 antd-toolkit SimpleModal 的 onClick），而 ProductFilter 的「篩選」是
+			 * `type="submit"` —— preventDefault 打在它的 click 上等同取消表單送出，
+			 * 結果就是按了沒反應、連請求都不會發。
+			 *
+			 * 在這裡截斷冒泡即可讓原生 submit 正常運作；遮罩的「點背景關閉」判斷是
+			 * `e.target === e.currentTarget`（只認直接點在遮罩上的 click），不受影響。
+			 * 同時這也保留了原本 preventDefault 想達成的效果：Portal 的 React 事件不會
+			 * 往上冒到賣場編輯頁的外層 <Form>。
+			 *
+			 * 這層也順帶保護了浮層：Select 下拉在 DOM 上 portal 到 body、不在此 div 內，
+			 * 但 React 合成事件是沿 **React tree** 冒泡，選項的 click 仍會經過這裡被攔下。
+			 */}
 
-		{/*
-		 * 這個 div 是純事件邊界、不是可互動元素，沒有對應的鍵盤操作可言，
-		 * 故關閉 jsx-a11y 的互動元素檢查（鍵盤操作由裡層真正的按鈕 / 輸入框負責）。
-		 */}
-		{/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
-		<div onClick={(e) => e.stopPropagation()}>
-			<ProductPickerBody
-				selectedRecords={selectedRecords}
-				setSelectedRecords={setSelectedRecords}
-				existingIds={existingIds}
-			/>
-		</div>
+			{/*
+			 * 這個 div 是純事件邊界、不是可互動元素，沒有對應的鍵盤操作可言，
+			 * 故關閉 jsx-a11y 的互動元素檢查（鍵盤操作由裡層真正的按鈕 / 輸入框負責）。
+			 */}
+			{/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
+			<div onClick={(e) => e.stopPropagation()}>
+				<ProductPickerBody
+					selectedRecords={selectedRecords}
+					setSelectedRecords={setSelectedRecords}
+					existingIds={existingIds}
+				/>
+			</div>
+		</ConfigProvider>
 	</SimpleModal>
 )
 

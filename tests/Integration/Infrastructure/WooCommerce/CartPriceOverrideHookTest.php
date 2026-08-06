@@ -66,6 +66,8 @@ use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ShopMode;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\VariationOverride;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\CptProfitShopRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\CartPriceOverrideHook;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\PricelessRescuePolicy;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopFrontData;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSaltProvider;
 use Tests\Integration\TestCase;
 
@@ -175,14 +177,16 @@ final class CartPriceOverrideHookTest extends TestCase {
 		$this->assertSame( '888.00', (string) $cart_item['_profit_price_override'], '應寫入 effective override 價格' );
 		$this->assertNotEmpty( $cart_item['_profit_signature'], '應寫入 _profit_signature' );
 
-		// signature 必須通過驗證（v2：regular / sale 也納入 payload）
+		// signature 必須通過驗證（v3：regular / sale 與商品身分都納入 payload）
 		$valid = $this->signature_service->verify(
 			$shop_id,
 			$this->partner_term_id,
 			'888.00',
 			(string) $cart_item['_profit_signature'],
 			(string) $cart_item['_profit_regular_price_override'],
-			(string) $cart_item['_profit_sale_price_override']
+			(string) $cart_item['_profit_sale_price_override'],
+			$product->get_id(),
+			0
 		);
 		$this->assertTrue( $valid, '寫入的 signature 必須能通過 verify' );
 	}
@@ -1183,18 +1187,1074 @@ final class CartPriceOverrideHookTest extends TestCase {
 	}
 
 	// ====================================================================
+	//  K. 無定價商品的購物車生命週期救援（2026-08）
+	// ====================================================================
+
+	/**
+	 * 自身無定價的 simple 商品 + 賣場覆寫價 → 加得進購物車，且實收為覆寫價
+	 *
+	 * 修法前會在 woocommerce/includes/class-wc-cart.php:1229 被
+	 * `! $product_data->is_purchasable()` 擋下（條件含 `'' !== get_price()`）。
+	 *
+	 * @test
+	 * @group happy
+	 * @group smoke
+	 */
+	public function test_priceless_simple_product_with_override_can_be_added_to_cart(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$this->assertFalse( $product->is_purchasable(), '前置條件：無定價商品本來就不可購買' );
+
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		$cart_item_key = $this->add_to_cart_via_shop( $product->get_id(), $shop_id );
+		$this->assertNotEmpty( $cart_item_key, '有覆寫價的無定價商品應可加入購物車' );
+
+		\WC()->cart->calculate_totals();
+
+		$cart_item = \WC()->cart->cart_contents[ $cart_item_key ];
+		$this->assertSame( '27.00', (string) $cart_item['data']->get_price(), '實收應為覆寫特價' );
+		$this->assertSame( '30.00', (string) $cart_item['data']->get_regular_price(), '劃線原價應為覆寫原價' );
+		$this->assertNotEmpty( $cart_item['_profit_signature'], '分潤簽章仍必須寫入（三道閘門未被繞過）' );
+	}
+
+	/**
+	 * 自身無定價的**變體** + 變體層覆寫 → 加得進購物車
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_priceless_variation_with_override_can_be_added_to_cart(): void {
+		[ $parent, $variation_ids ] = $this->create_priceless_variable_product();
+		$vid                        = $variation_ids[0];
+
+		$shop_id = $this->create_shop_with_variation_override(
+			$parent->get_id(),
+			$vid,
+			new PriceOverride( '30', '27', null )
+		);
+
+		$key = \WC()->cart->add_to_cart(
+			$parent->get_id(),
+			1,
+			$vid,
+			[],
+			[ 'profit_shop_id' => $shop_id ]
+		);
+
+		$this->assertIsString( $key, '有覆寫價的無定價變體應可加入購物車' );
+		$this->assertNotEmpty( $key );
+
+		\WC()->cart->calculate_totals();
+		$this->assertSame(
+			'27.00',
+			(string) \WC()->cart->cart_contents[ $key ]['data']->get_price(),
+			'變體實收應為變體層覆寫特價'
+		);
+	}
+
+	/**
+	 * 自身無定價且賣場**沒有**覆寫 → 仍然加不進購物車
+	 *
+	 * 這是合法的不可購買狀態，救援機制不得誤放行（否則會出現 0 元品項）。
+	 *
+	 * @test
+	 * @group security
+	 * @group error
+	 */
+	public function test_priceless_product_without_override_cannot_be_added_to_cart(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( null, null, null )
+		);
+
+		$key = $this->add_to_cart_via_shop( $product->get_id(), $shop_id );
+
+		$this->assertSame( '', $key, '沒有覆寫價的無定價商品不得被加入購物車' );
+		$this->assertCount( 0, \WC()->cart->get_cart(), '購物車應維持為空' );
+	}
+
+	/**
+	 * 【③ 回歸】已在 session 內的無定價品項，重新載入購物車時不得被移除
+	 *
+	 * woocommerce/includes/class-wc-cart-session.php:183 對每個載入購物車的請求都會跑
+	 * `! apply_filters( 'woocommerce_cart_item_is_purchasable', $product->is_purchasable(), $key, $values, $product )`，
+	 * false 就把品項移除並顯示「已無法購買」。只在加購那一刻放行 = 加得進去、下一頁就不見了。
+	 *
+	 * 本測試直接以 WooCommerce 的簽章呼叫該 filter（$values 帶著該筆自己的 _profit_* meta），
+	 * 並額外斷言 $product **這個實例**已被就地補上價格——後者證明閘門 ④
+	 * （src/StoreApi/Utilities/CartController.php:681-688 讀 $cart_item['data']，
+	 * 而 :234 存進去的正是同一個實例）一併解決。
+	 *
+	 * @test
+	 * @group happy
+	 * @group edge
+	 */
+	public function test_priceless_cart_item_survives_session_reload_via_per_item_hook(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		$values   = $this->make_signed_cart_values( $product->get_id(), 0, $shop_id, '27.00', '30.00', '27.00' );
+		$instance = \wc_get_product( $product->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $instance );
+		$this->assertFalse( $instance->is_purchasable(), '前置條件：無定價商品本來就不可購買' );
+
+		$result = \apply_filters(
+			'woocommerce_cart_item_is_purchasable',
+			$instance->is_purchasable(),
+			'fixture-key',
+			$values,
+			$instance
+		);
+
+		$this->assertTrue( (bool) $result, '已驗章的 cart item 在重新載入購物車時必須維持可購買' );
+		$this->assertSame( '27.00', (string) $instance->get_price(), '應就地補上覆寫價（同一個實例 ⇒ 閘門 ④ 一併解決）' );
+		$this->assertSame( '30.00', (string) $instance->get_regular_price(), '劃線原價亦應為覆寫原價' );
+	}
+
+	/**
+	 * 【安全】session 內的價格被竄改 → filter 回 false，且不得留下 0 元品項
+	 *
+	 * 驗章失敗時回傳的是**原始** $purchasable（false），由 WooCommerce 自己在
+	 * class-wc-cart-session.php:184-214 移除品項（fail-closed）。
+	 * 另外斷言 apply_override() 的 fallback 路徑會把該筆移出購物車，而不是
+	 * set_price('') 留下一筆 0 元品項——那會把「竄改 ⇒ 付原價」倒轉成「竄改 ⇒ 免費」。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_tampered_priceless_cart_item_is_removed_not_zeroed(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		// 簽章照 27.00 產生，但 meta 被改成 1.00
+		$values   = $this->make_signed_cart_values( $product->get_id(), 0, $shop_id, '27.00', '30.00', '27.00', '1.00' );
+		$instance = \wc_get_product( $product->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $instance );
+
+		$result = \apply_filters(
+			'woocommerce_cart_item_is_purchasable',
+			$instance->is_purchasable(),
+			'fixture-key',
+			$values,
+			$instance
+		);
+
+		$this->assertFalse( (bool) $result, '驗章失敗必須維持不可購買（fail-closed）' );
+		$this->assertSame( '', (string) $instance->get_price(), '驗章失敗時不得補上任何價格（更不可補成被竄改的 1.00）' );
+
+		// 再驗 999 的 fallback：竄改的無定價品項必須被移出購物車，不可留下 0 元品項。
+		$key = $this->add_to_cart_via_shop( $product->get_id(), $shop_id );
+		$this->assertNotEmpty( $key, '前置條件：合法加購應成功' );
+
+		\WC()->cart->cart_contents[ $key ][ '_profit_price_override' ] = '1.00';
+		\WC()->cart->calculate_totals();
+
+		$this->assertArrayNotHasKey( $key, \WC()->cart->cart_contents, '竄改後的無定價品項必須被移除，而不是變成 0 元' );
+	}
+
+	/**
+	 * 【回歸】本來就有定價的商品完全不受 per-item 授權影響
+	 *
+	 * authorize_cart_item() 的前兩道早退（$purchasable 已為 true、商品自身有價格）
+	 * 是整套機制的作用範圍收斂點。
+	 *
+	 * @test
+	 * @group smoke
+	 * @group edge
+	 */
+	public function test_priced_products_are_untouched_by_authorization(): void {
+		$priceless = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$normal    = $this->createSimpleProduct( [ 'regular_price' => '1200' ] );
+
+		$shop_id = $this->create_shop_with_item(
+			$priceless->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		$values = $this->make_signed_cart_values( $priceless->get_id(), 0, $shop_id, '27.00', '30.00', '27.00' );
+
+		$rescued = \wc_get_product( $priceless->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $rescued );
+		\apply_filters( 'woocommerce_cart_item_is_purchasable', $rescued->is_purchasable(), 'k', $values, $rescued );
+		$this->assertSame( '27.00', (string) $rescued->get_price(), '對照組：無定價商品確實被授權（防假綠燈）' );
+
+		// 拿同一組（合法的）$values 去套一個**有定價**的商品：必須完全不介入。
+		$untouched = \wc_get_product( $normal->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $untouched );
+		\apply_filters( 'woocommerce_cart_item_is_purchasable', $untouched->is_purchasable(), 'k', $values, $untouched );
+
+		$this->assertSame( '1200', (string) $untouched->get_price(), '有定價的商品價格不得被授權機制改動' );
+		$this->assertSame( '1200', (string) $untouched->get_regular_price(), '原價亦不得被改動' );
+	}
+
+	// ====================================================================
+	//  L. per-cart-item 授權：不得外溢（第 5 輪）
+	// ====================================================================
+
+	/**
+	 * 【R-1 回歸鎖】購物車有賣場品項時，同一商品在一般情境的價格不得被污染
+	 *
+	 * 第 4 輪用「product ID → 價格」的 request 級救援表 + 常駐全域價格 filter，
+	 * 而守門是**逐欄位**判空字串——絕大多數正常商品的 get_sale_price() 本來就回 ''，
+	 * 於是「購物車裡有一筆賣場品項」就會讓同一商品在**任何地方**的 get_sale_price()
+	 * 變成賣場特價：一般單品頁顯示「$999 劃掉 → $999」、is_on_sale() 由 false 翻 true
+	 * ⇒ 帶 exclude_sale_items 的優惠券失效。
+	 *
+	 * 新設計只 mutate「那一筆 cart item 自己的 WC_Product 實例」，而
+	 * WC_Product_Factory::get_product()（includes/class-wc-product-factory.php）
+	 * 每次都 new 一個新物件、不做實例快取 ⇒ 外溢在結構上不可能發生。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_shop_cart_item_does_not_pollute_other_product_instances(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '999' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '500', '450', null )
+		);
+
+		$key = $this->add_to_cart_via_shop( $product->get_id(), $shop_id );
+		$this->assertNotEmpty( $key, '前置條件：商品應可加入購物車' );
+
+		\WC()->cart->calculate_totals();
+
+		// 對照組（防假綠燈）：購物車那一筆確實已套上覆寫價
+		$in_cart = \WC()->cart->cart_contents[ $key ]['data'];
+		$this->assertSame( '450.00', (string) $in_cart->get_price(), '對照組：購物車品項應為覆寫特價' );
+		$this->assertSame( '500.00', (string) $in_cart->get_regular_price(), '對照組：購物車品項應為覆寫原價' );
+
+		// 一般情境（不帶 profit_shop_id）：全新實例必須完全乾淨
+		$elsewhere = \wc_get_product( $product->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $elsewhere );
+
+		$this->assertSame( '', (string) $elsewhere->get_sale_price(), '一般情境的特價不得被賣場覆寫價污染' );
+		$this->assertSame( '999', (string) $elsewhere->get_regular_price(), '一般情境的原價不得被改動' );
+		$this->assertSame( '999', (string) $elsewhere->get_price(), '一般情境的售價不得被改動' );
+		$this->assertFalse( $elsewhere->is_on_sale(), 'is_on_sale() 不得被翻轉（否則 exclude_sale_items 優惠券會失效）' );
+	}
+
+	/**
+	 * 【R-2 回歸鎖】不帶 profit_shop_id 時，無定價商品必須加不進購物車
+	 *
+	 * 第 4 輪的救援表讓「購物車裡有一筆合法賣場品項」等同於「這個 product 在本 request
+	 * 內到處都有價格」，於是同一商品可以在一般單品頁被再加購一次——顧客付到分潤價、
+	 * 夥伴卻拿不到任何結算紀錄（無歸屬銷售），而且那個價格完全在 HMAC 簽章機制之外。
+	 *
+	 * 強化版：**在同一個請求內**先合法加購一次建立賣場情境，再不帶 profit_shop_id
+	 * 加購同一商品，仍必須被擋下。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_priceless_variation_cannot_be_added_without_profit_shop_id(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		// (1) 完全沒有賣場情境時就加不進去
+		$naked = \WC()->cart->add_to_cart( $product->get_id(), 1 );
+		$this->assertFalse( $naked, '無定價商品在沒有賣場情境時不得被加入購物車' );
+		$this->assertCount( 0, \WC()->cart->get_cart(), '購物車應維持為空' );
+
+		// (2) 先合法加購一次（建立賣場情境）
+		$legit = $this->add_to_cart_via_shop( $product->get_id(), $shop_id );
+		$this->assertNotEmpty( $legit, '前置條件：帶合法 shop_id 應可加購' );
+
+		// (3) 同一個請求內，不帶 profit_shop_id 再加購一次 → 仍必須被擋下
+		$leaked = \WC()->cart->add_to_cart( $product->get_id(), 1 );
+		$this->assertFalse( $leaked, '購物車已有賣場品項，也不得讓同一商品在無賣場情境下變成可購買' );
+		$this->assertCount( 1, \WC()->cart->get_cart(), '購物車應仍只有那一筆合法品項' );
+	}
+
+	/**
+	 * 【A-3 回歸鎖】已結束販售的賣場，手工 POST 加購無定價變體必須被拒
+	 *
+	 * `AddToCartHook` 的閘門在第 5 輪之前**完全不檢查販售起訖時間**——前台靠 Phase 16 的
+	 * 「Modal 整段不印」擋住，但那只是 UI 層防呆，接不住手工 POST。既有測試只驗
+	 * DOM 不印表單（ProfitShopShortcodeTest），覆蓋不到這條。
+	 *
+	 * 期望：不注入 profit_shop_id → 不寫 meta → 不 arm 一次性授權 →
+	 * 無定價商品在 includes/class-wc-cart.php:1228 被 WooCommerce 自己擋下。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_closed_shop_rejects_hand_crafted_post_for_priceless_variation(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '30', '27', null ),
+			[
+				// 已於一小時前結束販售
+				'endTime' => ( \time() - 3600 ) * 1000,
+			]
+		);
+
+		$key = $this->add_to_cart_via_request( $product->get_id(), $shop_id );
+
+		$this->assertSame( '', $key, '已結束販售的賣場不得讓無定價商品被加入購物車' );
+		$this->assertCount( 0, \WC()->cart->get_cart(), '購物車應維持為空' );
+	}
+
+	/**
+	 * 【A-3 回歸鎖】已結束販售的賣場，**有定價**商品加得進去但拿不到分潤價
+	 *
+	 * 與偽造 shop_id 的既有行為一致：cart 仍正常加入、走商品原價、零 _profit_* meta。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_closed_shop_rejects_hand_crafted_post_for_priced_product(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1200' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( null, '888', null ),
+			[ 'endTime' => ( \time() - 3600 ) * 1000 ]
+		);
+
+		$key = $this->add_to_cart_via_request( $product->get_id(), $shop_id );
+		$this->assertNotEmpty( $key, '有定價的商品仍可加入購物車（只是拿不到分潤價）' );
+
+		$cart_item = \WC()->cart->cart_contents[ $key ];
+		$this->assertArrayNotHasKey( '_profit_shop_id', $cart_item, '已結束販售的賣場不得寫入任何分潤 meta' );
+		$this->assertArrayNotHasKey( '_profit_signature', $cart_item, '不得寫入簽章' );
+
+		\WC()->cart->calculate_totals();
+		$this->assertSame( '1200', (string) $cart_item['data']->get_price(), '應走商品原價' );
+	}
+
+	/**
+	 * 【邊界】尚未開賣的賣場同樣被拒；未設排程的賣場不受限制
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_sale_window_gate_rejects_before_start_and_ignores_unset_schedule(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+
+		$coming = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '30', '27', null ),
+			[ 'startTime' => ( \time() + 86400 ) * 1000 ]
+		);
+		$this->assertSame( '', $this->add_to_cart_via_request( $product->get_id(), $coming ), '尚未開賣的賣場必須被拒' );
+
+		\WC()->cart->empty_cart();
+
+		// 完全沒設排程（絕大多數賣場）→ 不限制
+		$open = $this->create_shop_with_item( $product->get_id(), new PriceOverride( '30', '27', null ) );
+		$this->assertNotSame( '', $this->add_to_cart_via_request( $product->get_id(), $open ), '未設排程的賣場不得受此閘門影響' );
+	}
+
+	/**
+	 * 【安全】加購成功後，一次性授權必須立即關閉
+	 *
+	 * 關閉點 (2)：woocommerce_add_to_cart（includes/class-wc-cart.php:1338）priority 1。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_pending_add_authorization_is_cleared_after_add(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		$key = $this->add_to_cart_via_shop( $product->get_id(), $shop_id );
+		$this->assertNotEmpty( $key, '前置條件：應可加購' );
+
+		$fresh = \wc_get_product( $product->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $fresh );
+		$this->assertSame( '', (string) $fresh->get_price(), '加購完成後一次性授權必須已關閉' );
+		$this->assertFalse( $fresh->is_purchasable(), '關閉後該商品在一般情境仍不可購買' );
+	}
+
+	/**
+	 * 【安全】一次性授權只涵蓋「當次那一個變體」，不涵蓋同父商品的其他變體
+	 *
+	 * 比對鍵是 `variation_id ?: product_id`（＝ includes/class-wc-cart.php:1073 拿去
+	 * wc_get_product() 的那個 ID）。用父商品 ID 比對會讓兄弟變體一起被放行。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_pending_add_authorization_does_not_cover_sibling_variation(): void {
+		[ $parent, $variation_ids ] = $this->create_priceless_variable_product();
+		[ $covered, $sibling ]      = $variation_ids;
+
+		$shop_id = $this->create_shop_with_variation_override(
+			$parent->get_id(),
+			$covered,
+			new PriceOverride( '30', '27', null )
+		);
+
+		$key = \WC()->cart->add_to_cart( $parent->get_id(), 1, $covered, [], [ 'profit_shop_id' => $shop_id ] );
+		$this->assertIsString( $key );
+		$this->assertNotEmpty( $key, '前置條件：被覆寫的變體應可加購' );
+
+		$sibling_product = \wc_get_product( $sibling );
+		$this->assertInstanceOf( \WC_Product_Variation::class, $sibling_product );
+		$this->assertSame( '', (string) $sibling_product->get_price(), '兄弟變體不得被一次性授權涵蓋' );
+		$this->assertFalse( $sibling_product->is_purchasable(), '兄弟變體必須維持不可購買' );
+	}
+
+	/**
+	 * 【A-1 回歸鎖】我方永遠不自行合併登入使用者的持久化購物車
+	 *
+	 * 第 4 輪的 read_cart_source() **無條件**把
+	 * `_woocommerce_persistent_cart_{blog_id}` usermeta 合併進救援表，而 WooCommerce
+	 * 自己的條件（includes/class-wc-cart-session.php:116）是
+	 * `if ( is_null( $cart ) || $merge_saved_cart )`。usermeta 永不過期、簽章也沒有時效
+	 * ⇒ 促銷期加購 → 登出 → 站長改價 → 重新登入，舊價格仍會在整個 request 內復活。
+	 *
+	 * 新設計不再自己讀任何購物車來源（$values 由 WooCommerce 逐項傳入），
+	 * 因此「合併條件」這個東西根本不存在、也就無從寫錯。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_persistent_cart_usermeta_is_never_merged_by_us(): void {
+		$user_id = self::factory()->user->create();
+		\wp_set_current_user( $user_id );
+
+		$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		// 一筆帶「合法舊簽章」的持久化購物車，且 session cart 非 null、無登入合併旗標
+		\update_user_meta(
+			$user_id,
+			'_woocommerce_persistent_cart_' . \get_current_blog_id(),
+			[
+				'cart' => [
+					'stale-key' => $this->make_signed_cart_values( $product->get_id(), 0, $shop_id, '27.00', '30.00', '27.00' ),
+				],
+			]
+		);
+
+		$fresh = \wc_get_product( $product->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $fresh );
+		$this->assertSame( '', (string) $fresh->get_price(), '持久化購物車的舊簽章不得讓價格在本 request 內復活' );
+		$this->assertFalse( $fresh->is_purchasable(), '同上（無歸屬銷售的攻擊鏈第一步必須不成立）' );
+
+		\wp_set_current_user( 0 );
+		\delete_user_meta( $user_id, '_woocommerce_persistent_cart_' . \get_current_blog_id() );
+	}
+
+	// ====================================================================
+	//  L. 2026-08 第 6 輪收斂：S-1 / S-3 / S-4 / S-5 回歸鎖
+	// ====================================================================
+
+	/**
+	 * 【S-1 / TD-56 回歸鎖】賣場只設**商品層**覆寫時，半成品變體不得被加進購物車
+	 *
+	 * 這是站長設定完全正常的情境：一個變體有價、一個是從未定價的半成品，
+	 * 賣場只設商品層覆寫。顯示層（OverridePriceFiltersTest）早就鎖住了「不顯示」，
+	 * 但**沒有任何測試嘗試過加購**——測試套件與程式碼有同一個盲點。
+	 *
+	 * 三段：(a) 手工 POST（攻擊者實際能操作的路徑，四道閘門完整跑一次）
+	 *       (b) 上游直接帶 profit_shop_id（AddToCartHook short-circuit，守門在 CartPriceOverrideHook）
+	 *       (c) 對照組：改設**變體層**覆寫必須救得起來（避免把守門寫成一律拒絕的假綠燈）
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_parent_level_override_never_rescues_priceless_variation_on_add_to_cart(): void {
+		[ $parent, $vids ] = $this->create_priceless_variable_product();
+
+		$shop_id = $this->create_shop_with_item(
+			$parent->get_id(),
+			new PriceOverride( '500', '450', null )
+		);
+
+		// (a) 手工 POST
+		$key = $this->add_variation_to_cart_via_request( $parent->get_id(), $vids[0], $shop_id );
+		$this->assertSame( '', $key, '半成品變體不得靠商品層覆寫被加進購物車' );
+		$this->assertCount( 0, \WC()->cart->get_cart(), '購物車應維持為空' );
+
+		// (b) 上游直接帶 profit_shop_id（跳過 AddToCartHook 的四道閘門）
+		$key2 = \WC()->cart->add_to_cart( $parent->get_id(), 1, $vids[0], [], [ 'profit_shop_id' => $shop_id ] );
+		$this->assertFalse( $key2, 'short-circuit 路徑同樣不得放行（守門在 CartPriceOverrideHook 內）' );
+
+		\WC()->cart->empty_cart();
+
+		// (c) 對照組：明確設變體層覆寫 → 必須救得起來
+		$ok_shop = $this->create_shop_with_variation_override(
+			$parent->get_id(),
+			$vids[0],
+			new PriceOverride( '30', '27', null )
+		);
+
+		$this->assertNotSame(
+			'',
+			$this->add_variation_to_cart_via_request( $parent->get_id(), $vids[0], $ok_shop ),
+			'變體層覆寫仍必須能救回半成品變體（守門不可寫成一律拒絕）'
+		);
+	}
+
+	/**
+	 * 【S-4 / TD-60 回歸鎖】`_price` 有值但 regular/sale 皆空的商品，驗章失敗必須 fallback 原價
+	 *
+	 * 觸發不需要攻擊者：輪替 AUTH_SALT（標準資安事件處置動作）會讓全站簽章一次失效。
+	 * 舊守門（`'' === sale && '' === reg`）會把這類**完全可正常販售**的商品
+	 * **直接刪出所有顧客的購物車**，直接違反核心不變量
+	 * 「驗章失敗一律 fallback 至商品原始價格」。
+	 *
+	 * @test
+	 * @group security
+	 * @group edge
+	 */
+	public function test_price_only_product_survives_signature_failure_and_falls_back_to_own_price(): void {
+		$product = $this->create_price_only_product( '500' );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( '400', '350', null )
+		);
+
+		$key = $this->add_to_cart_via_request( $product->get_id(), $shop_id );
+		$this->assertNotEmpty( $key, '前置：可正常販售的商品應加得進購物車' );
+
+		// 竄改簽章（模擬 AUTH_SALT 輪替 / meta 被改）
+		\WC()->cart->cart_contents[ $key ]['_profit_signature'] = 'v3.' . str_repeat( 'a', 64 );
+		\WC()->cart->calculate_totals();
+
+		$this->assertArrayHasKey( $key, \WC()->cart->cart_contents, '🔴 品項必須留在購物車，不得被刪除' );
+		$this->assertCount( 1, \WC()->cart->get_cart(), '購物車件數不變' );
+
+		$price_after = (string) \WC()->cart->cart_contents[ $key ]['data']->get_price( 'edit' );
+
+		// 只改守門、不改還原值時第一條會過、第二條會抓到（set_price('') 讓它下一個請求被移除）
+		$this->assertNotSame( '', $price_after, '還原值不得是空字串（否則只是把刪除延後到下一個請求）' );
+		$this->assertSame( '500', $price_after, '必須 fallback 回商品自身的 _price' );
+	}
+
+	/**
+	 * 【S-3 / TD-59 回歸鎖】已結束販售 + 上游直接帶 profit_shop_id → 不得寫入分潤 meta
+	 *
+	 * 這條路徑跳過 AddToCartHook 的四道閘門（short-circuit），因此
+	 * CartPriceOverrideHook 必須自己重驗販售期間——閘門 1 / 2 / 4 它本來就重驗了，
+	 * 只有 3 漏掉，是四道中唯一單層的一道。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_closed_shop_rejects_upstream_supplied_profit_shop_id(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1200' ] );
+		$shop_id = $this->create_shop_with_item(
+			$product->get_id(),
+			new PriceOverride( null, '888', null ),
+			[ 'endTime' => ( \time() - 3600 ) * 1000 ]
+		);
+
+		$key = $this->add_to_cart_via_shop( $product->get_id(), $shop_id );
+		$this->assertNotEmpty( $key, '商品本身有定價，仍可加入購物車' );
+
+		$cart_item = \WC()->cart->cart_contents[ $key ];
+		$this->assertArrayNotHasKey( '_profit_shop_id', $cart_item, '已結束販售的賣場不得寫入分潤 meta' );
+		$this->assertArrayNotHasKey( '_profit_signature', $cart_item, '不得寫入簽章' );
+
+		\WC()->cart->calculate_totals();
+		$this->assertSame( '1200', (string) $cart_item['data']->get_price(), '應走商品原價' );
+	}
+
+	/**
+	 * 【S-5 / TD-61 回歸鎖】賣場下架 / 商品移出賣場後，只靠救援才有價的品項失去授權
+	 *
+	 * 對照組（同一個測試內）：一般**有定價**商品不受影響——那是 Phase 3-D 的既有邊界
+	 * 「published 期間加入的品項之後下架也不撤銷」，本輪刻意不動。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_rescued_item_loses_authorization_when_shop_unpublished_or_product_removed(): void {
+		$priceless = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$priced    = $this->createSimpleProduct( [ 'regular_price' => '1200' ] );
+
+		$shop_id = $this->create_shop_with_item(
+			$priceless->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		$values_rescued = $this->make_signed_cart_values( $priceless->get_id(), 0, $shop_id, '27.00', '30.00', '27.00' );
+		$values_priced  = $this->make_signed_cart_values( $priced->get_id(), 0, $shop_id, '888.00', '1200.00', '888.00' );
+
+		$p1 = \wc_get_product( $priceless->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $p1 );
+		$this->assertTrue(
+			(bool) $this->hook->authorize_cart_item( false, 'k1', $values_rescued, $p1 ),
+			'前置：賣場仍 publish 且商品仍在賣場內時應授權'
+		);
+
+		// ① 賣場下架
+		$shop = $this->repo->find( $shop_id );
+		$this->assertInstanceOf( ProfitShop::class, $shop );
+		$shop->change_status( 'draft' );
+		$this->repo->save( $shop );
+		\clean_post_cache( $shop_id );
+
+		$p2 = \wc_get_product( $priceless->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $p2 );
+		$this->assertFalse(
+			(bool) $this->hook->authorize_cart_item( false, 'k1', $values_rescued, $p2 ),
+			'🔴 賣場下架後，只靠救援才有價的品項必須失去授權'
+		);
+
+		// ② 對照組：有定價商品不受本方法影響（第一道早退 $purchasable=true 直接原樣回傳）
+		$p3 = \wc_get_product( $priced->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $p3 );
+		$this->assertTrue(
+			(bool) $this->hook->authorize_cart_item( true, 'k2', $values_priced, $p3 ),
+			'有定價商品維持 Phase 3-D 既有邊界，不因賣場下架而被移除'
+		);
+
+		// ③ 商品移出賣場（賣場改回 publish、items 清空）
+		$shop2 = $this->repo->find( $shop_id );
+		$this->assertInstanceOf( ProfitShop::class, $shop2 );
+		$shop2->change_status( 'publish' );
+		$shop2->items = [];
+		$this->repo->save( $shop2 );
+		\clean_post_cache( $shop_id );
+
+		$p4 = \wc_get_product( $priceless->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $p4 );
+		$this->assertFalse(
+			(bool) $this->hook->authorize_cart_item( false, 'k1', $values_rescued, $p4 ),
+			'🔴 商品移出賣場後同樣必須失去授權'
+		);
+	}
+
+	/**
+	 * 【S-2 / TD-58 回歸鎖】v3 簽章綁定商品身分：搬到別的商品必須驗不過
+	 *
+	 * 修法前：把 A 商品的整組 _profit_* meta 原封套到「不在任何賣場」的 B 商品上，
+	 * authorize 回 true、B 的 get_price() 變成 '27.00'。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_v3_signature_cannot_be_transplanted_to_another_product(): void {
+		$a = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+		$b = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+
+		$shop_id = $this->create_shop_with_item(
+			$a->get_id(),
+			new PriceOverride( '30', '27', null )
+		);
+
+		$values_a = $this->make_signed_cart_values( $a->get_id(), 0, $shop_id, '27.00', '30.00', '27.00' );
+
+		$pa = \wc_get_product( $a->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $pa );
+		$this->assertTrue(
+			(bool) $this->hook->authorize_cart_item( false, 'ka', $values_a, $pa ),
+			'前置：A 商品自己的簽章必須驗得過'
+		);
+
+		// 把 A 的簽章與 meta 原封搬到 B（只改 product_id 欄位讓它「看起來」是 B 的）
+		$stolen               = $values_a;
+		$stolen['product_id'] = $b->get_id();
+
+		$pb = \wc_get_product( $b->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $pb );
+		$this->assertFalse(
+			(bool) $this->hook->authorize_cart_item( false, 'kb', $stolen, $pb ),
+			'🔴 改掉 product_id 後簽章必須驗不過'
+		);
+		$this->assertSame( '', (string) $pb->get_price(), 'B 商品不得因此取得價格' );
+
+		// 連 product_id 都不改（保留 A 的身分）也必須被身分交叉比對擋下
+		$pb2 = \wc_get_product( $b->get_id() );
+		$this->assertInstanceOf( \WC_Product::class, $pb2 );
+		$this->assertFalse(
+			(bool) $this->hook->authorize_cart_item( false, 'kb2', $values_a, $pb2 ),
+			'🔴 陣列欄位與實際被定價的物件脫鉤時必須 fail-closed'
+		);
+	}
+
+	// ====================================================================
+	//  M. 2026-08 第 7 輪收斂：空條目判準 + apply_override 重入
+	// ====================================================================
+
+	/**
+	 * 【第 7 輪 BLOCKING 回歸鎖】「全 null 空條目」不得被當成變體層覆寫
+	 *
+	 * PricelessRescuePolicy 曾用「變體條目**存在**」判斷，而真正決定價格的
+	 * OverridePriceResolver 用「條目存在**且有 ≥1 個非 null 價格**」——判準不一致。
+	 * `OverrideItem::get_variation_override()` 回的是 `$this->variations[$vid]?->override`，
+	 * **鍵存在就回一個 PriceOverride 物件**，即使三個價格欄位全是 null，
+	 * 於是空條目被政策放行、再被 resolver fallback 到**商品層**覆寫
+	 * ⇒ 正是 R-4 / S-1 禁止的「商品層覆寫救半成品變體」。
+	 *
+	 * ⚠️ 空條目不需要竄改，是站長正常操作的產物：`ItemsEditor.tsx` 在設定某個變體的
+	 *    **灌水購買人數**時會用 `emptyVariationOverride()`（三個價格皆 null）建出條目。
+	 *    「設了灌水人數但不覆寫價格」是合法狀態——要守的是判準，不是資料，
+	 *    所以本測試的 fixture 刻意帶 `inflated_count = 7`。
+	 *
+	 * 第 6 輪的 test_parent_level_override_never_rescues_priceless_variation_on_add_to_cart
+	 * 建的賣場**完全沒有 variations 條目**，只走到 null 分支，因此抓不到這個缺口。
+	 *
+	 * 三個消費端一起鎖（政策 / 加購 / 前台 payload），避免只修其中一條路徑。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_empty_variation_entry_is_not_treated_as_variation_level_override(): void {
+		[ $parent, $vids ] = $this->create_priceless_variable_product();
+
+		$shop_id = $this->create_shop_with_empty_variation_entry(
+			(int) $parent->get_id(),
+			$vids[0],
+			new PriceOverride( '500', '450', null )
+		);
+
+		$shop = $this->repo->find( $shop_id );
+		$this->assertInstanceOf( ProfitShop::class, $shop );
+		$item = $shop->items[ (int) $parent->get_id() ] ?? null;
+		$this->assertInstanceOf( OverrideItem::class, $item );
+
+		// 前置：確認 fixture 真的建出了「空條目」而不是根本沒存進去
+		$this->assertNotNull(
+			$item->get_variation_override( $vids[0] ),
+			'fixture 前置：空條目必須真的存在（否則本測試會退化成第 6 輪那條）'
+		);
+		$this->assertSame(
+			7,
+			$item->get_variation_inflated_count( $vids[0] )?->value(),
+			'fixture 前置：空條目是「只設灌水人數」的正常後台操作產物'
+		);
+
+		// (a) 政策：空條目不得放行
+		$variation = \wc_get_product( $vids[0] );
+		$this->assertInstanceOf( \WC_Product::class, $variation );
+		$this->assertFalse(
+			PricelessRescuePolicy::should_rescue_priceless( $variation, $item ),
+			'🔴 空條目不是變體層覆寫價，不得放行'
+		);
+
+		// (b) 加購：手工 POST 必須被擋下
+		$this->assertSame(
+			'',
+			$this->add_variation_to_cart_via_request( (int) $parent->get_id(), $vids[0], $shop_id ),
+			'🔴 帶空條目的半成品變體不得靠商品層覆寫被加進購物車'
+		);
+		$this->assertCount( 0, \WC()->cart->get_cart(), '購物車應維持為空' );
+
+		// (b2) 上游直接帶 profit_shop_id（跳過 AddToCartHook 四道閘門）同樣不得放行
+		$this->assertFalse(
+			\WC()->cart->add_to_cart( (int) $parent->get_id(), 1, $vids[0], [], [ 'profit_shop_id' => $shop_id ] ),
+			'🔴 short-circuit 路徑同樣不得放行'
+		);
+
+		// (c) 前台 payload：該變體不得出現在賣場卡片 / Modal 的可選清單內
+		$products = ProfitShopFrontData::build_products( $shop );
+		$this->assertCount( 1, $products, '前置：賣場應有一個商品' );
+		$this->assertSame(
+			[],
+			$products[0]['variations'] ?? null,
+			'🔴 顧客在賣場頁不得看到這個變體（否則不需要偽造請求就能下單）'
+		);
+	}
+
+	/**
+	 * 【第 7 輪 BLOCKING 正向對照】真正的變體層覆寫價仍必須救得起來
+	 *
+	 * 與上一條共用同一組 fixture，只把空條目換成有價格的覆寫。
+	 * 少了這條，把守門寫成「一律拒絕」也會全綠。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_real_variation_level_override_still_rescues_priceless_variation(): void {
+		[ $parent, $vids ] = $this->create_priceless_variable_product();
+
+		$shop_id = $this->create_shop_with_empty_variation_entry(
+			(int) $parent->get_id(),
+			$vids[0],
+			new PriceOverride( '500', '450', null ),
+			new PriceOverride( '30', '27', null )
+		);
+
+		$shop = $this->repo->find( $shop_id );
+		$this->assertInstanceOf( ProfitShop::class, $shop );
+		$item = $shop->items[ (int) $parent->get_id() ] ?? null;
+		$this->assertInstanceOf( OverrideItem::class, $item );
+
+		$variation = \wc_get_product( $vids[0] );
+		$this->assertInstanceOf( \WC_Product::class, $variation );
+		$this->assertTrue(
+			PricelessRescuePolicy::should_rescue_priceless( $variation, $item ),
+			'有變體層覆寫價時必須放行'
+		);
+
+		$key = $this->add_variation_to_cart_via_request( (int) $parent->get_id(), $vids[0], $shop_id );
+		$this->assertNotSame( '', $key, '有變體層覆寫價的半成品變體必須加得進購物車' );
+
+		\WC()->cart->calculate_totals();
+		$this->assertSame(
+			'27.00',
+			(string) \WC()->cart->cart_contents[ $key ]['data']->get_price( 'edit' ),
+			'應套用變體層覆寫特價，而非商品層的 450'
+		);
+
+		$products = ProfitShopFrontData::build_products( $shop );
+		$this->assertCount( 1, $products[0]['variations'] ?? [], '該變體必須出現在賣場可選清單內' );
+	}
+
+	/**
+	 * 【第 7 輪 MAJOR 回歸鎖】apply_override() 不得巢狀重入
+	 *
+	 * `reset_to_original_price()` 對無定價商品呼叫 `WC_Cart::remove_cart_item()`，
+	 * 而該方法 **會** 觸發 `woocommerce_cart_item_removed`
+	 *（includes/class-wc-cart.php:1372）→ `WC_Cart::calculate_totals()`（同檔 :131 註冊）
+	 * → `woocommerce_before_calculate_totals` → 本 hook。本檔原本斷言它「不會」，
+	 * 實測相反：修正前巢狀深度與失敗品項數 **1:1 成長**（N=2/6/12 → 深度 2/6/12），
+	 * 每層都是完整的 calculate_totals()（含稅金 / 優惠券 / 運費）。
+	 *
+	 * 觸發不需要攻擊者：輪替 AUTH_SALT 會讓全站簽章一次失效。
+	 *
+	 * 本測試以 reflection 讀私有旗標，區分「hook 被呼叫」與「body 真的執行」，
+	 * 並斷言兩件事：body 巢狀深度為 1（不得重入）、body **執行次數不隨 N 成長**
+	 *（修正前 N 筆失敗品項 ⇒ body 執行 N 次，每次都是完整的一輪驗章 + 套價）。
+	 *
+	 * ⚠️ 刻意**不**斷言 `woocommerce_before_calculate_totals` 的原始巢狀深度：
+	 *    set_up() 用 `new CartPriceOverrideHook(...)` 另外建了一個實例，而建構子
+	 *    （見該檔 :206）會自己 add_action，於是測試環境同時有**兩個**已註冊實例、
+	 *    各有各的旗標，原始深度因此比正式環境多一層。正式環境只有 Loader 註冊的
+	 *    singleton。用「本實例的 body 深度 / 次數」量測不受這個測試環境差異影響。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_apply_override_never_re_enters_itself(): void {
+		$measure = function ( int $n ): int {
+			\WC()->cart->empty_cart();
+
+			$keys = [];
+			for ( $i = 0; $i < $n; $i++ ) {
+				$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+				$shop_id = $this->create_shop_with_item(
+					(int) $product->get_id(),
+					new PriceOverride( '500', '450', null )
+				);
+				$key = $this->add_to_cart_via_request( (int) $product->get_id(), $shop_id );
+				$this->assertNotSame( '', $key, '前置：無定價商品 + 覆寫價應可加購' );
+				$keys[] = $key;
+			}
+
+			// 全部竄改簽章（模擬 AUTH_SALT 輪替）→ 每一筆都會走 reset_to_original_price()
+			foreach ( $keys as $key ) {
+				\WC()->cart->cart_contents[ $key ]['_profit_signature'] = 'v3.' . str_repeat( 'a', 64 );
+			}
+
+			/*
+			* ⚠️ set_up() 用 `new CartPriceOverrideHook(...)` 另外建了一個實例，而建構子
+			* （該檔 :206）會自己 add_action ⇒ 測試環境同時有**兩個**已註冊實例，
+			* 巢狀深度會比正式環境多一層。這裡先把重複的那個拿掉，
+			* 讓量測與正式環境（只有 Loader 註冊的 singleton）一致。
+			*/
+			\remove_action( 'woocommerce_before_calculate_totals', [ $this->hook, 'apply_override' ], 999 );
+
+			$depth     = 0;
+			$max_depth = 0;
+
+			/*
+			* 🔴 量測「apply_override 這一層的實際巢狀深度」，**不可**改成讀私有旗標。
+			*    讀旗標會產生假綠燈：把守門改成 `if ( false )` 之後旗標仍會被設成 true，
+			*    body 明明重入了，靠旗標判斷卻仍然回報「深度 1」。實測驗證過這一點。
+			*    夾在 998 / 1000 量測真實堆疊深度則無法被這樣騙過，
+			*    而且與實作無關（改成「收集 key、迴圈後再刪」同樣適用）。
+			*/
+			$enter = function () use ( &$depth, &$max_depth ) {
+				++$depth;
+				$max_depth = max( $max_depth, $depth );
+			};
+			$leave = function () use ( &$depth ) {
+				--$depth;
+			};
+
+			\add_action( 'woocommerce_before_calculate_totals', $enter, 998 );
+			\add_action( 'woocommerce_before_calculate_totals', $leave, 1000 );
+
+			try {
+				\WC()->cart->calculate_totals();
+			} finally {
+				\remove_action( 'woocommerce_before_calculate_totals', $enter, 998 );
+				\remove_action( 'woocommerce_before_calculate_totals', $leave, 1000 );
+				\add_action( 'woocommerce_before_calculate_totals', [ $this->hook, 'apply_override' ], 999 );
+			}
+
+			return $max_depth;
+		};
+
+		$small = $measure( 2 );
+		$large = $measure( 8 );
+
+		/*
+		* 深度 2 = 最外層那一次 calculate_totals + remove_cart_item 觸發的那一層。
+		* 後者是 WooCommerce 的行為（class-wc-cart.php:1372 → :131），我方不改它；
+		* 要守的是「它不再堆疊」。
+		*/
+		$this->assertSame( 2, $small, 'N=2 時巢狀深度應為常數 2' );
+		$this->assertSame(
+			$small,
+			$large,
+			'🔴 巢狀深度不得隨驗章失敗品項數成長（修正前 N=2 → 2、N=8 → 8）'
+		);
+	}
+
+	/**
+	 * 【第 7 輪 MAJOR 連帶】重入修正不得改變混合購物車的結果
+	 *
+	 * 旗標讓巢狀的那次 calculate_totals 跳過套價，因此必須確認：
+	 * 合法品項仍在、價格正確、每筆失敗品項只產生一則 notice（不重複）。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_reentrancy_guard_preserves_mixed_cart_correctness(): void {
+		\WC()->cart->empty_cart();
+		\wc_clear_notices();
+
+		$bad = [];
+		for ( $i = 0; $i < 3; $i++ ) {
+			$product = $this->createSimpleProduct( [ 'regular_price' => '' ] );
+			$shop_id = $this->create_shop_with_item(
+				(int) $product->get_id(),
+				new PriceOverride( '500', '450', null )
+			);
+			$bad[] = $this->add_to_cart_via_request( (int) $product->get_id(), $shop_id );
+		}
+
+		$good = [];
+		for ( $i = 0; $i < 2; $i++ ) {
+			$product = $this->createSimpleProduct( [ 'regular_price' => '1200' ] );
+			$shop_id = $this->create_shop_with_item(
+				(int) $product->get_id(),
+				new PriceOverride( null, '888', null )
+			);
+			$good[] = $this->add_to_cart_via_request( (int) $product->get_id(), $shop_id );
+		}
+
+		$this->assertCount( 5, \WC()->cart->get_cart(), '前置：5 筆品項' );
+
+		foreach ( $bad as $key ) {
+			\WC()->cart->cart_contents[ $key ]['_profit_signature'] = 'v3.' . str_repeat( 'a', 64 );
+		}
+
+		\wc_clear_notices();
+		\WC()->cart->calculate_totals();
+
+		$this->assertCount( 2, \WC()->cart->get_cart(), '無定價且驗章失敗的品項應被移除，合法品項留下' );
+
+		foreach ( $good as $key ) {
+			$this->assertArrayHasKey( $key, \WC()->cart->cart_contents, '🔴 合法品項不得被連帶移除' );
+			$this->assertSame(
+				'888.00',
+				(string) \WC()->cart->cart_contents[ $key ]['data']->get_price( 'edit' ),
+				'🔴 合法品項的覆寫價不得因巢狀計價被漏套'
+			);
+		}
+
+		$this->assertCount(
+			3,
+			\wc_get_notices( 'error' ),
+			'每筆被移除的品項只應產生一則 notice（重入會讓同一則重複寫入）'
+		);
+		$this->assertSame( 1776.0, (float) \WC()->cart->get_cart_contents_total(), '總額 = 888 × 2' );
+	}
+
+	// ====================================================================
 	//  Helper：建立 shop / 加入購物車
 	// ====================================================================
 
 	/**
+	 * 建立「只有 `_price`、regular/sale 皆空」的商品（S-4 fixture）
+	 *
+	 * 🔴 **不可**用 `set_regular_price('') + set_price('500') + save()`：
+	 *    WC_Product_Data_Store_CPT::handle_updated_props()
+	 *    （includes/data-stores/class-wc-product-data-store-cpt.php:825-833）只要
+	 *    regular_price / sale_price 進了 updated_props，就會把 `_price` 覆寫成
+	 *    `sale ?: regular` ⇒ 存完 `_price` 也是空字串，測不到目標狀態。
+	 *
+	 * 因此改為「先正常存好，再直接改 meta」——這也正是真實站台上這類商品的產生方式
+	 * （匯入腳本 / 舊資料 / 部分商品型別）。WooCommerce 自己在同檔 :818-823 的註解明寫
+	 * 「`_price` can also be set as a temporary active price for a product」，
+	 * 證明這是**合法狀態、不是資料損毀**。
+	 *
+	 * @param string $price `_price` 的值
+	 */
+	private function create_price_only_product( string $price = '500' ): \WC_Product {
+		$product = $this->createSimpleProduct( [ 'regular_price' => $price ] );
+		$id      = (int) $product->get_id();
+
+		\update_post_meta( $id, '_regular_price', '' );
+		\update_post_meta( $id, '_sale_price', '' );
+		\update_post_meta( $id, '_price', $price );
+
+		\wc_delete_product_transients( $id );
+		\clean_post_cache( $id );
+
+		$fresh = \wc_get_product( $id );
+		$this->assertInstanceOf( \WC_Product::class, $fresh );
+		$this->assertSame( $price, (string) $fresh->get_price( 'edit' ), 'fixture：_price 必須有值' );
+		$this->assertSame( '', (string) $fresh->get_regular_price( 'edit' ), 'fixture：regular 必須為空' );
+		$this->assertTrue( $fresh->is_purchasable(), 'fixture：這是一個完全可正常販售的商品' );
+
+		return $fresh;
+	}
+
+	/**
+	 * 模擬**手工 POST**加購指定變體（走 $_POST，四道閘門完整跑一次）
+	 *
+	 * @param int $product_id   父商品 ID
+	 * @param int $variation_id 變體 ID
+	 * @param int $shop_id      賣場 ID
+	 *
+	 * @return string cart_item_key（失敗為空字串）
+	 */
+	private function add_variation_to_cart_via_request( int $product_id, int $variation_id, int $shop_id ): string {
+		$original                = $_POST['profit_shop_id'] ?? null;
+		$_POST['profit_shop_id'] = (string) $shop_id;
+
+		try {
+			$key = \WC()->cart->add_to_cart( $product_id, 1, $variation_id );
+		} finally {
+			if ( null === $original ) {
+				unset( $_POST['profit_shop_id'] );
+			} else {
+				$_POST['profit_shop_id'] = $original;
+			}
+		}
+
+		return is_string( $key ) ? $key : '';
+	}
+
+	/**
 	 * 建立含單一商品的 ProfitShop
 	 *
-	 * @param int           $product_id     商品 ID
-	 * @param PriceOverride $override       價格覆寫
+	 * @param int                  $product_id 商品 ID
+	 * @param PriceOverride        $override   價格覆寫
+	 * @param array<string, mixed> $settings   賣場設定（排程 startTime / endTime 等；預設無排程）
 	 *
 	 * @return int 賣場 ID
 	 */
-	private function create_shop_with_item( int $product_id, PriceOverride $override ): int {
+	private function create_shop_with_item( int $product_id, PriceOverride $override, array $settings = [] ): int {
 		$shop = new ProfitShop(
 			id: 0,
 			title: '測試賣場 ' . uniqid(),
@@ -1209,10 +2269,91 @@ final class CartPriceOverrideHookTest extends TestCase {
 					override: $override,
 					inflated_count: new InflatedCount( 0 )
 				),
-			]
+			],
+			settings: $settings
 		);
 
 		return $this->repo->save( $shop );
+	}
+
+	/**
+	 * 模擬**手工 POST**（`$_POST['profit_shop_id']`）加購
+	 *
+	 * 與 add_to_cart_via_shop() 的差異：後者直接把 profit_shop_id 塞進
+	 * $cart_item_data，會觸發 AddToCartHook 開頭的 short-circuit、**跳過全部閘門**；
+	 * 本 helper 走 $_POST，是攻擊者實際能操作的那條路徑，四道閘門會完整跑一次。
+	 *
+	 * @param int $product_id 商品 ID
+	 * @param int $shop_id    賣場 ID
+	 *
+	 * @return string cart_item_key（失敗為空字串）
+	 */
+	private function add_to_cart_via_request( int $product_id, int $shop_id ): string {
+		$original      = $_POST['profit_shop_id'] ?? null;
+		$_POST['profit_shop_id'] = (string) $shop_id;
+
+		try {
+			$key = \WC()->cart->add_to_cart( $product_id, 1 );
+		} finally {
+			if ( null === $original ) {
+				unset( $_POST['profit_shop_id'] );
+			} else {
+				$_POST['profit_shop_id'] = $original;
+			}
+		}
+
+		return is_string( $key ) ? $key : '';
+	}
+
+	/**
+	 * 組出一筆「已簽章」的 cart item session 陣列（不寫進任何地方，直接給呼叫端用）
+	 *
+	 * 新設計不再自己讀購物車來源——$values 由 WooCommerce 在
+	 * includes/class-wc-cart-session.php:183 逐項傳給
+	 * woocommerce_cart_item_is_purchasable，所以測試也直接傳同樣形狀的陣列。
+	 *
+	 * @param int         $product_id     商品 ID
+	 * @param int         $variation_id   變體 ID（0 表示非變體）
+	 * @param int         $shop_id        賣場 ID
+	 * @param string      $price          已 normalize 的實收價（**簽章依據**）
+	 * @param string      $regular        已 normalize 的覆寫原價
+	 * @param string      $sale           已 normalize 的覆寫特價
+	 * @param string|null $tampered_price 若給值，meta 寫這個值但簽章仍依 $price 產生（模擬竄改）
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function make_signed_cart_values(
+		int $product_id,
+		int $variation_id,
+		int $shop_id,
+		string $price,
+		string $regular,
+		string $sale,
+		?string $tampered_price = null
+	): array {
+		// v3 起簽章綁定商品身分：兩個 id 必須與下面陣列裡的欄位一致，
+		// 否則 verify_item() 的交叉比對會直接判失敗（那正是 S-2 要鎖的行為）。
+		$signature = $this->signature_service->sign(
+			$shop_id,
+			$this->partner_term_id,
+			$price,
+			$regular,
+			$sale,
+			$product_id,
+			$variation_id
+		);
+
+		return [
+			'product_id'                     => $product_id,
+			'variation_id'                   => $variation_id,
+			'quantity'                       => 1,
+			'_profit_shop_id'                => $shop_id,
+			'_profit_partner_term_id'        => $this->partner_term_id,
+			'_profit_price_override'         => $tampered_price ?? $price,
+			'_profit_regular_price_override' => $regular,
+			'_profit_sale_price_override'    => $sale,
+			'_profit_signature'              => $signature,
+		];
 	}
 
 	/**
@@ -1264,6 +2405,106 @@ final class CartPriceOverrideHookTest extends TestCase {
 		);
 
 		return $key;
+	}
+
+	/**
+	 * 建立含「單一變體覆寫」的 ProfitShop
+	 *
+	 * @param int           $product_id   父商品 ID
+	 * @param int           $variation_id 變體 ID
+	 * @param PriceOverride $override     變體層覆寫
+	 *
+	 * @return int 賣場 ID
+	 */
+	private function create_shop_with_variation_override( int $product_id, int $variation_id, PriceOverride $override ): int {
+		$shop = new ProfitShop(
+			id: 0,
+			title: '測試賣場 ' . uniqid(),
+			slug: 'test-shop-' . uniqid(),
+			status: 'publish',
+			mode: ShopMode::PAGE,
+			partner_term_id: $this->partner_term_id,
+			rate: new ProfitRate( 20 ),
+			items: [
+				new OverrideItem(
+					product_id: $product_id,
+					override: new PriceOverride( null, null, null ),
+					inflated_count: new InflatedCount( 0 ),
+					variations: [
+						$variation_id => new VariationOverride( $override, new InflatedCount( 0 ) ),
+					]
+				),
+			]
+		);
+
+		return $this->repo->save( $shop );
+	}
+
+	/**
+	 * 建立「商品層有覆寫 + 指定變體帶一個條目」的賣場（第 7 輪 fixture）
+	 *
+	 * `$variation_override` 傳 null（預設）時建出**全 null 空條目**——那正是
+	 * `ItemsEditor.tsx` 的 `emptyVariationOverride()` 在站長只設定「灌水購買人數」時
+	 * 留下的形狀。`inflated_count` 刻意給 7（非 0），證明這是有意義的正常設定而不是垃圾資料。
+	 *
+	 * @param int                $product_id         父商品 ID
+	 * @param int                $variation_id       變體 ID
+	 * @param PriceOverride      $parent_override    商品層覆寫
+	 * @param PriceOverride|null $variation_override 變體層覆寫；null = 全 null 空條目
+	 *
+	 * @return int 賣場 ID
+	 */
+	private function create_shop_with_empty_variation_entry(
+		int $product_id,
+		int $variation_id,
+		PriceOverride $parent_override,
+		?PriceOverride $variation_override = null
+	): int {
+		$shop = new ProfitShop(
+			id: 0,
+			title: '測試賣場 ' . uniqid(),
+			slug: 'test-shop-' . uniqid(),
+			status: 'publish',
+			mode: ShopMode::PAGE,
+			partner_term_id: $this->partner_term_id,
+			rate: new ProfitRate( 20 ),
+			items: [
+				new OverrideItem(
+					product_id: $product_id,
+					override: $parent_override,
+					inflated_count: new InflatedCount( 0 ),
+					variations: [
+						$variation_id => new VariationOverride(
+							$variation_override ?? new PriceOverride( null, null, null ),
+							new InflatedCount( 7 )
+						),
+					]
+				),
+			]
+		);
+
+		return $this->repo->save( $shop );
+	}
+
+	/**
+	 * 建立「兩個變體都沒有任何定價」的可變商品
+	 *
+	 * @return array{0: \WC_Product_Variable, 1: array<int, int>} [ 父商品, 變體 ID 清單 ]
+	 */
+	private function create_priceless_variable_product(): array {
+		$product = $this->createVariableProduct(
+			[
+				'variations' => [
+					[ 'regular_price' => '' ],
+					[ 'regular_price' => '' ],
+				],
+			]
+		);
+
+		$ids = array_values( array_map( 'intval', $product->get_children() ) );
+		$this->assertCount( 2, $ids, '測試前置：應建立兩個變體' );
+
+		return [ $product, $ids ];
 	}
 
 	/**

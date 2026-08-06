@@ -285,7 +285,8 @@ components/product/ProductTable/
 | 4 | `ActionArea` / `BulkAction` | **不掛** | 那是給列表頁「批次操作既有資料」用的，Modal 情境沒有這個需求 |
 | 5 | 操作欄（`useColumns` 之類的 actions 欄） | **關閉**（如 `useColumns({ showActions: false })`） | Modal 只做勾選，不需要逐列操作入口 |
 | 6 | 表單送出鈕（`type="submit"`） | children 外包一層 `<div onClick={(e) => e.stopPropagation()}>` | `SimpleModal` 遮罩對所有冒泡 click 呼叫 `preventDefault()`，會連帶取消表單送出（詳見 `react.rule.md` §6.4「SimpleModal 遮罩會阻斷 Modal 內所有表單送出」） |
-| 7 | Modal 關閉時的殘留狀態 | `destroyOnHidden` + 關閉時 reset 選取集合 | 避免下次開啟殘留上次的勾選 / 捲動位置 |
+| 7 | **所有 antd 浮層**（Select 下拉 / DatePicker 面板 / Tooltip） | children 外**再**包一層 `<ConfigProvider theme={{ token: { zIndexPopupBase: modalZIndex + 100 } }}>` | 浮層預設 zIndex 1050，`SimpleModal` 遮罩是 2000 → 浮層 portal 到 body 後整片被 Modal 蓋住，症狀是「Select 點了不出現下拉」且無任何錯誤訊息。antd 官方 `<Modal>` 靠 `zIndexContext` 自動處理，`SimpleModal` 是自刻 div 不提供（詳見 `react.rule.md` §6.4「SimpleModal 內的所有 antd 浮層預設被遮罩蓋住」） |
+| 8 | Modal 關閉時的殘留狀態 | `destroyOnHidden` + 關閉時 reset 選取集合 | 避免下次開啟殘留上次的勾選 / 捲動位置 |
 
 **沿用路線 A 的列表頁版型（篩選卡片 + 實體列表）放進 Modal 時**，篩選卡片 + 列表卡片的兩張 `Card` 版型不變，只是拿掉「新增按鈕」與「批次操作」兩塊——即上表 #3、#4。
 

@@ -23,6 +23,19 @@
  * ⚠️ 價格語意由 Domain\Service\OverridePriceResolver 統一提供，與 CartPriceOverrideHook
  *    共用同一份實作——兩邊各自複製一份 fallback chain 曾經導致「單品頁顯示覆寫原價、
  *    購物車劃線價卻是商品原始原價」的分歧，且沒有任何錯誤訊息。不要把解析邏輯搬回本類。
+ *
+ * ⚠️ 「哪些 filter、callback 怎麼把三元組餵回 WC」自 2026-08 起搬到
+ *    OverridePriceFilters，本類只保留「判斷要不要掛」與 add_filter 清單。搬家的理由是
+ *    賣場前台的 ProfitShopFrontData::build_variations() 也需要同一組 filter（但生命週期
+ *    完全不同：用完就 disarm），共用實作才不會產生第二份取價邏輯。
+ *
+ *    本類刻意**保留**十個同名 public callback 與原本的 add_filter 清單（而非直接改用
+ *    OverridePriceFilters::arm()）：SingleProductPriceHookTest 直接斷言
+ *    `has_filter( 'woocommerce_product_get_price', [ $hook, 'filter_price' ] )`、直接呼叫
+ *    `$hook->filter_variation_prices_hash(...)`，並在 unregister_filters() 維護一張
+ *    hook↔callback 對照表。保留這層薄委派 ⇒ 那 11 個測試方法**零修改全綠**，就是
+ *    「抽取沒有改變單品頁既有行為」的直接證據（同 Phase 13 用 git diff 為空證明
+ *    OverridePriceResolver 重構無誤的手法）。
  */
 
 declare(strict_types=1);
@@ -33,6 +46,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Entity\OverrideItem;
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\ProfitShop;
 use J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Service\OverridePriceResolver;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ProfitShopFrontData;
 
 /**
  * 單品頁價格 override hook
@@ -42,32 +56,11 @@ final class SingleProductPriceHook {
 	use \J7\WpUtils\Traits\SingletonTrait;
 
 	/**
-	 * 命中的賣場 ID（未命中為 0）
+	 * 覆寫價 filter 組（承載情境與全部 callback 實作）
 	 *
-	 * @var int
+	 * @var OverridePriceFilters
 	 */
-	private int $shop_id = 0;
-
-	/**
-	 * 命中的父商品 ID（未命中為 0）
-	 *
-	 * @var int
-	 */
-	private int $product_id = 0;
-
-	/**
-	 * 命中的覆寫項目
-	 *
-	 * @var OverrideItem|null
-	 */
-	private ?OverrideItem $item = null;
-
-	/**
-	 * 價格解析器（與 CartPriceOverrideHook 共用同一份取價語意）
-	 *
-	 * @var OverridePriceResolver
-	 */
-	private readonly OverridePriceResolver $resolver;
+	private readonly OverridePriceFilters $filters;
 
 	/**
 	 * 建構子
@@ -83,7 +76,7 @@ final class SingleProductPriceHook {
 		private readonly ProfitShopRepositoryInterface $shops,
 		?OverridePriceResolver $resolver = null
 	) {
-		$this->resolver = $resolver ?? new OverridePriceResolver();
+		$this->filters = new OverridePriceFilters( $resolver ?? new OverridePriceResolver() );
 
 		// admin context guard：純後台（非 ajax）不掛 hook，與其餘 WooCommerce hook 一致
 		if ( \is_admin() && ! \wp_doing_ajax() ) {
@@ -113,6 +106,35 @@ final class SingleProductPriceHook {
 			return;
 		}
 
+		/*
+		* 🔴 N-1 / TD-57：販售期間閘門。
+		*
+		* 第 5 輪只把它補在 AddToCartHook，但本類是**同一個賣場情境的另一個入口**，
+		* 而且對「自身無定價、只靠覆寫價出售」的商品，本類的 filter 直接決定
+		* is_purchasable()（四道閘門的條件都收斂到 `'' !== get_price()`）。
+		*
+		* 缺這一行的實測後果（已結束販售的賣場、無定價變體、變體層覆寫 30/27）：
+		*   (1) 單品頁 price='27' / purchasable=true ⇒ **加得進購物車**
+		*   (2) AddToCartHook 的第三道閘門正確拒絕注入 ⇒ 零 _profit_* meta
+		*       ⇒ 以 27 元成交但**無分潤歸屬**
+		*   (3) 下一個請求被閘門 ③ 判定不可購買而移除 ⇒ 顧客看到剛加的東西不見了
+		* 修法前無定價變體在任何地方都加不進購物車，所以這是第 5 輪**新產生**的路徑。
+		*
+		* 定義與 AddToCartHook / template 的 $is_shop_open **共用同一份實作**
+		* （ProfitShopFrontData::is_sale_window_open）——各寫一份就會回到
+		* 「畫面說關店、後端卻收單」。
+		*
+		* 連帶的使用者可見行為變更：期間外從單品頁看到的價格會從覆寫價變回商品原價，
+		* 也就是「看到什麼 = 買得到什麼」。
+		*
+		* ⚠️ 刻意放在這裡而不是塞進 try_find_published_shop()：那個方法的名字只承諾
+		* 「找到且 publish」，把時間判斷藏進去會讓方法名說謊——這個 codebase 已經因為
+		* 「註解 / 命名與實作不符」吃過 TD-20 / TD-54 / TD-62 三次虧。
+		*/
+		if ( ! ProfitShopFrontData::is_sale_window_open( $shop ) ) {
+			return;
+		}
+
 		$product_id = (int) \get_queried_object_id();
 		if ( $product_id <= 0 || ! $shop->has_item( $product_id ) ) {
 			return;
@@ -123,9 +145,9 @@ final class SingleProductPriceHook {
 			return;
 		}
 
-		$this->shop_id    = $shop_id;
-		$this->product_id = $product_id;
-		$this->item       = $item;
+		// 只設情境、不由 OverridePriceFilters 自己 add_filter：本類的 filter 清單刻意留在
+		// 這裡（見檔頭說明——測試直接斷言 has_filter( …, [ $hook, 'filter_price' ] )）。
+		$this->filters->set_context( $shop_id, $product_id, $item );
 
 		// 一般商品 / 變體商品父層（view context 才會觸發，'edit' context 不受影響）
 		\add_filter( 'woocommerce_product_get_price', [ $this, 'filter_price' ], 10, 2 );
@@ -148,7 +170,12 @@ final class SingleProductPriceHook {
 		\add_filter( 'woocommerce_get_variation_prices_hash', [ $this, 'filter_variation_prices_hash' ], 10, 3 );
 	}
 
-	// ========== Filter callbacks：一般 / 變體商品物件 ==========
+	// ========== Filter callbacks（全部委派 OverridePriceFilters） ==========
+	//
+	// 這十個方法故意留成薄委派而不是直接把 OverridePriceFilters 掛上去：
+	// SingleProductPriceHookTest 以 [ $hook, 'filter_price' ] 這種 callable 形式做
+	// has_filter 斷言與 remove_filter，改掉方法名或改由別的物件承接會讓那 11 個測試
+	// 全部要改寫，也就失去「重構沒改變既有行為」的直接證據。
 
 	/**
 	 * 覆寫 get_price()（實際結帳價，與購物車一致）
@@ -159,14 +186,11 @@ final class SingleProductPriceHook {
 	 * @return mixed 覆寫後的價格字串；未命中時原樣回傳
 	 */
 	public function filter_price( $value, $product ) {
-		$resolved = $this->resolve_for_product( $product );
-		return null === $resolved ? $value : $resolved['price'];
+		return $this->filters->filter_price( $value, $product );
 	}
 
 	/**
 	 * 覆寫 get_regular_price()
-	 *
-	 * 覆寫項目未設定原價時保留商品原本的原價（只換特價的情境）。
 	 *
 	 * @param mixed $value   原始值
 	 * @param mixed $product WC_Product 實例
@@ -174,18 +198,11 @@ final class SingleProductPriceHook {
 	 * @return mixed
 	 */
 	public function filter_regular_price( $value, $product ) {
-		$resolved = $this->resolve_for_product( $product );
-		if ( null === $resolved || null === $resolved['regular'] ) {
-			return $value;
-		}
-		return $resolved['regular'];
+		return $this->filters->filter_regular_price( $value, $product );
 	}
 
 	/**
 	 * 覆寫 get_sale_price()
-	 *
-	 * 覆寫存在但未設定特價時回空字串（＝沒有特價）。
-	 * 若保留商品原本的特價，畫面會出現「原價劃掉 → 特價」但實收卻是覆寫原價的矛盾。
 	 *
 	 * @param mixed $value   原始值
 	 * @param mixed $product WC_Product 實例
@@ -193,14 +210,8 @@ final class SingleProductPriceHook {
 	 * @return mixed
 	 */
 	public function filter_sale_price( $value, $product ) {
-		$resolved = $this->resolve_for_product( $product );
-		if ( null === $resolved ) {
-			return $value;
-		}
-		return $resolved['sale'] ?? '';
+		return $this->filters->filter_sale_price( $value, $product );
 	}
-
-	// ========== Filter callbacks：變體價格區間（三參數簽章） ==========
 
 	/**
 	 * 覆寫變體價格區間的 price
@@ -212,8 +223,7 @@ final class SingleProductPriceHook {
 	 * @return mixed
 	 */
 	public function filter_variation_prices_price( $value, $variation, $parent = null ) {
-		unset( $parent );
-		return $this->filter_price( $value, $variation );
+		return $this->filters->filter_variation_prices_price( $value, $variation, $parent );
 	}
 
 	/**
@@ -226,8 +236,7 @@ final class SingleProductPriceHook {
 	 * @return mixed
 	 */
 	public function filter_variation_prices_regular_price( $value, $variation, $parent = null ) {
-		unset( $parent );
-		return $this->filter_regular_price( $value, $variation );
+		return $this->filters->filter_variation_prices_regular_price( $value, $variation, $parent );
 	}
 
 	/**
@@ -240,8 +249,7 @@ final class SingleProductPriceHook {
 	 * @return mixed
 	 */
 	public function filter_variation_prices_sale_price( $value, $variation, $parent = null ) {
-		unset( $parent );
-		return $this->filter_sale_price( $value, $variation );
+		return $this->filters->filter_variation_prices_sale_price( $value, $variation, $parent );
 	}
 
 	/**
@@ -256,68 +264,10 @@ final class SingleProductPriceHook {
 	 * @return mixed 併入 shop_id 後的 hash 來源
 	 */
 	public function filter_variation_prices_hash( $price_hash, $product, $for_display = false ) {
-		unset( $for_display );
-
-		if ( ! $product instanceof \WC_Product || (int) $product->get_id() !== $this->product_id ) {
-			return $price_hash;
-		}
-
-		if ( ! is_array( $price_hash ) ) {
-			$price_hash = [ $price_hash ];
-		}
-
-		$price_hash['power_shop_profit_shop_id'] = $this->shop_id;
-
-		return $price_hash;
+		return $this->filters->filter_variation_prices_hash( $price_hash, $product, $for_display );
 	}
 
 	// ========== Helpers ==========
-
-	/**
-	 * 依 WC_Product 實例解析出應套用的價格三元組
-	 *
-	 * @param mixed $product WC_Product 實例
-	 *
-	 * @return array{price: string, regular: string|null, sale: string|null}|null
-	 *         未命中本賣場 / 無任何覆寫時回 null（代表不介入）
-	 */
-	private function resolve_for_product( $product ): ?array {
-		if ( ! $this->item instanceof OverrideItem || ! $product instanceof \WC_Product ) {
-			return null;
-		}
-
-		if ( $product instanceof \WC_Product_Variation ) {
-			if ( (int) $product->get_parent_id() !== $this->product_id ) {
-				return null;
-			}
-			return $this->resolve_prices( (int) $product->get_id() );
-		}
-
-		if ( (int) $product->get_id() !== $this->product_id ) {
-			return null;
-		}
-
-		return $this->resolve_prices( null );
-	}
-
-	/**
-	 * 解析價格三元組（委派 Domain\Service\OverridePriceResolver）
-	 *
-	 * ⚠️ Fallback 語意刻意**不**在本類實作：cart 端（CartPriceOverrideHook）與本類必須
-	 * 用同一份規則，兩邊各自複製一份就是價格分歧的成因。要調整取價語意請改
-	 * OverridePriceResolver，兩條路徑會一起變。
-	 *
-	 * @param int|null $variation_id 變體 ID；null 表示父商品 / 一般商品
-	 *
-	 * @return array{price: string, regular: string|null, sale: string|null}|null 無覆寫時回 null
-	 */
-	private function resolve_prices( ?int $variation_id ): ?array {
-		if ( ! $this->item instanceof OverrideItem ) {
-			return null;
-		}
-
-		return $this->resolver->resolve( $this->item, $variation_id );
-	}
 
 	/**
 	 * 從 $_GET 抽出 profit_shop_id

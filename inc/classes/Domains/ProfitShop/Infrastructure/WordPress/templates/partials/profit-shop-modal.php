@@ -53,7 +53,7 @@ $m_name   = (string) $ps_product['name'];
 $m_images = \is_array( $ps_product['images'] ) ? $ps_product['images'] : [];
 $m_stock  = \is_array( $ps_product['stock'] ) ? $ps_product['stock'] : [];
 
-$m_is_variable = ( 'variable' === $m_type );
+$m_is_variable = ProfitShopFrontView::is_variable( $m_type );
 
 // 描述 = 短描述 + 完整描述（兩者 build_products() 都已 wpautop），再把 YouTube 連結轉 iframe。
 $m_description = ProfitShopFrontView::embed_youtube(
