@@ -199,8 +199,15 @@ export type TShopItemProductInfo = TProductRecord
  * 使用者拖曳排序（商品集合沒變、只換位置）會讓 queryKey 變動 → 整批重新查詢，
  * 表格閃一次 Skeleton 且類型 / 狀態 / 價格 / 庫存欄短暫變成「—」。
  * 排序後，同一組 id 的任意排列都對應同一個 queryKey。
+ *
+ * ⚠️ **匯出只為了測試**（`tests/js/shopItemChunks.test.ts`），產品程式碼唯一的
+ * 呼叫端仍是同檔的 `useShopItemProducts`。`useShopItemProducts` 本身是 hook、
+ * 綁死 Refine 的 `useList`，在 jsdom 下要測得架起整個 dataProvider；
+ * 而這兩條 Rule（「空賣場不發查詢」「查詢範圍等於 items 的 product_id 集合」）
+ * 的契約完全落在這個純函式上——`enabled: chunk.length > 0` 與 `include: chunk`
+ * 都只是把它的輸出接出去而已。
  */
-const toChunks = (ids: number[]): number[][] => {
+export const toChunks = (ids: number[]): number[][] => {
 	const sorted = [...ids].sort((a, b) => a - b)
 	const chunks: number[][] = []
 	for (let i = 0; i < CHUNK_COUNT; i++) {

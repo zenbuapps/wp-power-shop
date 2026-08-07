@@ -17,7 +17,8 @@ Feature: 補齊賣場商品的顯示資訊
       | 102 | iPhone 15   | simple | publish | IP15-128 |
 
   Rule: 前置（參數）- 僅在賣場含有商品時才發出補齊查詢
-    # @covered-by: NOT-COVERED useShopItemProducts 的 enabled 守門，屬 React hook 行為（B9 待補）
+    # @covered-by: tests/js/shopItemChunks.test.ts::賣場沒有商品時每一塊都是空的（= 五個查詢全部停用）
+    # @covered-by: tests/js/shopItemChunks.test.ts::只有一筆商品時，只有第一塊非空，其餘四個查詢仍停用
 
     Example: 賣場沒有商品時不應發出補齊查詢
       Given 已存在分潤賣場 "空賣場" 且其商品列表為空
@@ -25,7 +26,9 @@ Feature: 補齊賣場商品的顯示資訊
       Then 系統不應發出商品補齊查詢
 
   Rule: 前置（參數）- 補齊查詢必須以賣場 items 的 product_id 集合為範圍
-    # @covered-by: NOT-COVERED useShopItemProducts 的 include= 分 chunk 查詢，屬 React hook 行為（B9 待補）
+    # @covered-by: tests/js/shopItemChunks.test.ts::查詢範圍恰好等於 items 的 product_id 集合，不多不少
+    # @covered-by: tests/js/shopItemChunks.test.ts::每塊最多 100 筆（WC REST 的 per_page 硬上限）
+    # @covered-by: tests/js/shopItemChunks.test.ts::🔴 拖曳排序（同一組 id、不同順序）必須得到逐字相同的分塊
 
     Example: 補齊查詢應一次帶入所有 product_id
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為

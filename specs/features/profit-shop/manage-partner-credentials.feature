@@ -173,7 +173,10 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 夥伴以 "a1 <b>  c&d" 登入應成功
 
   Rule: 前端（產生）- 密碼欄位旁的產生按鈕只填入不送出
-    # @covered-by: NOT-COVERED PartnerForm 的「產生」按鈕（crypto.getRandomValues，只填入不送出），專案無前端測試框架（B9 待補）
+    # @covered-by: tests/js/partnerFormUtils.test.ts::🔴 不發出任何網路請求（產生是純前端，按儲存才生效）
+    # @covered-by: tests/js/partnerFormUtils.test.ts::排除易混淆字元 0 O 1 l I
+    # @covered-by: tests/js/partnerFormUtils.test.ts::🔴 必定通過後端 PartnerPassword VO 的強度規則（跨層契約）
+    # @covered-by: tests/js/partnerFormUtils.test.ts::🔴 走 crypto.getRandomValues，不是 Math.random
 
     Example: 點擊產生只填入欄位
       When 管理者 "Admin" 在夥伴表單點擊「產生」
