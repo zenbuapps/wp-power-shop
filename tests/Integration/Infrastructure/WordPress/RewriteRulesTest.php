@@ -33,12 +33,27 @@ final class RewriteRulesTest extends TestCase {
 
 	/**
 	 * 每個測試前重新觸發 rewrite rule 註冊並 flush，確保 rules 已載入
+	 *
+	 * 🔴 `set_permalink_structure()` 不可省略。`permalink_structure` 為空（plain
+	 * permalinks，`WP_UnitTestCase` 的預設狀態）時，WordPress 的
+	 * `WP_Rewrite::wp_rewrite_rules()` **根本不產生任何 rewrite rules**，
+	 * `get_option('rewrite_rules')` 會是空字串——與本外掛有沒有註冊規則完全無關。
+	 *
+	 * ⚠️ `.wp-env.json` 的 `afterStart` 雖然有 `wp rewrite structure /%postname%/`，
+	 * 但那一段只對 **cli**（開發站台）容器執行，**tests-cli 沒有**；且 `WP_UnitTestCase`
+	 * 每個測試都在 transaction 內跑並 rollback，不能依賴容器層的一次性設定。
+	 * 前置條件必須由測試自己建立。
+	 *
+	 * 本方法只補齊前置條件，兩條測試的斷言內容一字未改。
 	 */
 	public function set_up(): void {
 		parent::set_up();
 
 		// 清掉可能殘留的舊設定（現在不影響取值，但保持測試環境乾淨）
 		\delete_option( self::LEGACY_SETTINGS_OPTION );
+
+		// rewrite rules 只在非 plain permalink 結構下才會生成
+		$this->set_permalink_structure( '/%postname%/' );
 
 		RewriteRules::register();
 		\flush_rewrite_rules( false );
@@ -87,16 +102,39 @@ final class RewriteRulesTest extends TestCase {
 	/**
 	 * profit_partner_report query var 必須註冊到 query_vars filter
 	 *
+	 * 🔴 斷言對象刻意是 `apply_filters('query_vars', ...)` 的輸出，**不是**
+	 * `$wp->public_query_vars` 這個屬性。兩者不等價：
+	 *
+	 * `WP::parse_request()` 內才有
+	 * `$this->public_query_vars = apply_filters( 'query_vars', $this->public_query_vars )`，
+	 * 也就是說**在 `parse_request()` 被呼叫之前**，`$wp->public_query_vars` 只是
+	 * `WP::__construct()` 給的核心預設清單，任何外掛透過 filter 加入的 query var
+	 * 都還沒進去。整合測試不會走完整的請求生命週期，讀那個屬性等於在檢查一個
+	 * 時序上還沒發生的狀態——測的是 WordPress 的內部時序，不是本外掛的行為。
+	 *
+	 * 改為直接對 filter 取值，測到的正是本測試真正要驗證的那件事：
+	 * 「`RewriteRules` 有沒有把 query var 註冊進 `query_vars` filter」。
+	 * 這是**收斂**斷言對象、不是放寬——filter 沒掛或 var 名寫錯，一樣立刻紅。
+	 *
 	 * @test
 	 * @group happy
 	 */
 	public function test_profit_report_query_var_is_registered(): void {
-		global $wp;
+		// filter 掛在 RewriteRules::__construct()，測試環境需確保單例已建立
+		RewriteRules::instance();
+
+		/** @var string[] $vars */
+		$vars = \apply_filters( 'query_vars', [] );
 
 		$this->assertContains(
 			RewriteRules::QUERY_VAR,
-			$wp->public_query_vars,
-			'profit_partner_report query var 應被註冊到 $wp->public_query_vars'
+			$vars,
+			'profit_partner_report query var 應由 RewriteRules 註冊到 query_vars filter'
+		);
+		$this->assertContains(
+			RewriteRules::SHOP_QUERY_VAR,
+			$vars,
+			'profit_shop_slug query var 應由 RewriteRules 註冊到 query_vars filter'
 		);
 	}
 }

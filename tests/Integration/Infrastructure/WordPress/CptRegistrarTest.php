@@ -58,23 +58,40 @@ final class CptRegistrarTest extends TestCase {
 	// ========== Happy ==========
 
 	/**
-	 * powershop CPT 必須開啟 REST 支援（show_in_rest = true），React SPA 才能透過 REST 操作
+	 * 🔴 安全回歸鎖：powershop CPT **必須**關閉 wp/v2 REST（show_in_rest = false）
+	 *
+	 * ⚠️ 本測試原本斷言 `show_in_rest === true`，理由寫「spec §1.1 React SPA 需求」，
+	 * 但那個理由**不成立**——admin SPA 打的是自家 `power-shop` namespace（V2Api），
+	 * 從來不經過 `wp/v2/powershop`。而 `CptRegistrar` 自 Phase 2 起就刻意設成 `false`，
+	 * 檔頭與該行旁邊都寫明了理由。**測試過時，產品是對的。**
+	 *
+	 * 🔴 修的是測試、**不是**把產品改成 true。開啟 wp/v2 是實質的權限繞過漏洞：
+	 * `powershop` 的 `capability_type` 是 `post`，任何 author 以上的使用者都能經由
+	 * `/wp-json/wp/v2/powershop/{id}` 直接讀寫賣場（含 `_profit_shop_items` 這類
+	 * 決定實收金額的 meta），完全繞過 V2Api 的 `manage_woocommerce` 閘門。
+	 *
+	 * 因此本測試從「功能斷言」改寫為「安全回歸鎖」——語意反轉而非放寬：
+	 * 任何人把 `show_in_rest` 改回 `true` 都會立刻紅燈。
 	 *
 	 * @test
 	 * @group happy
+	 * @group security
 	 */
-	public function test_cpt_supports_block_editor_via_rest(): void {
+	public function test_cpt_is_hidden_from_wp_v2_rest_for_security(): void {
 		$post_type = \get_post_type_object( CptRegistrar::POST_TYPE );
 
 		$this->assertNotNull( $post_type, 'get_post_type_object 應回傳 powershop 物件' );
-		$this->assertTrue(
+		$this->assertFalse(
 			$post_type->show_in_rest,
-			'powershop CPT show_in_rest 應為 true（spec §1.1 React SPA 需求）'
+			'powershop CPT show_in_rest 必須為 false——開啟會讓 author+ 經 wp/v2/powershop 繞過 V2Api 的 manage_woocommerce 閘門'
 		);
-		$this->assertSame(
-			CptRegistrar::POST_TYPE,
-			$post_type->rest_base,
-			'powershop CPT rest_base 應等於 post_type 字串'
+
+		// 連帶確認：wp/v2 路由確實沒有被註冊出來（不只是旗標為 false）
+		$routes = \rest_get_server()->get_routes();
+		$this->assertArrayNotHasKey(
+			'/wp/v2/' . CptRegistrar::POST_TYPE,
+			$routes,
+			'wp/v2 不應存在 powershop 路由'
 		);
 	}
 

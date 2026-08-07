@@ -291,7 +291,22 @@ final class LoginRateLimiterIpDimensionTest extends TestCase {
 	// ============================================================
 
 	/**
-	 * security：IP 必須以 sha256 雜湊形式存入 transient key，不得有明文 PII
+	 * security：IP 必須以 **keyed hash**（hash_hmac + salt）形式存入 transient key
+	 *
+	 * ⚠️ 本測試的第二段斷言曾經期望**無金鑰**的 `hash('sha256', $ip)`，而產品早在
+	 * Phase 3-D Batch 4（reviewer M-2）就升級為 `hash_hmac('sha256', $ip, salt)`
+	 * 並把 key prefix 一併升到 `_v2_`。**測試過時，產品是對的，而且比測試期望的更安全**
+	 * ——純 sha256 對固定格式的 IPv4 字串（約 2^32 種）可離線窮舉反推，
+	 * 加了 wp_salt 控管的高熵金鑰之後就無法字典攻擊。
+	 *
+	 * 🔴 修的是測試、**不是**把產品改回純 sha256。那會是實質的安全降級。
+	 *
+	 * 三段斷言各守一件事，缺一不可：
+	 *   1. 任何 key 都不得含明文 IP（PII 底線，此段一直是綠的、行為未變）
+	 *   2. 必須含 hash_hmac(ip, salt) —— 演算法與金鑰都對得上才算數
+	 *   3. **不得**含無金鑰的 hash('sha256', $ip) —— 這是新增的降級偵測：
+	 *      若日後有人把 `key_for_ip()` 改回 `hash()`，第 2 段會紅、第 3 段也會紅，
+	 *      兩道一起響，不會靜默通過
 	 *
 	 * @group security
 	 */
@@ -303,7 +318,7 @@ final class LoginRateLimiterIpDimensionTest extends TestCase {
 
 		$all_keys = array_keys( $this->transients->dump() );
 
-		// 任一 key 都不得包含明文 IP
+		// 1. 任一 key 都不得包含明文 IP
 		foreach ( $all_keys as $key ) {
 			$this->assertStringNotContainsString(
 				$ip,
@@ -312,16 +327,27 @@ final class LoginRateLimiterIpDimensionTest extends TestCase {
 			);
 		}
 
-		// 應存在含 sha256(ip) 的 key
-		$expected_hash    = hash( 'sha256', $ip );
+		// 2. 應存在含 hash_hmac(ip, salt) 的 key（與 make_limiter() 注入的
+		//    FixedSaltProvider 同一把 salt，演算法或金鑰任一不符都會紅）
+		$expected_hash     = hash_hmac( 'sha256', $ip, ( new FixedSaltProvider() )->get( 'auth' ) );
 		$matched_with_hash = array_filter(
 			$all_keys,
 			static fn( string $k ): bool => str_contains( $k, $expected_hash )
 		);
 		$this->assertNotEmpty(
 			$matched_with_hash,
-			'應存在帶有 sha256(ip) 的 transient key（PII 雜湊保護）'
+			'應存在帶有 hash_hmac(ip, salt) 的 transient key（PII keyed-hash 保護）'
 		);
+
+		// 3. 降級偵測：不得退回無金鑰的 sha256
+		$unkeyed_hash = hash( 'sha256', $ip );
+		foreach ( $all_keys as $key ) {
+			$this->assertStringNotContainsString(
+				$unkeyed_hash,
+				$key,
+				"IP hash 不得退回無金鑰的 sha256（可離線窮舉反推）；違規 key={$key}"
+			);
+		}
 	}
 
 	// ============================================================
