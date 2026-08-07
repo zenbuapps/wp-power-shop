@@ -32,7 +32,10 @@ Feature: 後台訂單頁的分潤資訊面板
     And 站長已登入後台
 
   Rule: 後置（呈現）- 逐一列出帶有分潤歸屬的訂單品項
-    # @covered-by: NOT-COVERED B9 待補 Playwright；面板是 React 元件，專案目前無前端測試框架
+    # @covered-by: tests/js/orderProfitPanel.test.ts::逐一列出多筆分潤品項，順序與訂單品項一致
+    # @covered-by: tests/js/orderProfitPanel.test.ts::混合訂單只列出有分潤歸屬的品項
+    # @covered-by: tests/js/orderProfitPanel.test.ts::完整分潤 meta 的品項會被轉成面板列
+    # @covered-by: tests/js/orderProfitPanel.test.ts::🔴 rate 為 0 時標記 needs_manual_rate（結帳當下賣場已被刪除）
 
     Example: 面板列出每一個帶有分潤歸屬的品項
       When 站長開啟訂單 8001 的編輯頁
@@ -95,7 +98,9 @@ Feature: 後台訂單頁的分潤資訊面板
       Then 該列應顯示「需人工設定比例」的提示
 
   Rule: 後置（狀態）- 結算狀態以中文呈現且與結算頁一致
-    # @covered-by: NOT-COVERED B9 待補 Playwright；狀態中文對映住在前端 ProfitSettlement/types.ts
+    # @covered-by: tests/js/orderProfitPanel.test.ts::標籤文字符合站長在兩個頁面看到的用詞
+    # @covered-by: tests/js/orderProfitPanel.test.ts::🔴 狀態鍵必須與後端 SettlementRecord 的字面值相同
+    # @covered-by: tests/js/orderProfitPanel.test.ts::🔴 已刪除佔位文字必須與 PHP WpAdminSettlementQuery 的常數逐字相同
 
     Scenario Outline: 四種結算狀態各有對應的顯示文字
       Given 品項 7001 的 _settlement_status 為 "<status>"
@@ -115,7 +120,8 @@ Feature: 後台訂單頁的分潤資訊面板
       Then 該列應顯示撥款時間
 
   Rule: 後置（無資料）- 沒有任何分潤歸屬的訂單完全不顯示面板
-    # @covered-by: NOT-COVERED B9 待補 Playwright；「不顯示面板」是 React 條件渲染
+    # @covered-by: tests/js/orderProfitPanel.test.ts::🔴 完全沒有分潤歸屬的訂單回空陣列（元件據此整個不渲染面板）
+    # @covered-by: tests/js/orderProfitPanel.test.ts::items 不是陣列時回空陣列，不拋錯
 
     Example: 一般訂單不顯示分潤資訊面板
       Given 已存在訂單 8002 其所有品項皆無分潤結算 meta
