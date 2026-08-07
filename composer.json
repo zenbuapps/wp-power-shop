@@ -56,6 +56,10 @@
   },
   "scripts": {
     "lint": "phpcs",
-    "test": "vendor/bin/phpunit --colors=always --testdox"
+    "test": "vendor/bin/phpunit --colors=always --testdox",
+    "test:both-order-storage": "bash bin/test-both-order-storage.sh"
+  },
+  "scripts-descriptions": {
+    "test:both-order-storage": "對 legacy posts 與 HPOS 各跑一輪 integration testsuite。結算相關的雙路徑 SQL 有兩條互斥測試，跑一輪永遠只覆蓋一半（見 TD-88）。"
   }
 }

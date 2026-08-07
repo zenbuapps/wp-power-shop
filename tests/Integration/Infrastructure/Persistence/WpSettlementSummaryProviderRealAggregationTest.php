@@ -471,7 +471,28 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 	/**
 	 * 驗證在 HPOS 開啟（custom orders table）下仍能正確聚合
 	 *
-	 * 若本機環境不支援動態切換，標 skipped；CI matrix 應跑 with-wc-classic / with-wc-hpos。
+	 * 🔴 **本條與下一條互斥，任一次執行只有一條會跑**。要兩條都覆蓋必須跑兩輪：
+	 *
+	 * ```bash
+	 * WPE=./tests/e2e/node_modules/.bin/wp-env
+	 * PHPUNIT="$WPE run tests-cli --env-cwd=wp-content/plugins/power-shop -- vendor/bin/phpunit -c phpunit.xml.dist"
+	 *
+	 * $WPE run tests-cli -- wp option update woocommerce_custom_orders_table_enabled no
+	 * $PHPUNIT --testsuite integration          # 輪 1：legacy posts
+	 * $WPE run tests-cli -- wp option update woocommerce_custom_orders_table_enabled yes
+	 * $PHPUNIT --testsuite integration          # 輪 2：HPOS
+	 * $WPE run tests-cli -- wp option update woocommerce_custom_orders_table_enabled no   # 還原
+	 * ```
+	 *
+	 * ⚠️ 這句話原本寫的是「CI matrix with-wc-hpos 才會跑此 case」——
+	 * 但 `grep -rn "hpos\|HPOS\|custom_orders_table" .github/` **零命中**，
+	 * **那個 CI matrix 從來不存在**。任何人讀到它都會以為「本地 skip 沒關係、CI 有在跑」，
+	 * 於是 HPOS 分支長期處於零驗證狀態（TD-88）而沒有人察覺。
+	 * 訊息本身製造了假安全感，比單純沒測更糟。
+	 *
+	 * 實測（2026-08-07）：測試 DB 內 `wp_wc_orders` / `wp_wc_orders_meta` **本來就存在**，
+	 * 翻一個 option 即可切換，且 HPOS=yes 下完整 integration testsuite 與 legacy 輪
+	 * **結果逐字相同**（同樣的 tests / assertions / failures 數）⇒ HPOS 分支是正確的。
 	 *
 	 * ⚠️ `@group happy` 不可移除：PHPUnit 9 的**方法級 `@group` 會取代類別級**，不是疊加。
 	 * 本檔類別級雖標了 `@group security`（在 phpunit.xml.dist 的 include 清單內），
@@ -488,7 +509,11 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 			$this->markTestSkipped( 'OrderUtil 不存在；需要 WooCommerce 7.1+' );
 		}
 		if ( ! OrderUtil::custom_orders_table_usage_is_enabled() ) {
-			$this->markTestSkipped( 'HPOS 未啟用；CI matrix with-wc-hpos 才會跑此 case' );
+			$this->markTestSkipped(
+				'HPOS 未啟用（本輪跑的是 legacy posts 路徑）。要覆蓋這條請跑 HPOS 輪：'
+				. 'wp option update woocommerce_custom_orders_table_enabled yes → 重跑 → 記得還原為 no。'
+				. '⚠️ 目前沒有任何 CI matrix 會自動跑它，不跑第二輪就是零覆蓋。'
+			);
 		}
 
 		$kpi = $this->provider->summary_for_partner( $this->partner_a_id, new FilterCriteria() );
@@ -502,6 +527,8 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 	/**
 	 * 驗證在 legacy（HPOS 關閉、posts-based）下仍能正確聚合
 	 *
+	 * 🔴 與上一條互斥。兩輪跑法與「為何非跑兩輪不可」見上一條的 docblock。
+	 *
 	 * ⚠️ `@group happy` 不可移除，理由同上一條方法的 docblock。
 	 *
 	 * @test
@@ -510,7 +537,10 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 	 */
 	public function test_summary_works_under_legacy_post_orders(): void {
 		if ( class_exists( OrderUtil::class ) && OrderUtil::custom_orders_table_usage_is_enabled() ) {
-			$this->markTestSkipped( 'HPOS 已啟用；本 case 屬於 legacy posts-based 路徑' );
+			$this->markTestSkipped(
+				'HPOS 已啟用（本輪跑的是 HPOS 路徑）。本 case 屬於 legacy posts-based，'
+				. '請在 woocommerce_custom_orders_table_enabled=no 的那一輪覆蓋。'
+			);
 		}
 
 		$kpi = $this->provider->summary_for_partner( $this->partner_a_id, new FilterCriteria() );
