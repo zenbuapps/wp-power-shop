@@ -4,13 +4,8 @@ import { useCallback, useMemo, useState } from 'react'
 
 import { TProductRecord } from '@/components/product/types'
 
-/**
- * 單次批次加入上限
- *
- * 依據：WC REST `per_page` 上限為 100，商品顯示資訊補齊查詢一次打得完；
- * 且 ItemsEditor 每次按鍵重建整個 items 陣列，列數過多會使價格欄輸入明顯延遲。
- */
-export const MAX_BATCH_SIZE = 100
+/** 單次批次加入上限（單一真相在 `./utils`，此處僅 re-export 給既有 import 用） */
+export { MAX_BATCH_SIZE } from './utils'
 
 type TUseProductPickerModalArgs = {
 	existingProductIds: number[]

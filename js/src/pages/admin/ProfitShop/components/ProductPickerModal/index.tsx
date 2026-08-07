@@ -1,6 +1,5 @@
 import { Alert, ConfigProvider, Tag, type TableProps } from 'antd'
 import { SimpleModal } from 'antd-toolkit'
-import { isVariation } from 'antd-toolkit/wp'
 import { memo, useMemo, type ReactNode } from 'react'
 
 import {
@@ -13,6 +12,11 @@ import { TProductRecord, TProductVariation } from '@/components/product/types'
 import { useProductsOptions } from '@/hooks'
 import {
 	MAX_BATCH_SIZE,
+	dropSelection,
+	mergeSelection,
+	resolveCheckboxState,
+} from './utils'
+import {
 	type TProductPickerModalState,
 } from '@/pages/admin/ProfitShop/components/ProductPickerModal/hooks'
 
@@ -97,39 +101,23 @@ const ProductPickerBodyComponent = ({
 	 * 換頁後 `dataSource` 就沒有前一頁的 record 了，若靠 `onChange` 的 `selectedRows`
 	 * 回推會直接掉資料。改用 `onSelect` / `onSelectAll` 拿到的增減量自行累積。
 	 */
-	const addRecords = (records: TPickerRecord[]) => {
-		setSelectedRecords((prev) => {
-			const known = new Set(prev.map((record) => record.id))
-			const additions = records.filter(
-				(record) => !known.has(record.id)
-			) as TProductRecord[]
-			const room = Math.max(MAX_BATCH_SIZE - prev.length, 0)
-			return [...prev, ...additions.slice(0, room)]
-		})
-	}
+	const addRecords = (records: TPickerRecord[]) =>
+		setSelectedRecords((prev) => mergeSelection(prev, records as TProductRecord[]))
 
-	const removeRecords = (records: TPickerRecord[]) => {
-		const removing = new Set(records.map((record) => record.id))
-		setSelectedRecords((prev) =>
-			prev.filter((record) => !removing.has(record.id))
-		)
-	}
+	const removeRecords = (records: TPickerRecord[]) =>
+		setSelectedRecords((prev) => dropSelection(prev, records as TProductRecord[]))
 
 	const rowSelection: TableProps<TProductRecord>['rowSelection'] = {
 		selectedRowKeys: selectedKeys,
 		getCheckboxProps: (record) => {
-			const isVariationRow = isVariation(record?.type as string)
-
-			// R-2：TProductRecord.id 是 string、product_id 是 number，一律轉 number 再比對，
-			// 否則 Set.has 永遠 false → 已加入的商品不會被禁選 → 可重複加入
-			const productId = Number(record?.id)
-			const alreadyInShop =
-				Number.isFinite(productId) && existingIds.has(productId)
-			const blockedByLimit = isAtLimit && !selectedKeySet.has(record?.id)
+			const { disabled, reason } = resolveCheckboxState(record, {
+				existingIds,
+				selectedKeys: selectedKeySet,
+			})
 
 			return {
-				disabled: isVariationRow || alreadyInShop || blockedByLimit,
-				className: isVariationRow ? 'tw-hidden' : '',
+				disabled,
+				className: 'variation' === reason ? 'tw-hidden' : '',
 			}
 		},
 		onSelect: (record, selected) =>

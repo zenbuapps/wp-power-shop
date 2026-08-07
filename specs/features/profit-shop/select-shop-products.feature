@@ -40,7 +40,11 @@ Feature: 透過商品選擇 Modal 加入賣場商品
       And Modal 內不應出現「新增商品」按鈕
 
   Rule: 前置（勾選）- 已在賣場中的商品不可重複勾選
-    # @covered-by: NOT-COVERED getCheckboxProps 三重 disabled，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/productPickerSelection.test.ts::已在賣場中的商品不可重複勾選
+    # @covered-by: tests/js/productPickerSelection.test.ts::🔴 id 是字串也要能與 number 的 existingIds 比對上（R-2）
+    # @covered-by: tests/js/productPickerSelection.test.ts::達單次批次上限後，未選的列被停用
+    # @covered-by: tests/js/productPickerSelection.test.ts::🔴 達上限時，**已選**的列仍必須可以取消勾選
+    # @covered-by: tests/js/productPickerSelection.test.ts::停用條件的優先序：變體 > 已在賣場 > 批次上限
 
     Example: 已加入賣場的商品在 Modal 內應標記且禁選
       When 管理者 "Admin" 點擊「選擇商品」
@@ -53,7 +57,8 @@ Feature: 透過商品選擇 Modal 加入賣場商品
       Then Modal 的待加入數量應為 1
 
   Rule: 前置（勾選）- 變體列不可被勾選
-    # @covered-by: NOT-COVERED 同上（isVariation 判斷），B9 待補
+    # @covered-by: tests/js/productPickerSelection.test.ts::變體列不可被勾選
+    # @covered-by: tests/js/productPickerSelection.test.ts::一般商品可勾選
 
     Example: 可變商品的變體子列不提供勾選
       Given 商品 103 具有變體 1031 與 1032
@@ -63,7 +68,10 @@ Feature: 透過商品選擇 Modal 加入賣場商品
       And 變體 1032 的勾選框應為停用狀態
 
   Rule: 中置（跨頁）- 勾選狀態必須跨分頁與篩選條件變更保留
-    # @covered-by: NOT-COVERED 以 record 物件累積的跨頁勾選，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/productPickerSelection.test.ts::🔴 換頁後前一頁的選取必須保留
+    # @covered-by: tests/js/productPickerSelection.test.ts::新勾選的列被併進既有選取集合
+    # @covered-by: tests/js/productPickerSelection.test.ts::重複勾選同一筆不會累積兩份
+    # @covered-by: tests/js/productPickerSelection.test.ts::取消勾選只移除指定的列
 
     Example: 切換分頁後既有勾選不應遺失
       When 管理者 "Admin" 點擊「選擇商品」
@@ -81,7 +89,8 @@ Feature: 透過商品選擇 Modal 加入賣場商品
       Then Modal 的待加入數量應為 1
 
   Rule: 中置（隔離）- Modal 的勾選狀態不得與商品列表頁的批次選取互相污染
-    # @covered-by: NOT-COVERED Modal 自帶 useState 不接 Jotai atom（TD-8），屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/productPickerSelection.test.ts::不 import 商品列表頁的全域選取 atom
+    # @covered-by: tests/js/productPickerSelection.test.ts::選取狀態走元件區域 useState
 
     Example: Modal 勾選不應影響商品列表頁的已選商品
       Given 管理者 "Admin" 在商品列表頁已選取商品 104
