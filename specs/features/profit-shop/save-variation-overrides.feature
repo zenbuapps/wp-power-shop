@@ -180,7 +180,10 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 展開的仍應是商品 103
 
   Rule: 前端（失效）- 賣場保存了已不存在的變體時必須顯示且可移除
-    # @covered-by: NOT-COVERED VariationOverrideEditor 的孤兒鍵顯示與移除鈕，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/variationOverrideRows.test.ts::🔴 賣場存了但 WC 已無此變體 → 仍列出，且 record 為 undefined
+    # @covered-by: tests/js/variationOverrideRows.test.ts::孤兒排在實際變體之後
+    # @covered-by: tests/js/variationOverrideRows.test.ts::全部都是孤兒時照樣列出（商品的變體被整批刪光）
+    # @covered-by: tests/js/variationOverrideRows.test.ts::已存在於 WC 的變體不會被重複列出（即使賣場也存了它）
 
     # 不可靜默隱藏——那會讓一筆仍在資料中、可能影響取價的設定從畫面上消失。
 
@@ -191,7 +194,11 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       And 變體 1099 應提供移除操作
 
   Rule: 前端（可變商品）- 商品層的三個欄位改到變體層設定，但殘留值必須顯示
-    # @covered-by: NOT-COVERED ItemsEditor 對可變商品的殘留值顯示與一鍵清除，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/variationOverrideRows.test.ts::三欄皆 null 時沒有殘留
+    # @covered-by: tests/js/variationOverrideRows.test.ts::值為 "0" 也算殘留（0 元覆寫是合法設定：免費贈品）
+    # @covered-by: tests/js/variationOverrideRows.test.ts::🔴 值為空字串時仍算殘留——判斷必須是 `null !==`，不可用真值判斷
+    # @covered-by: tests/js/variationOverrideRows.test.ts::列出所有有值的欄位
+    # @covered-by: tests/js/variationOverrideRows.test.ts::三欄皆 null 時回空字串
 
     # ⚠️ 「不能只是把輸入框藏起來」：
     #    商品層的覆寫價與灌水購買人數即使沒有輸入框**仍然會生效**

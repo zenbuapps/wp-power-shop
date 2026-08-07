@@ -103,13 +103,13 @@ const VARIATION_LEVEL_HINT = (
 )
 
 /** 商品層價格覆寫是否還留著值（三欄任一非 null） */
-const hasProductLevelOverride = (override: TPriceOverride): boolean =>
+export const hasProductLevelOverride = (override: TPriceOverride): boolean =>
 	null !== override.regular_price ||
 	null !== override.sale_price ||
 	null !== override.signup_fee
 
 /** 把商品層殘留的覆寫值描述成一行人話，例如「原價 300、特價 240」 */
-const describeOverride = (override: TPriceOverride): string => {
+export const describeOverride = (override: TPriceOverride): string => {
 	const parts: string[] = []
 	if (null !== override.regular_price) parts.push(`原價 ${override.regular_price}`)
 	if (null !== override.sale_price) parts.push(`特價 ${override.sale_price}`)

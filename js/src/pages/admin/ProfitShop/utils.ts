@@ -238,3 +238,46 @@ export const resolveShopItemDisplay = <TProduct>(
 		product: undefined,
 	}
 }
+
+/**
+ * 變體展開列的單列
+ *
+ * `record` 為 `undefined` 代表**孤兒鍵**——賣場存了這個 variation_id 的覆寫，
+ * 但 WC 已經沒有這個變體了（站長在商品編輯頁刪掉了它）。
+ */
+export type TVariationRowLike<TRecord> = {
+	key: string
+	variationId: number
+	record?: TRecord
+}
+
+/**
+ * 合併「WC 實際存在的變體」與「賣場存了但已不存在的孤兒鍵」
+ *
+ * 🔴 **孤兒鍵必須顯示出來，不可靜默隱藏。**
+ * 它送到後端會被 `ItemValidator` 以 `InvalidVariation` 打回 400；
+ * 若在這裡隱藏，使用者只會看到「儲存失敗」，卻永遠找不到、也清不掉源頭——
+ * 那個賣場會從此存不了檔，而畫面上完全看不出原因。
+ *
+ * 孤兒排在實際變體之後：正常情況下它們是少數，排前面會把常用的列擠下去。
+ *
+ * @param variations WC 回傳的變體清單
+ * @param value      賣場已存的變體覆寫（key 是 variation_id 字串）
+ */
+export const mergeVariationRows = <TRecord extends { id: number | string }>(
+	variations: TRecord[],
+	value: Record<string, unknown> | undefined | null
+): TVariationRowLike<TRecord>[] => {
+	const fromWc = variations.map((record) => ({
+		key: String(record.id),
+		variationId: Number(record.id),
+		record,
+	}))
+
+	const known = new Set(fromWc.map((row) => row.key))
+	const orphans = Object.keys(value ?? {})
+		.filter((key) => !known.has(key))
+		.map((key) => ({ key, variationId: Number(key) }))
+
+	return [...fromWc, ...orphans]
+}

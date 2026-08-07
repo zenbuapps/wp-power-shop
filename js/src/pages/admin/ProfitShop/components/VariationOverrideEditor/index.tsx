@@ -29,6 +29,7 @@ import {
 	toInputValue,
 	toPriceString,
 } from '@/pages/admin/ProfitShop/utils'
+import { mergeVariationRows } from '@/pages/admin/ProfitShop/utils'
 
 type TVariationOverrideEditorProps = {
 	productId: number
@@ -144,20 +145,10 @@ const VariationOverrideEditorComponent = ({
 	 * `InvalidVariation` 打回 400，若在這裡靜默隱藏，使用者只會看到
 	 * 「儲存失敗」卻永遠找不到、也清不掉源頭。
 	 */
-	const rows = useMemo<TVariationRow[]>(() => {
-		const fromWc: TVariationRow[] = variations.map((record) => ({
-			key: String(record.id),
-			variationId: Number(record.id),
-			record,
-		}))
-
-		const known = new Set(fromWc.map((row) => row.key))
-		const orphans: TVariationRow[] = Object.keys(value ?? {})
-			.filter((key) => !known.has(key))
-			.map((key) => ({ key, variationId: Number(key) }))
-
-		return [...fromWc, ...orphans]
-	}, [variations, value])
+	const rows = useMemo<TVariationRow[]>(
+		() => mergeVariationRows(variations, value),
+		[variations, value]
+	)
 
 	/**
 	 * 是否被 WC REST 的 `per_page` 硬上限截斷
