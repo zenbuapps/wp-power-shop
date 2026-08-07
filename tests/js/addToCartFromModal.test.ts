@@ -312,3 +312,58 @@ describe('Rule: 降級（任意屬性）- 選中含任意屬性的變體必須�
 		expect(headers['Content-Type']).toContain('application/x-www-form-urlencoded')
 	})
 })
+
+describe('Rule: 已知落差（訊息）- 業務失敗的原因必須離開賣場頁才看得到', () => {
+	/**
+	 * 🔒 現況鎖（characterization test）：**這條測的是落差確實存在**
+	 *
+	 * `WC_AJAX::add_to_cart()` 的失敗分支只回 `{error:true, product_url}`，
+	 * 真正的原因（庫存不足、缺必填屬性…）寫在 **session notice** 裡，
+	 * 而 `wp_send_json()` 之前只有 `woocommerce_cart_redirect_after_error` 一個 filter，
+	 * 那只能改 URL、無法夾帶訊息。
+	 *
+	 * ⇒ 前端能做的只有依官方契約**導向 `product_url`**，顧客必須離開賣場頁
+	 * 才看得到原因（TD-41）。
+	 *
+	 * 🔴 這條同時鎖住一條安全紀律：**失敗時絕不可重送原生表單**。
+	 * `wc_add_notice()` 沒有去重，重送會讓同一則錯誤顯示兩次；而在邊界情況
+	 * （第一次其實已經成功）更會變成**重複加購**。
+	 *
+	 * ⚠️ 轉紅代表有人補上了「不換頁也能顯示原因」——那需要自建一條讀取
+	 * session notice 的通道（等於復活刻意刪除的自訂購物車 API 的一小塊）。
+	 * 若真的做了，請同步更新 TD-41 與該 Rule 敘述。
+	 */
+	it('業務失敗時導向 product_url，而不是就地顯示原因', async () => {
+		const productUrl = '/product/some-product/'
+		const calls = setupSimpleShop(() =>
+			Promise.resolve(jsonResponse({ error: true, product_url: productUrl }))
+		)
+
+		// 攔截導向（jsdom 不實作真實導航）
+		const navigated: string[] = []
+		Object.defineProperty(window, 'location', {
+			configurable: true,
+			value: {
+				...window.location,
+				assign: (u: string) => navigated.push(u),
+				replace: (u: string) => navigated.push(u),
+				set href(u: string) {
+					navigated.push(u)
+				},
+				get href() {
+					return 'http://localhost/'
+				},
+			},
+		})
+
+		submitAddToCart()
+		await flush()
+		await flush()
+
+		// 只送出一次——失敗不得自動重送（wc_add_notice 沒有去重）
+		expect(calls.length).toBe(1)
+
+		// 現況：導向商品頁，而不是在 Modal 內顯示原因
+		expect(navigated).toContain(productUrl)
+	})
+})

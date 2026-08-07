@@ -186,7 +186,7 @@ Feature: 從商品 Modal 非同步加入購物車
       And 錯誤區塊應提供「查看購物車」的連結
 
   Rule: 已知落差（訊息）- 業務失敗的原因必須離開賣場頁才看得到
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-41「業務失敗原因須離開賣場頁才看得到」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/js/addToCartFromModal.test.ts::業務失敗時導向 product_url，而不是就地顯示原因
 
     # ⚠️ specs/tech-debt.md TD-41：非同步端點的失敗分支只回「失敗」與商品頁網址，
     #   真正的原因寫在 session 訊息裡，回應之前沒有任何可夾帶訊息的擴充點。
