@@ -16,17 +16,21 @@
  *   - 列表篩選是 input#search
  *
  * 🔴 **尚未納入的三條**（操作欄依 mode / SlugInput 即時衝突 / 夥伴列表篩選）
- * 都依賴「先用 REST 建資料、再從 SPA 列表看到它」。診斷到一半的結果：
+ * 都依賴「先用 REST 建資料、再從 SPA 列表看到它」。已完成的診斷（實測）：
  *
- *   - `POST /profit-partners` 回的是 `data.id`，**不是** `data.term_id`
- *     （回應實測：`{"code":"success","data":{"id":55,"name":…}}`）。
- *     取錯欄位會拿到 0，接著 `POST /profit-shops` 回
- *     `404 {"code":"not_found","message":"Partner term 0 不存在"}`——
- *     但那是**賣場建立失敗**，不是列表壞掉。
- *   - `GET /profit-shops` 本身正常（實測回 6 筆既有資料）。
+ *   1. `POST /profit-partners` 回的是 **`data.id`**，不是 `data.term_id`
+ *      （實測：`{"code":"success","data":{"id":59,…}}`）。取錯欄位會拿到 0，
+ *      接著建賣場回 `404 Partner term 0 不存在`。
+ *   2. 用正確欄位名之後，`POST /profit-shops` 回 **201 並帶 id**。
+ *   3. `GET /profit-shops` 回 `{"code":"success","data":[…]}`（**陣列直接在 data**，
+ *      只有一層），實測含 8 筆、包含剛建立的那一筆。
+ *      ⚠️ SPA 端寫 `data?.data?.data` 是對的——Refine 的 useCustom 會再包一層。
  *
- * 也就是說「SPA 列表看不到新建賣場」這個現象**還沒有被證實**，很可能只是
- * 建立階段就失敗了。在完成診斷之前不寫那三條測試——寫了不是紅燈就是假綠燈。
+ * ⇒ **API 這一側完全正常**。SPA 列表卻仍顯示「尚未建立任何分潤賣場」
+ * （實測 tbody 只有 No data 那一列），最可能是 e2e 的 WP 登入 session 沒有帶進
+ * SPA 的查詢（那三條需要資料，本檔通過的兩條不需要，剛好都能跑）。
+ *
+ * 這一段尚未查完，因此不寫那三條——寫了不是紅燈就是假綠燈。
  * 對應的 Rule 在 .feature 內仍如實標為 NOT-COVERED。
  */
 import { test, expect, type Page } from '@playwright/test'
