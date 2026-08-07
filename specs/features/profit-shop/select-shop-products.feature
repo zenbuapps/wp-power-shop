@@ -21,7 +21,8 @@ Feature: 透過商品選擇 Modal 加入賣場商品
     And 管理者 "Admin" 正在編輯分潤賣場 "夏季賣場"
 
   Rule: 前置（開啟）- Modal 必須提供與商品列表頁相同的篩選能力
-    # @covered-by: NOT-COVERED ProductPickerModal 內嵌 ProductTableBody，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 複用商品列表頁的 ProductTableBody，而非自己刻一份篩選器
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 useTable 明確關閉 syncWithLocation
 
     Example: 開啟商品選擇 Modal 時應呈現完整篩選器與分頁列表
       When 管理者 "Admin" 點擊「選擇商品」
@@ -103,7 +104,9 @@ Feature: 透過商品選擇 Modal 加入賣場商品
         | 104 |
 
   Rule: 後置（取消）- 取消 Modal 不得變更賣場商品列表
-    # @covered-by: NOT-COVERED destroyOnHidden + 關閉時 reset，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 取消時走 handleClose（會 reset 選取），不是 onConfirm
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 onCancel 必須放在 ...modalProps 之後
+    # @covered-by: tests/js/componentWiring.test.ts::關閉時不掛載 children（destroyOnHidden）
 
     Example: 勾選後取消 Modal 賣場商品列表應維持原狀
       When 管理者 "Admin" 點擊「選擇商品」
@@ -141,7 +144,7 @@ Feature: 透過商品選擇 Modal 加入賣場商品
       And 賣場商品 101 的 inflated_count 應為 30
 
   Rule: 後置（加入）- 未勾選任何商品時確認按鈕應為停用狀態
-    # @covered-by: NOT-COVERED 確認按鈕 disabled 狀態，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 未勾選任何商品時確認按鈕停用
 
     Example: 未勾選商品時不可送出
       When 管理者 "Admin" 點擊「選擇商品」

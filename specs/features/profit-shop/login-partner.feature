@@ -255,7 +255,8 @@ Feature: 分潤夥伴登入自助報表
       And 畫面應導向登入頁
 
   Rule: 前置（表單）- 登入頁必須從網址帶入 slug 且不可由使用者更改
-    # @covered-by: NOT-COVERED Login 頁從網址帶入 slug 並 disabled，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 slug 從網址帶入且使用者不可更改
+    # @covered-by: tests/js/componentWiring.test.ts::⚠️ SLUG 取不到時欄位可編輯（刻意的降級，非疏漏）
 
     Example: 登入表單的 slug 由網址帶入並鎖定
       When 訪客開啟 "/profit-report/partner-a/"

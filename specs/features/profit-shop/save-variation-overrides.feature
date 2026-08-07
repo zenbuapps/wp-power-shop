@@ -144,7 +144,9 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
         | 完全未設定   | 完全未設定   | 商品原價     | 兩層皆無覆寫                 |
 
   Rule: 前端（展開）- 可變商品在商品名稱欄提供展開鈕
-    # @covered-by: NOT-COVERED ItemsEditor 的 showExpandColumn:false + 自刻展開鈕，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 關掉 antd 預設的最左展開欄（showExpandColumn: false）
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 展開狀態必須受控（expandedRowKeys）
+    # @covered-by: tests/js/componentWiring.test.ts::只有可變商品可展開（rowExpandable）
 
     Example: 展開鈕位於商品圖片左側
       When 管理者 "Admin" 檢視賣場商品表格
