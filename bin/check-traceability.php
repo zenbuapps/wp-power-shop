@@ -211,9 +211,20 @@ $manual        = [];
 $not_covered   = [];
 $per_feature   = [];
 
+$parser_broken = [];
+
 foreach ( $features as $feature_path ) {
 	$rel   = str_replace( '\\', '/', substr( $feature_path, strlen( realpath( REPO_ROOT ) ) + 1 ) );
 	$rules = parse_feature( $feature_path );
+
+	// 🔴 解析出 0 條 Rule 是 **parser 壞掉的指紋**，不是「這個檔案很乾淨」。
+	// 少了這道守門，`Rule:` 的比對樣式一旦被改壞（或 Gherkin 排版變動），
+	// 全部檔案都會回報「0 條 Rule、0 條未標註」→ 統計顯示 100% 通過、exit 0，
+	// 而實際上**一條都沒檢查**。這正是本專案已吃虧四次的那種失效模式：
+	// 閘門看起來是綠的，只是它根本沒在看。
+	if ( [] === $rules ) {
+		$parser_broken[] = $rel;
+	}
 
 	$noted = 0;
 	foreach ( $rules as $rule ) {
@@ -269,9 +280,20 @@ if ( ! $summary_only ) {
 	}
 }
 
+if ( [] !== $parser_broken ) {
+	fwrite( STDERR, "\n🔴 下列 feature 檔解析出 0 條 Rule——這是 **parser 壞掉的指紋**，不是檔案很乾淨：\n" );
+	foreach ( $parser_broken as $rel ) {
+		fwrite( STDERR, "  {$rel}\n" );
+	}
+	fwrite( STDERR, "  （若該檔真的沒有 Rule，請先確認 Gherkin 排版；本檢查刻意不允許靜默通過）\n" );
+}
+
 printf( "\n%s\n", str_repeat( '═', 78 ) );
 printf( "  Feature 檔：%d ｜ Rule 總數：%d ｜ 已標註：%d ｜ 未標註：%d\n", count( $features ), $total_rules, $total_noted, count( $uncovered ) );
 printf( "  無效註記：%d ｜ MANUAL：%d ｜ NOT-COVERED：%d\n", count( $invalid ), count( $manual ), count( $not_covered ) );
+if ( [] !== $parser_broken ) {
+	printf( "  🔴 解析出 0 條 Rule 的檔案：%d\n", count( $parser_broken ) );
+}
 printf( "%s\n", str_repeat( '═', 78 ) );
 
 if ( $generate ) {
@@ -322,6 +344,10 @@ if ( $generate ) {
 	echo "\n已產生 specs/traceability.md\n";
 }
 
+// parser 壞掉時一律失敗——這比「有無效註記」更嚴重，因為它代表整份檢查都沒在看
+if ( [] !== $parser_broken ) {
+	exit( 1 );
+}
 if ( [] !== $invalid ) {
 	exit( 1 );
 }
