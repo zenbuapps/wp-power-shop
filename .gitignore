@@ -36,3 +36,15 @@ release/*
 # PHPUnit
 .phpunit.result.cache
 .phpunit.cache/
+
+# Claude Code 的暫存工作目錄
+#
+# 這裡放的是開發過程的臨時產物，其中 wp-power-shop-source 是另一個 git
+# repository 的 clone——一旦被 `git add` 收進來會變成 mode 160000 的 gitlink
+# （broken submodule），clone 本 repo 的人拿不到內容也不知道從哪取得。
+# 2026-08-07 曾因 `git add .claude/` 誤收一次，須 `git rm --cached` 才移除。
+.claude/tmp/
+
+# 前台頁面的 HTML dump（驗證渲染結果時抓下來的快照，非產品程式碼）
+ps.html
+*.dump.html
