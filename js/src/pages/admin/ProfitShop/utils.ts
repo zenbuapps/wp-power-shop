@@ -181,3 +181,60 @@ export const mergeScheduleSettings = (
 
 	return settings
 }
+
+/**
+ * 賣場商品列的顯示狀態
+ *
+ * 五個分支各自對應不同的畫面，**不可混為一談**：
+ *   ok      補齊查詢查到了 → 名稱 / SKU / 類型 / 狀態 / 價格 / 庫存全顯示
+ *   partial 剛從 Modal 加入、補齊還沒回來 → 先用 Modal 帶的名稱 / SKU 撐著
+ *   pending 補齊查詢進行中 → #id + Skeleton
+ *   missing 查詢**成功但查無此 id** → 商品已失效，標 Tag、移除鈕仍可用
+ *   failed  查詢**失敗** → 只降級顯示 #id，不擋編輯與儲存
+ */
+export type TShopItemDisplayState =
+	| 'ok'
+	| 'partial'
+	| 'pending'
+	| 'missing'
+	| 'failed'
+
+/** `useShopItemProducts` 的回傳中，推導顯示狀態需要用到的部分 */
+export type TEnrichResult<TProduct> = {
+	map: Map<number, TProduct>
+	isLoading: boolean
+	isError: boolean
+}
+
+/**
+ * 逐列推導顯示狀態
+ *
+ * 刻意**只在渲染時推導、不寫回 form value**——寫回會觸發 `onChange` 造成迴圈，
+ * 且 `_` 前綴欄位本來就不屬於表單狀態機。
+ *
+ * 🔴 `missing` 與 `failed` 必須分開：前者是「這個商品真的不存在了」（站長該把它
+ * 移除），後者是「我們這次沒查到」（商品可能好好的，只是網路或權限出問題）。
+ * 混為一談會讓站長在一次查詢失敗後，把整批仍然有效的商品從賣場裡刪掉。
+ */
+export const resolveShopItemDisplay = <TProduct>(
+	row: { product_id: number; _name?: string; _sku?: string },
+	enrich: TEnrichResult<TProduct>
+): { state: TShopItemDisplayState; product: TProduct | undefined } => {
+	const found = enrich.map.get(row.product_id)
+	if (found) return { state: 'ok', product: found }
+
+	// 剛從 Modal 加入、補齊查詢還沒回來時，先用 Modal 已帶的名稱 / SKU 撐著。
+	// 此時沒有完整 record，類型 / 狀態 / 價格 / 庫存欄仍顯示 —
+	if (row._name || row._sku) {
+		return { state: 'partial', product: undefined }
+	}
+	if (enrich.isLoading) {
+		return { state: 'pending', product: undefined }
+	}
+
+	// 查詢失敗 → 只降級顯示 #id；查詢成功但查無此 id → 商品已失效。
+	return {
+		state: enrich.isError ? 'failed' : 'missing',
+		product: undefined,
+	}
+}

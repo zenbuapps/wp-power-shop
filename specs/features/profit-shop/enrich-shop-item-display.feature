@@ -41,7 +41,9 @@ Feature: 補齊賣場商品的顯示資訊
         | 101,102 |
 
   Rule: 後置（回應）- 補齊後每筆賣場商品應呈現名稱與 SKU
-    # @covered-by: NOT-COVERED ItemsEditor 商品欄的 _enrichState 四分支顯示，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/shopItemDisplayState.test.ts::補齊查到了 → ok，並帶出完整商品
+    # @covered-by: tests/js/shopItemDisplayState.test.ts::剛從 Modal 加入、補齊還沒回來 → partial（先用 Modal 帶的名稱撐著）
+    # @covered-by: tests/js/shopItemDisplayState.test.ts::查到了就是 ok，即使還有其他查詢在載入中
 
     Example: 補齊成功後商品欄應顯示名稱與 SKU
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為
@@ -53,7 +55,8 @@ Feature: 補齊賣場商品的顯示資訊
         | 101        | MacBook Pro | MBP-2024 |
 
   Rule: 後置（失效）- 商品已刪除時必須標記失效且仍可移除
-    # @covered-by: NOT-COVERED 「商品已失效」Tag 與移除鈕，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/shopItemDisplayState.test.ts::查詢成功但查無此 id → missing（商品已失效）
+    # @covered-by: tests/js/shopItemDisplayState.test.ts::🔴 isLoading 勝過 missing——載入中不得先標成「已失效」
 
     Example: 商品已刪除時應標記失效並保留移除操作
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為
@@ -67,7 +70,9 @@ Feature: 補齊賣場商品的顯示資訊
       And 賣場商品 101 應正常顯示名稱
 
   Rule: 後置（降級）- 補齊查詢失敗不得阻擋賣場編輯
-    # @covered-by: NOT-COVERED 補齊查詢失敗不阻擋儲存，屬 React 元件行為（B9 待補）；後端儲存路徑本身不依賴補齊查詢，見 ProfitShopItemsRoundTripTest 全檔
+    # @covered-by: tests/js/shopItemDisplayState.test.ts::🔴 查詢失敗 → failed，不得與 missing 混為一談
+    # @covered-by: tests/js/shopItemDisplayState.test.ts::isError 與 isLoading 同時為真時，仍以 pending 為準（查詢尚未結束）
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_put_nested_items_round_trips_through_get
 
     Example: 補齊查詢失敗時仍應可編輯與儲存賣場
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為

@@ -66,6 +66,7 @@ import {
 	emptyPriceOverride,
 	emptyVariationOverride,
 	isSaleOverRegular,
+	resolveShopItemDisplay,
 	toInputValue,
 	toPriceString,
 } from '@/pages/admin/ProfitShop/utils'
@@ -338,37 +339,10 @@ const ItemsEditorComponent = ({
 	const maxPage = Math.max(1, Math.ceil(items.length / pageSize))
 	const currentPage = Math.min(page, maxPage)
 
-	/**
-	 * 逐列推導顯示狀態
-	 *
-	 * 刻意**只在渲染時推導、不寫回 form value** —— 寫回會觸發 `onChange` 造成迴圈，
-	 * 且 `_` 前綴欄位本來就不屬於表單狀態機。
-	 *
-	 * Phase 4 剛從 Modal 加入的列已自帶 `_name` / `_sku`（`_enrichState: 'ok'`），
-	 * 優先採用，避免剛加入的列又閃一次 Skeleton。
-	 */
+	/** 逐列推導顯示狀態（實作見 `../utils`，兩者的分支語意見該處 docblock） */
 	const resolveDisplay = useCallback(
-		(row: TShopItemRow) => {
-			const found = enrich.map.get(row.product_id)
-			if (found) return { state: 'ok' as const, product: found }
-
-			// 剛從 Modal 加入、補齊查詢還沒回來時，先用 Modal 已帶的名稱 / SKU 撐著。
-			// 此時沒有完整 record，類型 / 狀態 / 價格 / 庫存欄仍顯示 —
-			if (row._name || row._sku) {
-				return { state: 'partial' as const, product: undefined }
-			}
-			if (enrich.isLoading) {
-				return { state: 'pending' as const, product: undefined }
-			}
-
-			// 查詢失敗 → 只降級顯示 #id；查詢成功但查無此 id → 商品已失效。
-			// 兩者顯示不同，不可混為一談
-			return {
-				state: enrich.isError ? ('failed' as const) : ('missing' as const),
-				product: undefined,
-			}
-		},
-		[enrich.map, enrich.isLoading, enrich.isError]
+		(row: TShopItemRow) => resolveShopItemDisplay(row, enrich),
+		[enrich]
 	)
 
 	/**
