@@ -18,6 +18,10 @@ import {
 	toPartnerFormFieldName,
 } from '@/pages/admin/ProfitPartner/utils'
 import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
+import {
+	shouldFillForm,
+	shouldSendPassword,
+} from '@/pages/admin/ProfitShop/formGuards'
 
 const EditComponent = () => {
 	const { id } = useParsed()
@@ -43,7 +47,7 @@ const EditComponent = () => {
 
 	useEffect(() => {
 		if (!record) return
-		if (filledIdRef.current === record.id) return
+		if (!shouldFillForm(record.id, filledIdRef.current)) return
 		filledIdRef.current = record.id
 		initialPasswordRef.current = record.password
 
@@ -87,8 +91,10 @@ const EditComponent = () => {
 			 * 空字串一律不送（= 留空表示不變更）；與載入時的原值相同也不送——
 			 * 送了就會 bump password_changed_at，把該夥伴踢出登入。
 			 */
-			const passwordChanged =
-				'' !== nextPassword && nextPassword !== initialPasswordRef.current
+			const passwordChanged = shouldSendPassword(
+				nextPassword,
+				initialPasswordRef.current
+			)
 
 			const payload: TProfitPartnerInput = {
 				name: values.name,

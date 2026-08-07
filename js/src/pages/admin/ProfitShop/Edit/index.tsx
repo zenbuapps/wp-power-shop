@@ -26,6 +26,7 @@ import {
 	type TScheduleFormValues,
 } from '@/pages/admin/ProfitShop/utils'
 import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
+import { shouldFillForm } from '@/pages/admin/ProfitShop/formGuards'
 
 /**
  * 表單型別：items 為 ItemsEditor 受控的可編輯陣列
@@ -74,7 +75,7 @@ const EditComponent = () => {
 	// 取得資料後填入表單
 	useEffect(() => {
 		if (!record) return
-		if (filledIdRef.current === record.id) return
+		if (!shouldFillForm(record.id, filledIdRef.current)) return
 		filledIdRef.current = record.id
 
 		form.setFieldsValue({

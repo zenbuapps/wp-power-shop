@@ -98,7 +98,11 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 表單應可正常送出
 
   Rule: 路徑（更新）- 只在密碼真的改動時才送出
-    # @covered-by: NOT-COVERED Edit 頁的 initialPasswordRef 比對住在 React 元件，專案無前端測試框架（B9 待補）
+    # @covered-by: tests/js/editFormGuards.test.ts::🔴 密碼沒改時不得送出
+    # @covered-by: tests/js/editFormGuards.test.ts::密碼真的改了才送
+    # @covered-by: tests/js/editFormGuards.test.ts::🔴 清空欄位視為「不變更」，連送都不送
+    # @covered-by: tests/js/editFormGuards.test.ts::舊資料沒有明文可還原（initial 為 null）時，站長輸入什麼都算改動
+    # @covered-by: tests/js/editFormGuards.test.ts::只差一個空白也算改動（密碼不做 trim）
 
     # 儲存端只要收到密碼就會更新密碼變更時間，而那會讓該夥伴所有登入 session
     # 立即失效。若每次存檔都原封不動送回同一組密碼，站長改個名稱都會把夥伴踢出報表頁。

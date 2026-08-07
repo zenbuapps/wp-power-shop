@@ -86,7 +86,10 @@ Feature: 查詢分潤賣場詳情與列表
       Then 實際生效的 per_page 應為 100
 
   Rule: 前端（填表）- 編輯頁載入後不得被背景重取資料覆蓋
-    # @covered-by: NOT-COVERED Edit 頁的 filledIdRef + refetchOnWindowFocus:false 防覆寫，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/editFormGuards.test.ts::🔴 同一筆 record 再次抵達時不得重填
+    # @covered-by: tests/js/editFormGuards.test.ts::首次拿到 record 時填表
+    # @covered-by: tests/js/editFormGuards.test.ts::切換到不同 id 的編輯頁時要重新填
+    # @covered-by: tests/js/editFormGuards.test.ts::record 尚未載入（undefined）時不填
 
     # React Query 在視窗重新取得焦點時會重取資料，若無條件回填表單，
     # 使用者打字到一半的內容會被覆蓋。
