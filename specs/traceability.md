@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **55**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **53**
 
 ## 逐檔覆蓋率
 
@@ -103,8 +103,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：ProfitShop/List 的「複製短碼」按鈕，屬 React 元件行為（B9 待補）
 - `render-shop-via-shortcode` — 已知落差（存取）- 短碼模式的賣場公開網址仍然開得起來
   - 理由：本 Rule 描述的正是 TD-13「shortcode 模式賣場公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
-- `save-profit-shop` — 後置（設定）- settings 為自由欄位，送出時必須以既有內容為底合併
-  - 理由：「以既有內容為底合併」的 mergeScheduleSettings 住在 React utils.ts，專案無前端測試框架（B9 待補）
 - `save-profit-shop` — 前端（表單）- 多分頁表單的驗證失敗必須導向出錯的分頁
   - 理由：ProfitShopForm 的 FIELD_TO_TAB 導向出錯分頁，屬 React 元件行為（B9 待補）
 - `save-profit-shop` — 已知落差（驗證）- 永久連結在後端沒有必填與格式驗證
@@ -121,8 +119,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：本 Rule 描述的正是 TD-15「變體層灌水人數無前台顯示點」這個已知落差，依定義沒有對應實作可測
 - `save-variation-overrides` — 已知落差（數量）- 變體超過 100 個時只顯示前 100 個
   - 理由：本 Rule 描述的正是 TD-16「wc-rest per_page 硬上限 100」這個已知落差，依定義沒有對應實作可測
-- `schedule-shop-availability` — 前端（後台）- 排程分頁的送出必須合併既有設定
-  - 理由：ScheduleTab 的 mergeScheduleSettings，屬 React 元件行為（B9 待補）
 - `schedule-shop-availability` — 已知落差（存取）- 全部不勾只藏內容，公開網址仍然開得起來
   - 理由：本 Rule 描述的正是 TD-46「全部不勾只藏內容、公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
 - `schedule-shop-availability` — 已知落差（驗證）- 排程欄位沒有後端驗證

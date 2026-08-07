@@ -150,7 +150,8 @@ Feature: 建立與更新分潤賣場
   Rule: 後置（設定）- settings 為自由欄位，送出時必須以既有內容為底合併
     # @covered-by: tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php::test_settings_with_double_quotes_survive_round_trip
     # @covered-by: tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php::test_save_round_trip_with_chinese_characters
-    # @covered-by: NOT-COVERED 「以既有內容為底合併」的 mergeScheduleSettings 住在 React utils.ts，專案無前端測試框架（B9 待補）
+    # @covered-by: tests/js/scheduleSettings.test.ts::本頁不管的欄位必須原樣保留
+    # @covered-by: tests/js/scheduleSettings.test.ts::未修改排程時 round-trip 保持等值
 
     # settings 內同時放著前台顯示開關、排程與 legacy 匯入帶進來的未知鍵。
     # 只送部分欄位會把其餘的整批清掉，而且沒有任何錯誤訊息。

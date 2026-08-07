@@ -1,3 +1,4 @@
+import path from 'path'
 import { defineConfig } from 'vitest/config'
 
 /**
@@ -12,6 +13,13 @@ import { defineConfig } from 'vitest/config'
  * addEventListener、dispatchEvent），沒有 DOM 就一行都跑不起來。
  */
 export default defineConfig({
+	// admin SPA 的純函式測試需要 `@/` alias（與 vite.config.ts 一致）。
+	// 只補這一個 alias，不引入 React / v4wp plugin——受測的是不依賴 React 的純邏輯。
+	resolve: {
+		alias: {
+			'@': path.resolve(__dirname, 'js/src'),
+		},
+	},
 	test: {
 		environment: 'jsdom',
 		include: ['tests/js/**/*.test.ts'],

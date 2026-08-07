@@ -58,6 +58,8 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
   Rule: 前置（正規化）- 壞掉的時間資料視為未設定而不誤關店
     # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_invalid_timestamps_are_treated_as_unset
     # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_timestamp_strings_are_cast_to_int
+    # @covered-by: tests/js/scheduleSettings.test.ts::時間戳 0 轉成 null（不可轉成 1970-01-01）
+    # @covered-by: tests/js/scheduleSettings.test.ts::壞掉的時間資料一律視為未設定
 
     # ⚠️ specs/tech-debt.md TD-63：這是 fail-open，而且**這個判斷同時是安全閘門**。
     #   裁決維持現狀：誤關店的商業損失立即且明顯，而要寫壞這份設定需要管理權限
@@ -86,6 +88,9 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
     # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_empty_display_parts_means_show_nothing
     # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_unknown_display_parts_are_filtered
     # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_legacy_string_display_mode_is_migrated
+    # @covered-by: tests/js/scheduleSettings.test.ts::空陣列必須原樣保留，不得還原成預設值
+    # @covered-by: tests/js/scheduleSettings.test.ts::未知的區塊值必須被白名單過濾掉
+    # @covered-by: tests/js/scheduleSettings.test.ts::舊的單選字串格式對映成等價的區塊組合
 
     Example: 未設定呈現區塊時退回只顯示商品
       Given 賣場 "夏季賣場" 的設定中沒有呈現區塊的鍵
@@ -225,7 +230,10 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 結果應為空字串
 
   Rule: 前端（後台）- 排程分頁的送出必須合併既有設定
-    # @covered-by: NOT-COVERED ScheduleTab 的 mergeScheduleSettings，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/scheduleSettings.test.ts::本頁不管的欄位必須原樣保留
+    # @covered-by: tests/js/scheduleSettings.test.ts::清空時間時寫入 0 而非刪除 key
+    # @covered-by: tests/js/scheduleSettings.test.ts::有設定時間時寫入毫秒時間戳
+    # @covered-by: tests/js/scheduleSettings.test.ts::自訂文字前後空白必須 trim
 
     Example: 只修改排程時其餘設定必須保留
       Given 賣場 "夏季賣場" 的設定已包含庫存與購買人數顯示開關
