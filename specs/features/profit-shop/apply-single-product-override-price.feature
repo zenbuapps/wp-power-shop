@@ -158,7 +158,12 @@ Feature: 商品單頁套用賣場覆寫價
       And 顧客仍無法將商品 105 加入購物車
 
   Rule: 文案（一致）- 後台的據實揭露文案必須與實際作用範圍一致
-    # @covered-by: NOT-COVERED VariationOverrideEditor 的據實揭露 Alert 文案，屬 React 元件內容（B9 待補）。⚠️ TD-20 即為此類文案與實際行為脫節的前例
+    # @covered-by: tests/js/overrideDisclosureText.test.ts::說明必須交代「賣場前台卡片」這條動線
+    # @covered-by: tests/js/overrideDisclosureText.test.ts::說明必須交代「從賣場進入的商品單頁」這條動線
+    # @covered-by: tests/js/overrideDisclosureText.test.ts::說明必須交代「加入購物車 / 結帳」這條動線
+    # @covered-by: tests/js/overrideDisclosureText.test.ts::說明必須交代「未經賣場直接開啟商品頁」這條動線
+    # @covered-by: tests/js/overrideDisclosureText.test.ts::必須明講「未帶 profit_shop_id 看到原始價格」是刻意設計而非缺口
+    # @covered-by: tests/js/overrideDisclosureText.test.ts::不得再宣稱「單品頁仍顯示原價」（TD-20 的原句）
 
     # ⚠️ 這條是流程規則，不是執行期行為。
     #   曾經發生：規劃階段先寫了「單品頁仍顯示原價」的緩解文案，
