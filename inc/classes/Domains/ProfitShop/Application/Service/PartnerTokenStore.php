@@ -67,7 +67,25 @@ final class PartnerTokenStore {
 	) {}
 
 	/**
+	 * Payload 內「簽發當下的 password_changed_at 快照」欄位名
+	 *
+	 * 舊 token（本欄位上線前簽發）的 payload 沒有這個 key，`verify()` 會據此
+	 * 退回時間比較。TTL 為 3600 秒，一小時內全部自然汰換。
+	 *
+	 * @var string
+	 */
+	private const SNAPSHOT_KEY = 'pwd_snapshot';
+
+	/**
 	 * 簽發 token
+	 *
+	 * Payload 除了 `issued_at` 之外，另外快照一份**簽發當下的**
+	 * `password_changed_at`（`pwd_snapshot`）。撤銷比對優先用這個快照，
+	 * 理由與時間比較的缺陷見 `verify()` 的 docblock。
+	 *
+	 * 讀取失敗（DB 異常）時快照寫 `null`，`verify()` 會自動退回時間比較，
+	 * 不因為讀不到快照就讓 token 簽發失敗——登入是使用者可見的動線，
+	 * 而退回時間比較仍保有 Phase 6-A1 M-1 的防護強度。
 	 *
 	 * @param int $partner_term_id Partner term ID
 	 *
@@ -79,10 +97,17 @@ final class PartnerTokenStore {
 		$now         = $this->clock->now();
 		$expires_at  = $now + $this->ttl;
 
+		try {
+			$pwd_snapshot = $this->partners->get_password_changed_at( $partner_term_id );
+		} catch ( \Throwable $e ) {
+			$pwd_snapshot = null;
+		}
+
 		$payload = [
 			'partner_term_id' => $partner_term_id,
 			'expires_at'      => $expires_at,
 			'issued_at'       => $now,
+			self::SNAPSHOT_KEY => $pwd_snapshot,
 		];
 
 		$this->transients->set( $this->key_prefix . $hash, $payload, $this->ttl );
@@ -100,13 +125,45 @@ final class PartnerTokenStore {
 	 *   1. 空字串 → null
 	 *   2. transient 不存在或格式錯誤 → null
 	 *   3. 內層 expires_at 過期 → null
-	 *   4. password_changed_at 撤銷比對（Phase 6-A1 reviewer M-1：縱深防禦覆蓋同秒 race window）：
-	 *      - 為 null（從未變更） → 不檢查
-	 *      - issued_at > password_changed_at → 通過（必須嚴格大於）
-	 *      - issued_at <= password_changed_at → 視為已撤銷，回 null
-	 *      （issued_at == password_changed_at 同秒視為已撤銷，
-	 *       閉合「同秒簽發 + 同秒改密」的 race window）
+	 *   4. 密碼變更撤銷比對（見下方「為何改用快照值比對」）
 	 *   5. 通過 → 回 partner_term_id
+	 *
+	 * ── 🔴 為何改用快照值比對，而不是比較時間戳 ──────────────
+	 *
+	 * 這裡真正要回答的問題是「**這個 token 簽發之後，密碼有沒有被改過**」。
+	 * 時間戳比較只是那個問題的**代理指標**，而它在秒精度下有歧義：
+	 * `password_changed_at` 與 `issued_at` 都只到秒，同一秒內發生的兩件事無法排序。
+	 *
+	 * Phase 6-A1 reviewer M-1 為了閉合「同秒簽發舊 token + 同秒改密」的 race window，
+	 * 把判斷從 `<` 收緊成 `<=`（同秒一律視為已撤銷）。方向是對的，但代價是
+	 * **把「密碼寫入後同一秒內簽發的合法 token」一起誤殺**——而
+	 * `PartnerTermRepository::save()` 在**建立夥伴**時就會寫 `password_changed_at`，
+	 * 於是「建立夥伴 → 同秒登入」這個組合會讓 token 一出生就失效。
+	 *
+	 * 實測（2026-08-07，臨時診斷測試，對**同一個** token 做 before/after 對照）：
+	 *   把 password_changed_at 往前調 1 秒**之前** → GET /partner-auth/me 回 401
+	 *   往前調 1 秒**之後**                        → 同一個 token 回 200
+	 * 而另一輪剛好跨秒（changed_at 落在 T、login 落在 T+1）→ 直接 200 通過。
+	 * ⇒ 這不是穩定失敗，是**時間競態**：跑得快就失效、跨秒就正常。
+	 * 這正是 11 條 partner 認證整合測試長期紅燈的唯一成因
+	 * （夥伴登入 / 改密碼 / token 撤銷 / 報表 IDOR 隔離四塊因此失去自動化保護）。
+	 *
+	 * 正解是不要再問「哪個時間比較晚」，直接問「**值有沒有變**」：
+	 * `issue()` 把簽發當下的 `password_changed_at` 快照進 payload，
+	 * `verify()` 比對快照與當下值是否相同。
+	 *
+	 *   - 密碼改了 → 值變了 → 快照對不上 → 撤銷 ✅
+	 *   - 密碼沒改 → 值相同 → 通過 ✅
+	 *
+	 * 這**完全不依賴時間精度**，同秒歧義結構性消失；而且 M-1 想閉合的 race window
+	 * 解得更徹底——同秒改密同樣會讓 `password_changed_at` 變值，快照一樣對不上。
+	 * 時間比較反而擋不住「改密後跨秒才簽發的偽造 token」這類情境。
+	 *
+	 * ── 向後相容 ──────────────────────────────────────────────
+	 * 本機制上線前簽發的 token，payload 沒有 `SNAPSHOT_KEY`，會退回時間比較
+	 * （維持 M-1 契約，含它已知的誤殺）。TTL 為 3600 秒，一小時內自然全數汰換，
+	 * 因此那條 legacy 分支**不需要**永久保留——與 cart signature 的 v1 分支
+	 * （持久化購物車無過期機制，必須永久保留）性質不同，不要混為一談。
 	 *
 	 * @param string $token 明文 token
 	 *
@@ -151,9 +208,30 @@ final class PartnerTokenStore {
 			);
 			return null;
 		}
-		// Phase 6-A1 reviewer M-1：縱深防禦覆蓋同秒 race window。
-		// issued_at == password_changed_at 視為已撤銷（必須嚴格大於才通過）,
-		// 防範「同秒簽發舊 token + 同秒改密」場景下舊 token 仍被誤判為有效.
+		// ── 撤銷比對 ─────────────────────────────────────────────
+		// 優先走「快照值比對」；payload 沒有快照欄位（本機制上線前簽發的舊 token）
+		// 才退回 Phase 6-A1 M-1 的時間比較。兩條路的差異與取捨見本方法 docblock。
+		if ( array_key_exists( self::SNAPSHOT_KEY, $payload ) ) {
+			$snapshot = $payload[ self::SNAPSHOT_KEY ];
+			$snapshot = ( null === $snapshot ) ? null : (int) $snapshot;
+
+			// 值一有變動即撤銷。四種組合都正確（左為快照、右為當下值）：
+			// `null vs null` 通過（從未變更過密碼）；
+			// `null vs 12345` 撤銷（簽發時沒有、現在有了 ⇒ 密碼變過）；
+			// `12345 vs null` 撤銷（meta 被刪，異常狀態 ⇒ fail-closed）；
+			// `12345 vs 12346` 撤銷（密碼變過）。
+			if ( $snapshot !== $password_changed_at ) {
+				return null;
+			}
+
+			return $partner_id;
+		}
+
+		// Legacy fallback：舊 token 無快照欄位，沿用 Phase 6-A1 reviewer M-1 的時間比較。
+		// issued_at == password_changed_at 視為已撤銷（必須嚴格大於才通過），
+		// 防範「同秒簽發舊 token + 同秒改密」場景下舊 token 仍被誤判為有效。
+		// ⚠️ 這條路徑有已知的誤殺（見 docblock），但只影響 TTL 內的既有 token，
+		// 且維持既有行為比在過渡期改變它更安全。
 		if ( null !== $password_changed_at && $issued_at <= $password_changed_at ) {
 			return null;
 		}

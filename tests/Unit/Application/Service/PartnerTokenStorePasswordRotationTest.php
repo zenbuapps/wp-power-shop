@@ -168,31 +168,65 @@ final class PartnerTokenStorePasswordRotationTest extends TestCase {
 	}
 
 	/**
-	 * 關鍵邊界：issued_at == password_changed_at（同秒）
+	 * 關鍵邊界：同一秒內「簽發 token → 改密」，該 token 必須撤銷
 	 *
-	 * Phase 6-A1 reviewer M-1：契約反轉。
-	 *   - 原契約：>= 不撤銷（同時或之後簽發都算合法）
-	 *   - 新契約：> 才通過；同秒視為已撤銷（縱深防禦覆蓋 race window）
+	 * ── 契約演進（讀這條測試前務必先看完）────────────────────
 	 *
-	 * 改密 endpoint 在 1 秒內可能完成「issue 舊 token → 改密 → 該 token 後續被使用」，
-	 * 若沿用 `issued_at >= changed_at` 通過，舊 token 在同秒視窗內仍被誤判有效.
-	 * 改成 `issued_at > changed_at`（同秒視為撤銷）以閉合此 race window.
+	 * Phase 6-A1 reviewer M-1 把 `verify()` 的判斷從 `issued_at < changed_at`
+	 * 收緊成 `<=`（同秒一律視為已撤銷），為的是閉合
+	 * 「同秒簽發舊 token → 同秒改密 → 該 token 續用」的 race window。
+	 *
+	 * 那個做法有一個無法避免的副作用：**時間比較分不出兩種截然不同的情境**——
+	 *   (a) 密碼在 token **簽發之前**就已變更 → token 合法，本來就該通過
+	 *   (b) 密碼在 token **簽發之後**才變更 → token 應撤銷
+	 * 兩者在秒精度下的 `issued_at == changed_at` 長得一模一樣，`<=` 為了擋住 (b)
+	 * 只能連 (a) 一起誤殺。而 `PartnerTermRepository::save()` 在**建立夥伴**時
+	 * 就會寫 `password_changed_at`，(a) 因此是每天都在發生的正常情境
+	 * （「建立夥伴 → 同秒登入」），11 條 partner 認證整合測試長期紅燈即源於此。
+	 *
+	 * 現行做法改成從資料本身消除歧義，兩端各出一半：
+	 *   - **產生端**：`PartnerTermRepository::next_password_changed_at()` 保證
+	 *     每次密碼寫入產生的值**嚴格大於前值**（同秒退而取 `prev + 1`）
+	 *   - **消費端**：`PartnerTokenStore` 在 `issue()` 快照當下的 `password_changed_at`，
+	 *     `verify()` 比對「快照 === 當下值」，不再比較時間先後
+	 *
+	 * ⇒ (a) 值未變 → 通過；(b) 值必變（即使同秒）→ 撤銷。歧義結構性消失。
+	 *
+	 * 🔴 本測試因此涵蓋兩個方向，**缺一不可**——只留第二段的話，
+	 * 有人把 `verify()` 改回無條件撤銷也一樣會綠。
 	 *
 	 * @group security
 	 * @group edge
 	 */
-	public function test_verify_treats_same_second_password_change_as_revoked(): void {
-		// Phase 6-A1 reviewer M-1：契約反轉。
-		// 原契約：issued_at == password_changed_at（同秒）→ 仍視為有效。
-		// 新契約：issued_at == password_changed_at（同秒）→ 視為已撤銷（race window 縱深防禦）。
-		$this->partners->set_password_changed_at( self::PARTNER_TERM_ID, 100 );
+	public function test_verify_revokes_token_when_password_changes_within_same_second(): void {
 		$store = $this->make_store();
 		$this->clock->set_to( 100 );
-		$result = $store->issue( self::PARTNER_TERM_ID );
+
+		// (a) 密碼在簽發「之前」就已變更（changed_at 與 issued_at 同為 100）
+		//     → token 是在密碼變更之後簽發的，合法，必須通過。
+		//     M-1 的時間比較會在這裡誤殺，快照法不會。
+		$this->partners->set_password_changed_at( self::PARTNER_TERM_ID, 100 );
+		$before = $store->issue( self::PARTNER_TERM_ID );
+
+		$this->assertSame(
+			self::PARTNER_TERM_ID,
+			$store->verify( $before['token'] ),
+			'密碼在 token 簽發「之前」就變更過（值未再變動）→ 該 token 合法，不得誤殺'
+		);
+
+		// (b) 同一秒內改密：時鐘完全不動，只讓 password_changed_at 遞增
+		//     （模擬 next_password_changed_at() 的 prev + 1 保證）
+		//     → 快照對不上，必須撤銷。這是 M-1 原本要守住的東西。
+		$this->partners->set_password_changed_at( self::PARTNER_TERM_ID, 101 );
 
 		$this->assertNull(
-			$store->verify( $result['token'] ),
-			'issued_at == password_changed_at（同秒）視為已撤銷 → 縱深覆蓋 race window'
+			$store->verify( $before['token'] ),
+			'同秒改密（password_changed_at 值已變動）→ 舊 token 必須撤銷'
+		);
+		$this->assertSame(
+			100,
+			$this->clock->now(),
+			'本測試全程時鐘不得前進，否則測到的是跨秒、不是同秒 race window'
 		);
 	}
 

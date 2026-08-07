@@ -166,6 +166,62 @@ final class PartnerTermRepositoryGetPasswordChangedAtTest extends TestCase {
 		);
 	}
 
+	/**
+	 * 🔴 核心不變量：連續密碼寫入必須嚴格遞增，**同一秒內也不例外**
+	 *
+	 * ⚠️ 上一條測試（`..._updates_after_subsequent_save_with_new_password`）刻意
+	 * 「把 termmeta 倒退 2 秒，避免 time() 同秒情況」——它**知道**同秒會有問題，
+	 * 卻選擇迴避而不是驗證。那正是這個缺陷能長期潛伏的原因之一：
+	 * 唯一一條測「值會變大」的測試，主動避開了唯一會出錯的情境。
+	 *
+	 * 本測試不迴避：連續呼叫 `save()`（在同一個測試方法內、幾乎必然落在同一秒），
+	 * 直接斷言值仍嚴格遞增。
+	 *
+	 * 這條不變量是 `PartnerTokenStore::verify()` 撤銷判斷的**唯一依據**——
+	 * 值一旦沒變，「簽發後改密」與「簽發前改密」就再也分不出來，
+	 * 舊 token 會在改密後繼續有效（實測症狀：改密相關測試出現「預期 401 實得 200」）。
+	 * 若有人把 `next_password_changed_at()` 簡化回 `time()`，本測試會立刻紅。
+	 *
+	 * @test
+	 * @group security
+	 * @group edge
+	 */
+	public function test_password_changed_at_strictly_increases_even_within_same_second(): void {
+		$term_id  = $this->create_partner_with_password( 'monotonic-pw', 'MonotonicPw', 'first-pw1' );
+		$snapshot = new PartnerSnapshot(
+			term_id: $term_id,
+			name: 'MonotonicPw',
+			slug: new PartnerSlug( 'monotonic-pw' ),
+			contact_email: null,
+		);
+
+		$observed = [ $this->repo->get_password_changed_at( $term_id ) ];
+
+		// 連續 3 次改密，全程不 sleep（同秒是常態，不是例外）
+		for ( $i = 2; $i <= 4; $i++ ) {
+			$this->repo->save( $snapshot, "pw-number-{$i}" );
+			$observed[] = $this->repo->get_password_changed_at( $term_id );
+		}
+
+		foreach ( $observed as $index => $value ) {
+			$this->assertNotNull( $value, "第 {$index} 次寫入後不應為 null" );
+		}
+
+		for ( $i = 1; $i < count( $observed ); $i++ ) {
+			$this->assertGreaterThan(
+				$observed[ $i - 1 ],
+				$observed[ $i ],
+				sprintf(
+					'第 %d 次密碼寫入的 password_changed_at（%d）必須嚴格大於前一次（%d）；'
+					. '同秒寫入時 next_password_changed_at() 應退而取 prev + 1',
+					$i + 1,
+					(int) $observed[ $i ],
+					(int) $observed[ $i - 1 ]
+				)
+			);
+		}
+	}
+
 	// ========== Helpers ==========
 
 	/**

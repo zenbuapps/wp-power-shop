@@ -175,10 +175,57 @@ final class PartnerTermRepository implements PartnerRepositoryInterface {
 			// 雜湊那一行不需要 slash，因為 wp_hash_password() 的輸出字元集不含這些字元。
 			\update_term_meta( $term_id, self::META_PASSWORD_PLAIN, \wp_slash( $plain_password ) );
 
-			\update_term_meta( $term_id, self::META_PASSWORD_CHANGED_AT, time() );
+			\update_term_meta(
+				$term_id,
+				self::META_PASSWORD_CHANGED_AT,
+				$this->next_password_changed_at( $term_id )
+			);
 		}
 
 		return $term_id;
+	}
+
+	/**
+	 * 算出下一個 `password_changed_at`，**保證嚴格大於前一次**
+	 *
+	 * ── 🔴 為何不能直接寫 `time()` ────────────────────────────
+	 *
+	 * 這個值唯一的用途是讓 `PartnerTokenStore::verify()` 判斷
+	 * 「token 簽發之後，密碼有沒有被改過」。`time()` 只到**秒**，於是
+	 * 「同一秒內改密」寫回去的值與改密前**完全相同** ⇒ 不論 verify 端是
+	 * 比較時間戳還是比對值快照，都**看不出密碼變過**，舊 token 續用。
+	 *
+	 * 實測（2026-08-07）：`test_old_token_revoked_after_self_change_password` 與
+	 * `test_old_token_is_revoked_after_admin_regenerates_password` 兩條會出現
+	 * 「預期 401 實得 200」——舊 token 在改密後**仍然有效**。
+	 *
+	 * Phase 6-A1 reviewer M-1 當時的處置是把 verify 的判斷從 `<` 收緊成 `<=`
+	 * （同秒一律視為已撤銷）。方向對，但那是在**消費端**補救資料本身的精度不足，
+	 * 代價是把「密碼寫入後同秒簽發的**合法** token」一起誤殺——而
+	 * `save()` 在**建立夥伴**時就會寫這個值，於是「建立夥伴 → 同秒登入」
+	 * 這個再正常不過的組合會讓 token 一出生就失效
+	 * （11 條 partner 認證整合測試長期紅燈的唯一成因）。
+	 *
+	 * 正解是在**產生端**保證這個值能履行它的契約：**每次密碼寫入都必須產生
+	 * 一個嚴格大於前值的數**。同秒改密時退而取 `prev + 1`，
+	 * 值會比真實時間略微超前（僅在同秒連續改密時發生，且誤差是秒級），
+	 * 對它唯一的用途（撤銷判斷）完全無害。
+	 *
+	 * 這樣一來兩條驗證路徑同時成立，不需要任何一端做補償：
+	 *   - 快照值比對（現行）：值必變 → 快照對不上 → 撤銷 ✅
+	 *   - 時間比較（legacy token 的 fallback）：changed_at 變大 → 撤銷 ✅
+	 * 而「同秒簽發的合法 token」因為 `password_changed_at` 不再與它相等，
+	 * 也不會再被誤殺。
+	 *
+	 * @param int $term_id Partner term ID
+	 *
+	 * @return int 嚴格大於前值的 unix timestamp
+	 */
+	private function next_password_changed_at( int $term_id ): int {
+		$now  = time();
+		$prev = (int) \get_term_meta( $term_id, self::META_PASSWORD_CHANGED_AT, true );
+
+		return $now > $prev ? $now : $prev + 1;
 	}
 
 	/**
