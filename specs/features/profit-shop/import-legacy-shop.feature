@@ -95,7 +95,12 @@ Feature: 匯入舊版一頁商店為分潤賣場
       And 舊版賣場 7001 的內容應維持不變
 
   Rule: 前端（閘門）- 不可逆操作必須經過四道閘門
-    # @covered-by: NOT-COVERED ImportModal 的四道閘門（見 profit-shop.rule.md §12.4），屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/importGates.test.ts::四道全過時可送出
+    # @covered-by: tests/js/importGates.test.ts::🔴 每一道閘門都能獨立擋下送出
+    # @covered-by: tests/js/importGates.test.ts::🔴 確認字串必須完整大寫（避免「import」誤觸）
+    # @covered-by: tests/js/importGates.test.ts::🔴 importable 必須在這裡再驗一次，不能只信列表的 disabled
+    # @covered-by: tests/js/importGates.test.ts::🔴 未選夥伴一律擋下（沒有分潤對象的賣場毫無意義）
+    # @covered-by: tests/js/importGates.test.ts::飛行中停用（重複送出會匯入兩份）
 
     Example: 不可匯入的來源其匯入按鈕為停用並說明原因
       Given 舊版賣場 7003 標記為不可匯入

@@ -10,7 +10,36 @@ import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
 const { Item } = Form
 
 /** 二次確認需輸入的字串（必須完整大寫匹配，避免「import」誤觸） */
-const CONFIRM_PHRASE = 'IMPORT'
+export const CONFIRM_PHRASE = 'IMPORT'
+
+/**
+ * 四道閘門的匯總判定
+ *
+ * 這是不可逆操作的最後一關，**四個條件缺一不可**：
+ *   1. `legacyShop` 存在——Modal 可能在資料還沒到位時被打開
+ *   2. `importable`——列表已經 disable 了不可匯入的列，這裡**再驗一次**，
+ *      因為列表資料可能是快取的（站長開著頁面時，另一個人剛好匯入了同一個賣場）
+ *   3. `partnerId`——legacy 一頁商店沒有 partner 概念，遷入後必須掛在某個夥伴下，
+ *      漏掉的話會產生一個沒有分潤對象的賣場
+ *   4. `confirmText === 'IMPORT'`——**完整大寫**，避免誤觸
+ *   5. 非飛行中——重複送出會匯入兩份
+ */
+export const canSubmitImport = ({
+	legacyShop,
+	partnerId,
+	confirmText,
+	isLoading,
+}: {
+	legacyShop: { importable: boolean } | null
+	partnerId: number | null
+	confirmText: string
+	isLoading: boolean
+}): boolean =>
+	!!legacyShop &&
+	legacyShop.importable &&
+	partnerId !== null &&
+	confirmText === CONFIRM_PHRASE &&
+	!isLoading
 
 type TImportModalProps = {
 	legacyShop: TLegacyShop | null
@@ -48,12 +77,12 @@ const ImportModalComponent = ({
 		}
 	}, [open])
 
-	const canSubmit =
-		!!legacyShop &&
-		legacyShop.importable &&
-		partnerId !== null &&
-		confirmText === CONFIRM_PHRASE &&
-		!isLoading
+	const canSubmit = canSubmitImport({
+		legacyShop,
+		partnerId,
+		confirmText,
+		isLoading,
+	})
 
 	const handleSubmit = async () => {
 		if (!legacyShop || partnerId === null) return
