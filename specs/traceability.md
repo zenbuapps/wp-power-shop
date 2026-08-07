@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **52**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **51**
 
 ## 逐檔覆蓋率
 
@@ -101,8 +101,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：ProfitShop/List 的「複製短碼」按鈕，屬 React 元件行為（B9 待補）
 - `render-shop-via-shortcode` — 已知落差（存取）- 短碼模式的賣場公開網址仍然開得起來
   - 理由：本 Rule 描述的正是 TD-13「shortcode 模式賣場公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
-- `save-profit-shop` — 前端（表單）- 多分頁表單的驗證失敗必須導向出錯的分頁
-  - 理由：ProfitShopForm 的 FIELD_TO_TAB 導向出錯分頁，屬 React 元件行為（B9 待補）
 - `save-profit-shop` — 已知落差（驗證）- 永久連結在後端沒有必填與格式驗證
   - 理由：本 Rule 描述的正是「永久連結在後端沒有必填與格式驗證」這個已知落差，依定義沒有對應實作可測
 - `save-profit-shop` — 已知落差（數量）- 賣場商品數量上限只在前端把關

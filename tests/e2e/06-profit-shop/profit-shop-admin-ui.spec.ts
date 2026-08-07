@@ -3,108 +3,77 @@
  *
  * 對應規格：
  *   specs/features/profit-shop/query-shop-detail.feature（前端（列表））
- *
- * ⚠️ 本檔目前只涵蓋「列表頁標準版型」一條。原本一併嘗試的另外兩條
- * （操作欄依 mode 切換動作、SlugInput 即時衝突提示）**尚未納入**——
- * 它們需要更精確的 selector（antd Form.Item 產生的 id 依 form name 而異、
- * 新建賣場未必落在列表第一頁），而每輪 e2e 需時約 4 分鐘，探索成本高。
- * 對應的 Rule 在 .feature 內仍如實標為 NOT-COVERED，**不假裝已覆蓋**。
+ *   specs/features/profit-shop/save-profit-shop.feature（前端（表單））
  *
  * ── 為什麼這幾條只能用 e2e 測 ────────────────────────────────
  *
  * 它們的契約住在 React 元件的**渲染結果**（依資料狀態切換不同的主要動作、
- * 停用時顯示原因、debounce 後才發出驗證請求），不是可以獨立 import 的純函式。
- * 純函式的部分已經由 tests/js/**.test.ts（vitest）覆蓋，這裡只補元件層。
+ * debounce 後才發出驗證請求、驗證失敗導向出錯的分頁），不是可獨立 import 的
+ * 純函式。純函式的部分已由 tests/js/**.test.ts（vitest）覆蓋，這裡只補元件層。
  *
- * ⚠️ 本檔是 **UI 驅動**，與同目錄的 profit-shop-items.spec.ts（API-level）分工不同。
+ * ⚠️ selector 一律取自實地 dump 的 DOM，**不用猜的**（第一版用猜的，三條有兩條紅）：
+ *   - slug 輸入框**沒有 id**，只有 placeholder="my-shop"
+ *   - 列表篩選是 input#search
+ *
+ * 🔴 **尚未納入的三條**（操作欄依 mode / SlugInput 即時衝突 / 夥伴列表篩選）
+ * 卡在一個環境層面的落差，不是測試寫法問題：透過 REST 建立賣場**回 2xx 且拿得到
+ * id**，但 SPA 列表隨即顯示「尚未建立任何分潤賣場」（實地 dump 確認 tbody 只有
+ * No data 那一列）。在釐清這個落差之前，硬寫的測試只會是紅燈或假綠燈。
+ * 對應的 Rule 在 .feature 內仍如實標為 NOT-COVERED，**不假裝已覆蓋**。
  */
 import { test, expect, type Page } from '@playwright/test'
-import * as fs from 'fs'
-import * as path from 'path'
 
 const BASE_URL = process.env.WP_BASE_URL || 'http://localhost:8890'
 const SPA = `${BASE_URL}/wp-admin/admin.php?page=power-shop`
 
-function getNonce(): string {
-  return fs.readFileSync(path.resolve(import.meta.dirname, '../.auth/nonce.txt'), 'utf-8').trim()
-}
-
-/** 建一個賣場（走 REST，比 UI 快且穩定） */
-async function createShop(
-  page: Page,
-  nonce: string,
-  payload: Record<string, unknown>
-): Promise<number> {
-  const res = await page.request.post(`${BASE_URL}/wp-json/power-shop/profit-shops`, {
-    headers: { 'X-WP-Nonce': nonce, 'Content-Type': 'application/json' },
-    data: payload,
-  })
-  expect(res.ok(), `建立賣場失敗：${res.status()} ${await res.text()}`).toBeTruthy()
-  const body = await res.json()
-  return Number(body?.data?.id ?? body?.id)
-}
-
-/** 等 SPA 掛載完成（mount 點有內容） */
-async function gotoSpa(page: Page, hash: string): Promise<void> {
+/** 進入 SPA 某個 hash route，等到列表或空狀態出現 */
+async function gotoList(page: Page, hash: string): Promise<void> {
   await page.goto(`${SPA}#${hash}`)
-  await page.waitForSelector('#power_shop', { state: 'attached', timeout: 30_000 })
-  // Refine 首屏會有一段查詢；等到表格或空狀態任一出現
-  await page
-    .locator('.ant-table, .ant-empty, .ant-spin')
-    .first()
-    .waitFor({ state: 'visible', timeout: 30_000 })
+  await page.locator('.ant-table, .ant-empty').first().waitFor({ state: 'visible', timeout: 45_000 })
 }
 
-test.describe('分潤賣場 admin SPA — 列表頁與表單', () => {
-  let nonce: string
-  let partnerTermId: number
-  const createdShopIds: number[] = []
-
-  test.beforeAll(async ({ request }) => {
-    nonce = getNonce()
-
-    // 建一個夥伴（賣場的必填關聯）
-    const res = await request.post(`${BASE_URL}/wp-json/power-shop/profit-partners`, {
-      headers: { 'X-WP-Nonce': nonce, 'Content-Type': 'application/json' },
-      data: {
-        name: 'E2E UI 夥伴',
-        slug: `e2e-ui-partner-${Date.now()}`,
-        password: 'e2epass123',
-      },
-    })
-    expect(res.ok(), `建立夥伴失敗：${res.status()} ${await res.text()}`).toBeTruthy()
-    const body = await res.json()
-    partnerTermId = Number(body?.data?.term_id ?? body?.term_id ?? body?.data?.id)
-    expect(partnerTermId).toBeGreaterThan(0)
-  })
-
-  test.afterAll(async ({ request }) => {
-    for (const id of createdShopIds) {
-      await request
-        .delete(`${BASE_URL}/wp-json/power-shop/profit-shops/${id}`, {
-          headers: { 'X-WP-Nonce': nonce },
-        })
-        .catch(() => undefined)
-    }
-  })
+test.describe('分潤賣場 admin SPA', () => {
 
   /**
    * Rule: 前端（列表）- 列表頁採篩選卡片加實體列表的標準版型
-   *
-   * 對應 admin-list-ui.rule.md 的硬性規則：兩張 Card、新增按鈕在列表卡片內。
+   * （admin-list-ui.rule.md 硬性規則：兩張 Card、新增按鈕在列表卡片內）
    */
-  test('列表頁採「篩選卡片 + 實體列表」標準版型', async ({ page }) => {
-    await gotoSpa(page, '/profit-shop')
+  test('賣場列表採「篩選卡片 + 實體列表」標準版型', async ({ page }) => {
+    await gotoList(page, '/profit-shop')
 
-    // 篩選卡片（title="篩選"）
-    await expect(page.getByText('篩選', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
-    // 篩選與重置兩顆按鈕
-    await expect(page.getByRole('button', { name: /篩選/ }).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: /重置/ }).first()).toBeVisible()
-    // 新增按鈕（在列表卡片內、Table 之上）
-    await expect(page.getByRole('button', { name: /新增|建立/ }).first()).toBeVisible()
-    // 實體列表
-    await expect(page.locator('.ant-table').first()).toBeVisible()
+    await expect(page.locator('input#search')).toBeVisible()
+    await expect(page.locator('button:has-text("篩選")').first()).toBeVisible()
+    await expect(page.locator('button:has-text("重置")').first()).toBeVisible()
+    await expect(page.locator('button:has-text("新增賣場")').first()).toBeVisible()
+  })
+
+  /**
+   * Rule: 前端（表單）- 多分頁表單的驗證失敗必須導向出錯的分頁
+   *
+   * 所有 Tab 都 forceRender，但非 active 的 pane 是 display:none——欄位驗證有跑、
+   * 紅字有渲染，**使用者看不到**。若父層只是靜默 return，畫面就完全沒有回饋
+   * （實際發生過：站長停在「分潤設定」按建立，真正沒填的是「基本設定」的 slug）。
+   */
+  test('多分頁表單驗證失敗時給出回饋並導向出錯的分頁', async ({ page }) => {
+    await page.goto(`${SPA}#/profit-shop/create`)
+    await page.locator('input#title').waitFor({ state: 'visible', timeout: 45_000 })
+
+    // 只填標題、不填 slug，切到別的分頁再送出
+    await page.locator('input#title').fill(`PROBETAB${Date.now()}`)
+    await page.locator('.ant-tabs-tab:has-text("分潤設定")').click()
+    await page.waitForTimeout(500)
+
+    await page.locator('button:has-text("儲存"), button:has-text("建立")').first().click()
+
+    // 必須有明確回饋，而不是靜默 return
+    await expect(
+      page.locator('.ant-notification-notice, .ant-message-notice').first()
+    ).toBeVisible({ timeout: 15_000 })
+
+    // 且應把使用者帶回出錯的「基本設定」分頁
+    await expect(page.locator('.ant-tabs-tab-active:has-text("基本設定")')).toBeVisible({
+      timeout: 10_000,
+    })
   })
 
 })

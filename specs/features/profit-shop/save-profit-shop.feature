@@ -163,7 +163,7 @@ Feature: 建立與更新分潤賣場
       Then settings 應仍包含 showStock 與 showBuyerCount
 
   Rule: 前端（表單）- 多分頁表單的驗證失敗必須導向出錯的分頁
-    # @covered-by: NOT-COVERED ProfitShopForm 的 FIELD_TO_TAB 導向出錯分頁，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/e2e/06-profit-shop/profit-shop-admin-ui.spec.ts::多分頁表單驗證失敗時給出回饋並導向出錯的分頁
 
     # 非作用中的分頁是隱藏的，欄位驗證有跑、紅字有渲染，但使用者看不到。
     # 若父層只是靜默 return，畫面上完全沒有任何回饋——使用者會回報「按了建立沒反應」。
