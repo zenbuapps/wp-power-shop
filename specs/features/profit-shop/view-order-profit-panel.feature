@@ -32,6 +32,7 @@ Feature: 後台訂單頁的分潤資訊面板
     And 站長已登入後台
 
   Rule: 後置（呈現）- 逐一列出帶有分潤歸屬的訂單品項
+    # @covered-by: NOT-COVERED B9 待補 Playwright；面板是 React 元件，專案目前無前端測試框架
 
     Example: 面板列出每一個帶有分潤歸屬的品項
       When 站長開啟訂單 8001 的編輯頁
@@ -53,6 +54,8 @@ Feature: 後台訂單頁的分潤資訊面板
       Then 面板應顯示分潤合計為 228.00
 
   Rule: 後置（凍結）- 面板顯示凍結值而非當下重新計算的值
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_classic_checkout_writes_all_settlement_meta
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_freezes_shop_id_and_partner_term_id
 
     Example: 賣場改比例後歷史訂單的數字不變
       Given 賣場 "夏季賣場" 的分潤比例已改為 30
@@ -66,6 +69,8 @@ Feature: 後台訂單頁的分潤資訊面板
       Then 品項 7001 的實際單價應仍為 240.00
 
   Rule: 後置（已刪）- 賣場或夥伴被刪除時以佔位文字呈現
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_deleted_shop_shows_placeholder_and_keeps_amount
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_deleted_partner_shows_placeholder_and_row_survives
 
     Example: 賣場已刪除時顯示佔位文字
       Given 賣場 "夏季賣場" 已被刪除
@@ -90,6 +95,7 @@ Feature: 後台訂單頁的分潤資訊面板
       Then 該列應顯示「需人工設定比例」的提示
 
   Rule: 後置（狀態）- 結算狀態以中文呈現且與結算頁一致
+    # @covered-by: NOT-COVERED B9 待補 Playwright；狀態中文對映住在前端 ProfitSettlement/types.ts
 
     Scenario Outline: 四種結算狀態各有對應的顯示文字
       Given 品項 7001 的 _settlement_status 為 "<status>"
@@ -109,6 +115,7 @@ Feature: 後台訂單頁的分潤資訊面板
       Then 該列應顯示撥款時間
 
   Rule: 後置（無資料）- 沒有任何分潤歸屬的訂單完全不顯示面板
+    # @covered-by: NOT-COVERED B9 待補 Playwright；「不顯示面板」是 React 條件渲染
 
     Example: 一般訂單不顯示分潤資訊面板
       Given 已存在訂單 8002 其所有品項皆無分潤結算 meta
@@ -117,6 +124,7 @@ Feature: 後台訂單頁的分潤資訊面板
       And 頁面不應出現空的分潤資訊區塊
 
   Rule: 前端（過濾）- 訂單列表可依分潤賣場過濾
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_order_ids_returns_matching_orders
 
     Example: 選定賣場後只顯示該賣場的訂單
       Given 訂單 8001 屬於賣場 1932 且訂單 8002 不屬於任何賣場
@@ -141,6 +149,8 @@ Feature: 後台訂單頁的分潤資訊面板
       Then 列表應回到未過濾的狀態
 
   Rule: 已知落差 - 訂單編號清單有筆數上限
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_order_ids_reports_truncation
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_order_ids_limit_cannot_exceed_cap
 
     # 這是 v1 的刻意取捨（訂單查詢的「指定編號」條件有長度上限），
     # 不是 bug。UI 必須據實告知，不可讓站長誤以為看到的是全部。
@@ -157,6 +167,7 @@ Feature: 後台訂單頁的分潤資訊面板
       Then 畫面應提示結果已被截斷且僅顯示最近的部分訂單
 
   Rule: 安全（權限）- 訂單編號清單端點要求站台管理權限
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_guest_cannot_read_order_ids
 
     Scenario Outline: 權限不足者無法取得訂單編號清單
       Given 目前使用者 <role>

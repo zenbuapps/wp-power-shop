@@ -44,6 +44,8 @@ Feature: 站長標記分潤結算狀態
     And 站長 "站長甲" 的 user_id 為 1 且已登入並具有站台管理權限
 
   Rule: 安全（權限）- 三個標記動作一律要求站台管理權限
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_shop_manager_is_denied_on_every_settlement_endpoint
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_mark_paid_without_nonce_is_rejected
 
     Scenario Outline: 權限不足者無法變更結算狀態
       Given 目前使用者 <role>
@@ -65,6 +67,8 @@ Feature: 站長標記分潤結算狀態
       And 訂單品項 7001 的狀態應仍為 "pending"
 
   Rule: 安全（操作者）- 撥款操作者取自登入身分，不採信請求參數
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_missing_operator_throws
+    # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementStatusMutatorTest.php::test_mark_settled_writes_audit_fields
 
     Example: 撥款操作者記為當前登入的站長
       When 站長 "站長甲" 標記訂單品項 7001 為已撥款
@@ -75,6 +79,10 @@ Feature: 站長標記分潤結算狀態
       Then 訂單品項 7001 的 _settled_by 應為 1
 
   Rule: 後置（撥款）- 只有待結算的紀錄可以標記為已撥款
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_pending_records_are_marked_paid
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_already_paid_records_are_skipped_and_reported
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_cancelled_and_refunded_cannot_be_marked_paid
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_mark_paid_updates_meta_and_writes_audit_log
 
     Example: 標記待結算紀錄為已撥款
       When 站長標記訂單品項 7001 為已撥款
@@ -99,6 +107,9 @@ Feature: 站長標記分潤結算狀態
       And 訂單品項 999999 應出現在失敗清單中
 
   Rule: 後置（逐筆）- 批次操作回傳逐筆結果而非全有全無
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_missing_records_are_reported_as_skipped
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_record_without_status_meta_is_skipped
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_mixed_batch_reports_both_updated_and_skipped
 
     Example: 部分成功時同時回傳成功與失敗清單
       When 站長同時標記訂單品項 7001、7002 與 7003 為已撥款
@@ -122,6 +133,12 @@ Feature: 站長標記分潤結算狀態
       Then 失敗原因應說明無法從 refunded 轉換到 paid
 
   Rule: 安全（併發）- 同一筆紀錄同時被撥款兩次時只能成功一次
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_transition_goes_through_compare_and_set
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_losing_the_race_skips_the_record_and_writes_nothing
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_running_same_batch_twice_does_not_double_count
+    # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementStatusMutatorTest.php::test_second_cas_with_same_from_loses_the_race
+    # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementStatusMutatorTest.php::test_cas_guard_lives_in_sql_where_clause_not_in_php
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_concurrent_mark_paid_does_not_double_count
 
     Example: 兩個並行請求對同一筆撥款只有一個成功
       When 兩個並行請求同時標記訂單品項 7001 為已撥款
@@ -141,6 +158,8 @@ Feature: 站長標記分潤結算狀態
       And 訂單品項 7003 的 _settled_by 不應被改寫
 
   Rule: 後置（稽核）- 每次撥款都必須寫入夥伴的撥款稽核紀錄
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_audit_log_is_written_per_partner
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_audit_failure_is_reported_without_rolling_back_status
 
     Example: 撥款後在夥伴稽核紀錄追加一筆
       When 站長標記訂單品項 7001 與 7002 為已撥款
@@ -171,6 +190,7 @@ Feature: 站長標記分潤結算狀態
       Then 夥伴 "夥伴A" 與 "夥伴B" 應各自新增一筆撥款稽核紀錄
 
   Rule: 後置（取消）- 只有待結算的紀錄可以標記為取消
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_mark_cancelled_updates_pending_records
 
     Example: 標記待結算紀錄為取消
       When 站長標記訂單品項 7001 為取消
@@ -193,6 +213,8 @@ Feature: 站長標記分潤結算狀態
       And 訂單品項 7001 的 _settled_by 應為空
 
   Rule: 後置（沖回）- 人工沖回只接受已撥款的紀錄
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_reverse_paid_rejects_non_paid_records
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_reverse_paid_succeeds_for_paid_records
 
     # 對應設計文件 §7.9 的退款處理 SOP：已撥款後發生退款時，系統只發通知，
     # 由站長判斷後手動執行沖回。**不**自動扣夥伴已撥款項。
@@ -222,6 +244,8 @@ Feature: 站長標記分潤結算狀態
       Then 系統不應對夥伴產生任何負值的撥款紀錄
 
   Rule: 後置（格式）- 回應遵循後台端點的統一外層
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_output_serialises_with_counts
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_list_returns_wrapped_payload_with_pagination
 
     Example: 批次結果包裹在統一外層內
       When 站長標記訂單品項 7001 為已撥款

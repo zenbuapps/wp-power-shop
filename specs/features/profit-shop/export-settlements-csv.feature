@@ -33,6 +33,8 @@ Feature: 匯出分潤結算明細為 CSV
     And 站長已登入且具有站台管理權限
 
   Rule: 安全（權限）- 匯出一律要求站台管理權限
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_guest_cannot_export
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_shop_manager_is_denied_on_every_settlement_endpoint
 
     Scenario Outline: 權限不足者無法匯出
       Given 目前使用者 <role>
@@ -51,6 +53,11 @@ Feature: 匯出分潤結算明細為 CSV
       Then 系統應回傳 403
 
   Rule: 安全（公式注入）- 危險前綴的儲存格必須被中和
+    # @covered-by: tests/Unit/Application/Service/CsvExporterTest.php::test_dangerous_prefixes_are_neutralised
+    # @covered-by: tests/Unit/Application/Service/CsvExporterTest.php::test_dangerous_prefix_after_leading_whitespace_is_neutralised
+    # @covered-by: tests/Unit/Application/Service/CsvExporterTest.php::test_neutralisation_preserves_original_text
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_all_three_user_input_columns_are_escaped
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_export_neutralises_formula_injection_end_to_end
 
     # 中和方式是在值前面加一個單引號，讓試算表把它當成純文字。
 
@@ -98,6 +105,9 @@ Feature: 匯出分潤結算明細為 CSV
       Then 該列應能被標準 CSV 解析器還原為原始欄位值
 
   Rule: 後置（欄位）- 欄位順序與標題固定
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_header_matches_spec_exactly
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_data_row_matches_spec_example
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_order_date_is_date_only
 
     Example: 首列為標題列且欄位順序固定
       When 站長匯出結算明細
@@ -125,6 +135,9 @@ Feature: 匯出分潤結算明細為 CSV
       And 該列的分潤夥伴欄應為 "[已停用夥伴]"
 
   Rule: 後置（範圍）- 匯出內容等同當下的篩選條件
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_export_paginates_through_all_results
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_non_pagination_filters_are_preserved
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_export_respects_filter
 
     Example: 未篩選時匯出全部結算紀錄
       When 站長不套用任何篩選匯出結算明細
@@ -154,6 +167,10 @@ Feature: 匯出分潤結算明細為 CSV
       Then 匯出內容中 order_item_id 7001 應只出現一次
 
   Rule: 後置（格式）- 回應包含檔名與編碼過的內容
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_content_starts_with_utf8_bom
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_output_carries_base64_not_raw_content
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ExportSettlementsUseCaseTest.php::test_filename_and_mime_type
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_export_returns_csv_with_bom_and_header
 
     Example: 匯出回應遵循後台端點的統一外層
       When 站長匯出結算明細
@@ -174,6 +191,7 @@ Feature: 匯出分潤結算明細為 CSV
       And 中文欄位應能被試算表軟體正確顯示
 
   Rule: 已知落差 - 目前未提供的匯出能力
+    # @covered-by: NOT-COVERED 本 Rule 描述的是「目前未提供」的匯出能力，依定義沒有對應實作可測
 
     # 刻意未納入 v1 範圍，避免日後被當成 bug 修掉。
 

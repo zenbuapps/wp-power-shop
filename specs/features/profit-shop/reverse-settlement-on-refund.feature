@@ -40,6 +40,8 @@ Feature: 退款與取消訂單時回沖分潤結算紀錄
     And 訂單 8001 的狀態為 "processing"
 
   Rule: 後置（全額退款）- 尚未撥款的紀錄直接轉為已退款
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_full_refund_flips_pending_to_refunded
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_accumulated_partial_refunds_reaching_full_quantity_become_full_refund
 
     Example: 全額退款把 pending 轉為 refunded
       When 站長對訂單 8001 執行全額退款
@@ -52,6 +54,10 @@ Feature: 退款與取消訂單時回沖分潤結算紀錄
       And 已退款金額應包含 144.00
 
   Rule: 安全（已撥款）- 已撥款的紀錄不得自動變更狀態
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_full_refund_on_paid_record_keeps_paid_and_writes_audit_log
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_full_refund_on_paid_record_persists_refund_after_paid_flag
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_full_refund_on_paid_record_queues_admin_notice
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_full_refund_on_pending_record_does_not_set_refund_after_paid_flag
 
     # 錢已經匯給夥伴了。程式自動把狀態改掉，站長會失去「這筆需要處理」的線索；
     # 自動向夥伴追討更是程式無權決定的業務行為（設計文件 §7.9 明訂需人工處理）。
@@ -80,6 +86,10 @@ Feature: 退款與取消訂單時回沖分潤結算紀錄
       And 該筆應被標記為「已撥款後退款」
 
   Rule: 後置（部分退款）- 依剩餘數量重算分潤金額且狀態不變
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_partial_refund_recalculates_profit_amount_and_keeps_pending
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_partial_refund_does_not_change_frozen_price_and_rate
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_partial_refund_on_paid_record_does_not_change_amount
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_amount_only_refund_without_quantity_does_not_reverse
 
     # 決策 D-3。SettlementRecord 的 profit_amount 是唯讀屬性，
     # 重算的做法是「以新金額重建一筆紀錄」，不是就地改寫欄位。
@@ -106,6 +116,9 @@ Feature: 退款與取消訂單時回沖分潤結算紀錄
       Then 訂單品項 7001 的 _settlement_status 應為 "refunded"
 
   Rule: 後置（取消）- 訂單取消時把尚未撥款的紀錄標為已取消
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_order_cancelled_flips_pending_to_cancelled
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_order_cancelled_does_not_touch_paid_record
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_terminal_status_is_not_rewritten_by_cancel
 
     Example: 訂單取消把 pending 轉為 cancelled
       When 訂單 8001 的狀態變更為 "cancelled"
@@ -127,6 +140,7 @@ Feature: 退款與取消訂單時回沖分潤結算紀錄
         | cancelled |
 
   Rule: 後置（逐筆）- 同一張訂單的多個品項各自獨立處理
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_multiple_line_items_are_reversed_independently
 
     Example: 只退其中一個品項時另一個品項不受影響
       Given 訂單 8001 另有品項 7002 其結算紀錄為 pending 且金額為 "60.00"
@@ -143,6 +157,8 @@ Feature: 退款與取消訂單時回沖分潤結算紀錄
       And 系統應寫入一筆錯誤紀錄
 
   Rule: 後置（隔離）- 沒有分潤紀錄的訂單完全不受影響
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_refund_on_order_without_profit_meta_is_noop
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_hooks_are_registered_by_loader
 
     Example: 一般訂單退款時不做任何事
       Given 已存在訂單 8002 其品項皆無分潤結算 meta
@@ -156,6 +172,7 @@ Feature: 退款與取消訂單時回沖分潤結算紀錄
       Then 系統不應寫入任何分潤結算 meta
 
   Rule: 安全（型別）- 訂閱物件上的品項不得被回沖
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SettlementReversalHookTest.php::test_non_shop_order_type_is_ignored
 
     # 訂閱商品的分潤 meta 會被複製到訂閱物件的品項上。若不限定訂單型別，
     # 同一筆分潤會在主訂單與訂閱物件上各被回沖一次，金額出現雙倍偏差。

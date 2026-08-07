@@ -50,6 +50,8 @@ Feature: 訂閱續訂單帶入分潤結算資訊
       | _settled_by             | 1      |
 
   Rule: 後置（凍結）- 賣場與夥伴的歸屬沿用母訂單不重新判定
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_freezes_shop_id_and_partner_term_id
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_draft_shop_still_carries_attribution_and_rate
 
     Example: 續訂單沿用母訂單的賣場與夥伴
       When 系統為母訂單 8001 建立續訂單
@@ -68,6 +70,8 @@ Feature: 訂閱續訂單帶入分潤結算資訊
       And 續訂單品項的 _profit_partner_term_id 應為 5
 
   Rule: 後置（動態）- 分潤比例重讀賣場的最新設定
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_reads_current_rate_from_shop
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_falls_back_to_inherited_rate_when_shop_deleted
 
     Example: 站長調高比例後續訂單採用新比例
       Given 賣場 "夏季賣場" 的分潤比例已改為 30
@@ -81,6 +85,10 @@ Feature: 訂閱續訂單帶入分潤結算資訊
       And 系統應寫入一筆錯誤紀錄且訊息中不含換行字元
 
   Rule: 後置（重算）- 實際單價與分潤金額依續訂價格重新計算
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_recalculates_actual_price_and_profit_amount
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_recalculates_profit_amount_for_multiple_quantity
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_zero_rate_yields_zero_profit_amount
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_unit_price_division_is_rounded_half_up
 
     Example: 續訂價格與首期不同時重新計算分潤
       Given 該訂閱的續訂單價為 200 且數量為 1
@@ -99,6 +107,10 @@ Feature: 訂閱續訂單帶入分潤結算資訊
       Then 續訂單品項的 _profit_amount 應為 "0.00"
 
   Rule: 安全（重置）- 撥款狀態絕不可從母訂單繼承
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_resets_paid_status_to_pending
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_clears_settled_at_and_settled_by
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_any_inherited_status_is_reset_to_pending
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_real_wcs_renewal_order_resets_paid_status
 
     # 這是本 Feature 存在的主要理由。少了這一段，站長會對同一筆分潤重複撥款，
     # 或以為已撥款而讓夥伴永遠拿不到這期的錢——兩種結果都沒有任何錯誤訊息。
@@ -125,6 +137,9 @@ Feature: 訂閱續訂單帶入分潤結算資訊
         | cancelled     |
 
   Rule: 後置（契約）- 掛載點是 filter，必須回傳續訂單物件
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_hook_returns_the_renewal_order_object
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_hook_returns_order_even_when_shop_repository_throws
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_non_order_input_is_returned_untouched
 
     Example: 處理完成後回傳續訂單本身
       When 系統為母訂單 8001 建立續訂單
@@ -139,6 +154,8 @@ Feature: 訂閱續訂單帶入分潤結算資訊
       And 系統應寫入一筆錯誤紀錄
 
   Rule: 後置（隔離）- 沒有分潤歸屬的續訂單不受影響
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_item_without_profit_meta_is_untouched
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_only_items_with_profit_meta_are_processed
 
     Example: 母訂單沒有分潤 meta 時續訂單也不寫入
       Given 已存在母訂單 8002 其品項皆無分潤結算 meta
@@ -152,6 +169,7 @@ Feature: 訂閱續訂單帶入分潤結算資訊
       And 對應品項 7002 的續訂品項不應包含任何分潤結算 meta
 
   Rule: 環境（相依）- 未安裝訂閱外掛時整段功能不註冊
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_filter_registration_matches_subscriptions_availability
 
     Example: 未安裝訂閱外掛時不掛載續訂處理
       Given 站台未安裝 WooCommerce Subscriptions

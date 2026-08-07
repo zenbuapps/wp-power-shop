@@ -38,6 +38,9 @@ Feature: 站長查詢分潤結算列表與摘要
     And 站長已登入且具有站台管理權限
 
   Rule: 安全（權限）- 結算端點一律要求站台管理權限
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_guest_cannot_read_settlements
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_subscriber_cannot_read_settlements
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_shop_manager_is_denied_on_every_settlement_endpoint
 
     Scenario Outline: 權限不足者無法存取結算端點
       Given 目前使用者 <role>
@@ -58,6 +61,7 @@ Feature: 站長查詢分潤結算列表與摘要
       And 回應不應包含任何結算金額
 
   Rule: 後置（格式）- 後台端點回傳 code / message / data 外層
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_list_returns_wrapped_payload_with_pagination
 
     Example: 結算列表回應包含統一外層
       When 站長查詢結算列表
@@ -90,6 +94,10 @@ Feature: 站長查詢分潤結算列表與摘要
         | status          |
 
   Rule: 前置（篩選）- 支援夥伴、賣場、狀態與日期四種篩選
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_list_filters_by_status
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_list_filters_by_partner
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_unknown_status_filter_is_rejected_not_silently_widened
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ListSettlementsUseCaseTest.php::test_filter_is_passed_through_to_provider
 
     Example: 依夥伴篩選
       When 站長以夥伴 5 查詢結算列表
@@ -127,6 +135,9 @@ Feature: 站長查詢分潤結算列表與摘要
         | ' OR 1=1 -- |
 
   Rule: 前置（分頁）- 分頁參數必須有上限以防資源耗盡
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ListSettlementsUseCaseTest.php::test_returns_paginated_list
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ListSettlementsUseCaseTest.php::test_total_is_full_count_not_page_size
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/ListSettlementsUseCaseTest.php::test_second_page_returns_correct_slice
 
     Scenario Outline: 分頁參數超過上限時收斂到上限值
       When 站長以 page 為 <page> 且 per_page 為 <per_page> 查詢結算列表
@@ -146,6 +157,9 @@ Feature: 站長查詢分潤結算列表與摘要
       Then 實際生效的 per_page 應為 20
 
   Rule: 後置（摘要）- 摘要依狀態分別加總
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_summary_returns_amounts_and_counts
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_summary_respects_filter
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_summary_also_rejects_unknown_status
 
     Example: 摘要分別回傳待撥款、已撥款與退款三組數字
       When 站長查詢結算摘要
@@ -169,6 +183,9 @@ Feature: 站長查詢分潤結算列表與摘要
       And 加總不應出現浮點誤差
 
   Rule: 安全（型別）- 訂閱物件上的品項不得被計入
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_subscription_line_items_are_excluded_from_list
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_subscription_line_items_are_excluded_from_summary
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_subscription_line_items_are_excluded_from_export
 
     Example: 訂閱商品只計入一次
       Given 已存在訂閱物件 9001 其品項帶有與 order_item_id 7001 相同的分潤 meta
@@ -182,6 +199,7 @@ Feature: 站長查詢分潤結算列表與摘要
       Then 待撥款金額應為 "98.00"
 
   Rule: 資料（訂單）- 未成立的訂單不計入結算
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_cancelled_orders_are_excluded
 
     Scenario Outline: 已取消、失敗或已刪除的訂單不出現在結算列表
       Given 訂單 8001 的狀態為 "<order_status>"
@@ -200,6 +218,9 @@ Feature: 站長查詢分潤結算列表與摘要
       Then 回應應包含 order_item_id 7001
 
   Rule: 後置（已刪）- 賣場或夥伴被刪除後仍必須看得到該筆金額
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_deleted_shop_shows_placeholder_and_keeps_amount
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_deleted_partner_shows_placeholder_and_row_survives
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_existing_shop_and_partner_show_real_names
 
     Example: 賣場已刪除時以佔位文字呈現
       Given 賣場 "夏季賣場" 已被刪除
@@ -219,6 +240,9 @@ Feature: 站長查詢分潤結算列表與摘要
       Then 該筆應帶有「需人工設定比例」的標記
 
   Rule: 相容（HPOS）- 訂單儲存模式切換不影響查詢結果
+    # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementSummaryProviderRealAggregationTest.php::test_summary_works_under_hpos_enabled
+    # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementSummaryProviderRealAggregationTest.php::test_summary_works_under_legacy_post_orders
+    # @covered-by: MANUAL 兩條互斥，須跑 composer test:both-order-storage 兩輪才會都執行；沒有 CI matrix 會自動跑
 
     Example: 啟用 HPOS 與未啟用時回傳相同結果
       Given 站台已啟用 HPOS
@@ -226,6 +250,7 @@ Feature: 站長查詢分潤結算列表與摘要
       Then 回應應與未啟用 HPOS 時逐筆相同
 
   Rule: 已知落差 - 目前未提供的查詢能力
+    # @covered-by: NOT-COVERED 本 Rule 描述的是「目前未提供」的查詢能力，依定義沒有對應實作可測
 
     # 以下為刻意未納入 v1 範圍的項目，避免日後被當成 bug 修掉。
 

@@ -51,6 +51,9 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
     And 站台的價格小數位數為 2
 
   Rule: 前置（驗章）- 只有通過簽章驗證的購物車品項才寫入分潤 meta
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_tampered_signature_writes_no_settlement_meta
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_missing_signature_writes_no_settlement_meta
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_v3_signature_bound_to_wrong_product_is_rejected
 
     # 驗章邏輯必須與定價階段共用**同一份實作**，不各寫一份。
     # 兩份靠人維持一致的驗證邏輯一定會分歧，而分歧時兩邊都「正常運作」、沒有錯誤訊息。
@@ -86,6 +89,7 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
         | _profit_signature              |
 
   Rule: 後置（對映）- 11 筆 order meta 的來源與命名必須逐欄位正確
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_classic_checkout_writes_all_settlement_meta
 
     # 這張表是本 Feature 的核心契約。驗收時必須**逐 key 斷言字面值**，
     # 不可用「常數比對常數」——那樣抄錯名字也會通過。
@@ -124,6 +128,9 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       Then 該訂單品項的 _override_signup_fee 應為 "99"
 
   Rule: 後置（金額）- 分潤金額必須以十進位運算求得
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_profit_amount_multiplies_quantity
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_profit_amount_uses_bcmath_without_float_artifacts
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_profit_amount_rounds_half_up
 
     # 公式：actual_price × qty × rate / 100
     # 🔴 禁止寫成浮點乘除。19.99 × 3 × 0.15 這種組合在浮點下就會漂，
@@ -151,6 +158,8 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       And 單筆金額的精度應與結算頁加總的精度相同
 
   Rule: 後置（版本）- 舊版簽章只還原它自己保護過的欄位
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_legacy_v1_signature_is_accepted
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_legacy_v2_signature_is_accepted
 
     # 簽章有 v1 / v2 / v3 三個版本並存。v1 的 payload 從未包含原價與特價，
     # 因此即使購物車上出現這兩筆 meta（可能是攻擊者注入），一律不予採信。
@@ -174,6 +183,7 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       And 該訂單品項的 _override_sale_price 應為 "240.00"
 
   Rule: 後置（時機）- 訂單品項尚未持久化時仍必須寫入成功
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_classic_checkout_writes_all_settlement_meta
 
     Example: 寫入當下訂單品項的 id 為 0
       Given 顧客購物車內有一筆歸屬於賣場 1932 的商品 101
@@ -188,6 +198,8 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       And 結算查詢的金額不應變成兩倍
 
   Rule: 路徑（結帳）- 傳統結帳與 Block 結帳必須產生逐字相同的結果
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_classic_checkout_writes_all_settlement_meta
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_store_api_checkout_writes_settlement_meta
 
     # 目前這兩條路徑共用同一個 WooCommerce 方法，因此單一 hook 即可涵蓋。
     # 🔴 但「共用同一方法」是 WooCommerce 目前的**實作細節**，不是它承諾的契約。
@@ -206,6 +218,9 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       Then 該訂單品項的 11 筆分潤結算 meta 應與傳統結帳逐欄位相同
 
   Rule: 錯誤（賣場已刪）- 賣場消失時仍必須留下歸屬紀錄
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_deleted_shop_still_records_attribution_with_zero_rate
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_zero_rate_still_records_attribution
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_unpublished_shop_still_freezes_rate
 
     # 決策 D-1：定價階段不重讀賣場（只驗簽章對凍結價格），所以顧客**確實付了分潤價**。
     # 「完全不寫」會造成「顧客付了分潤價、系統零紀錄」——那正是本鏈路要消滅的東西。
@@ -229,6 +244,7 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       Then 該筆紀錄應被標示為需人工設定比例
 
   Rule: 錯誤（降級）- 任何失敗一律靜默降級，永不中斷顧客結帳
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_tampered_signature_writes_no_settlement_meta
 
     Example: 寫入分潤 meta 失敗時訂單仍然成立
       Given 寫入分潤 meta 的過程將拋出例外
@@ -238,6 +254,7 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       And 顧客不應看到任何錯誤訊息
 
   Rule: 環境（後台）- 後台情境同樣必須寫入分潤 meta
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_hook_is_registered_by_loader_at_priority_20
 
     # 🔴 不可照抄購物車 hook 的「後台且非 AJAX 就不掛載」守門。
     #    退款一定發生在後台；站長手動建單也在後台。照抄的症狀是
@@ -250,6 +267,7 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       Then 該訂單品項應包含 11 筆分潤結算 meta
 
   Rule: 後置（隔離）- 非分潤商品不受任何影響
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_plain_cart_item_is_untouched
 
     Example: 一般商品的訂單品項零副作用
       Given 顧客購物車內有一筆未歸屬任何賣場的商品 205
