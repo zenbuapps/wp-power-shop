@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **51**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **49**
 
 ## 逐檔覆蓋率
 
@@ -87,8 +87,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：PartnerForm 的「產生」按鈕（crypto.getRandomValues，只填入不送出），專案無前端測試框架（B9 待補）
 - `manage-partner-credentials` — 已知落差（建立）- 建立夥伴時的密碼沒有後端強度驗證
   - 理由：本 Rule 描述的正是 TD-33「CreatePartner 未過 PartnerPassword VO」這個已知落差，依定義沒有對應實作可測
-- `manage-profit-partner` — 後置（列表）- 夥伴列表可依關鍵字與圖片有無篩選
-  - 理由：「依關鍵字與圖片有無篩選」是 List/Filter.tsx 的 client-side useMemo 過濾，專案無前端測試框架（B9 待補）
 - `query-settlements` — 已知落差 - 目前未提供的查詢能力
   - 理由：本 Rule 描述的是「目前未提供」的查詢能力，依定義沒有對應實作可測
 - `query-shop-detail` — 前端（填表）- 編輯頁載入後不得被背景重取資料覆蓋
@@ -143,8 +141,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：100 筆上限只在前端把關，後端無對應驗證（見 profit-shop.rule.md §12.9）
 - `select-shop-products` — 後置（加入）- 賣場商品總數超過 500 筆時應警示但不阻擋
   - 理由：500 筆軟上限只在前端警示，後端無對應驗證（見 profit-shop.rule.md §12.9）
-- `validate-shop-slug` — 前端（即時）- 輸入時延遲驗證，且編輯自己時不與自己衝突
-  - 理由：SlugInput 的 debounce + enabled 切換 + currentSlug 比對，屬 React 元件行為（B9 待補）
 - `view-order-profit-panel` — 後置（呈現）- 逐一列出帶有分潤歸屬的訂單品項
   - 理由：B9 待補 Playwright；面板是 React 元件，專案目前無前端測試框架
 - `view-order-profit-panel` — 後置（狀態）- 結算狀態以中文呈現且與結算頁一致

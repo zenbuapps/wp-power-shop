@@ -143,7 +143,7 @@ Feature: 管理分潤夥伴
   Rule: 後置（列表）- 夥伴列表可依關鍵字與圖片有無篩選
     # @covered-by: tests/Integration/Application/PartnerCrudTest.php::test_list_partners_returns_collection
     # @covered-by: tests/Unit/Application/UseCase/Partner/ListPartnersTest.php::test_returns_partners_in_id_ascending_order
-    # @covered-by: NOT-COVERED 「依關鍵字與圖片有無篩選」是 List/Filter.tsx 的 client-side useMemo 過濾，專案無前端測試框架（B9 待補）
+    # @covered-by: tests/e2e/06-profit-shop/profit-shop-admin-ui.spec.ts::夥伴列表可依關鍵字篩選
 
     Example: 以關鍵字篩選夥伴
       When 管理者 "Admin" 以關鍵字 "partner-a" 篩選夥伴列表

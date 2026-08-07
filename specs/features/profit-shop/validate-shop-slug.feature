@@ -118,7 +118,7 @@ Feature: 即時驗證賣場永久連結
       Then 回應的 available 應為 true
 
   Rule: 前端（即時）- 輸入時延遲驗證，且編輯自己時不與自己衝突
-    # @covered-by: NOT-COVERED SlugInput 的 debounce + enabled 切換 + currentSlug 比對，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/e2e/06-profit-shop/profit-shop-admin-ui.spec.ts::建立頁的永久連結欄位會即時回報衝突
 
     Example: 輸入停止後才發出驗證查詢
       When 管理者 "Admin" 連續輸入永久連結的每一個字元
