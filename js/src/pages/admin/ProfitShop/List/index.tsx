@@ -76,7 +76,7 @@ const MODE_TAG: Record<TProfitShopMode, { color: string; label: string }> = {
  * 只負責獨立頁面模式 —— Shortcode 模式的操作欄改渲染「複製」按鈕，
  * 不再走這個函式（見 columns 的 actions 欄註解）。
  */
-const resolveOpenShopBlockedReason = (shop: TProfitShop): string | null => {
+export const resolveOpenShopBlockedReason = (shop: TProfitShop): string | null => {
 	if (!shop.slug) {
 		return '此賣場尚未設定永久連結，無法組出前台網址'
 	}
@@ -95,7 +95,7 @@ const resolveOpenShopBlockedReason = (shop: TProfitShop): string | null => {
  * 沒設永久連結一樣複製得出可用的短碼。這是它與「開啟」判斷條件的唯一差異，
  * 別為了 DRY 把兩個函式併成一個。
  */
-const resolveCopyShortcodeBlockedReason = (
+export const resolveCopyShortcodeBlockedReason = (
 	shop: TProfitShop
 ): string | null => {
 	// 後端 shortcode callback 對已刪除的賣場回空字串：短碼複製得出來、貼上去卻什麼都
@@ -118,7 +118,7 @@ const resolveCopyShortcodeBlockedReason = (
  * @param partner   該賣場的分潤夥伴（找不到時為 undefined）
  * @param isLoading 夥伴列表是否仍在載入（載入中不可判定為「找不到」）
  */
-const resolveViewReportBlockedReason = (
+export const resolveViewReportBlockedReason = (
 	partner: TProfitPartner | undefined,
 	isLoading: boolean
 ): string | null => {

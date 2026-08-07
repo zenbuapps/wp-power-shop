@@ -152,7 +152,10 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       And 頁面不應出現第二個 canonical 連結
 
   Rule: 前端（後台）- 短碼模式的賣場在列表提供複製短碼
-    # @covered-by: NOT-COVERED ProfitShop/List 的「複製短碼」按鈕，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/shopListActions.test.ts::正常賣場可複製
+    # @covered-by: tests/js/shopListActions.test.ts::🔴 沒有永久連結時**仍可**複製——這是與「開啟」的唯一差異
+    # @covered-by: tests/js/shopListActions.test.ts::短碼以 id 組成，與 slug 完全無關
+    # @covered-by: tests/js/shopListActions.test.ts::已刪除的賣場停用（短碼貼上後什麼都不顯示，且無錯誤提示）
 
     Example: 複製短碼可用於未設定永久連結的賣場
       Given 賣場 "夏季賣場" 的模式為 shortcode 且未設定永久連結

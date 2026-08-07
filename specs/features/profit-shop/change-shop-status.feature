@@ -133,7 +133,11 @@ Feature: 變更分潤賣場的上下架狀態與複製賣場
       Then 回應的 available 應為 true
 
   Rule: 前端（列表）- 操作欄依賣場狀態與模式呈現不同的主要動作
-    # @covered-by: NOT-COVERED ProfitShop/List 的 renderPrimaryAction 依 mode / status 切換動作，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/js/shopListActions.test.ts::正常賣場可開啟
+    # @covered-by: tests/js/shopListActions.test.ts::已刪除的賣場停用（後端一律回 404）
+    # @covered-by: tests/js/shopListActions.test.ts::草稿賣場**可以**開啟（站長預覽用）
+    # @covered-by: tests/js/shopListActions.test.ts::沒有永久連結時停用（組不出前台網址）
+    # @covered-by: tests/js/shopListActions.test.ts::已刪除：「開啟」與「複製短碼」都擋，但「查看報表」不受賣場狀態影響
 
     # ⚠️ 各動作的停用條件刻意分開判斷，不為了 DRY 併成一個函式——
     #    它們看起來高度相似，但差異點正是關鍵。
