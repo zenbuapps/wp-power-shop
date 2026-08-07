@@ -102,7 +102,7 @@ Feature: 查詢分潤賣場詳情與列表
       Then 表單應填入新賣場的資料
 
   Rule: 前端（列表）- 列表頁採篩選卡片加實體列表的標準版型
-    # @covered-by: NOT-COVERED 篩選卡片＋實體列表版型屬 React 元件（admin-list-ui.rule.md），B9 待補
+    # @covered-by: tests/e2e/06-profit-shop/profit-shop-admin-ui.spec.ts::列表頁採「篩選卡片 + 實體列表」標準版型
 
     Example: 列表頁呈現兩張卡片
       When 管理者 "Admin" 開啟賣場列表頁

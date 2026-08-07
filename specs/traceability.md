@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **53**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **52**
 
 ## 逐檔覆蓋率
 
@@ -93,8 +93,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：本 Rule 描述的是「目前未提供」的查詢能力，依定義沒有對應實作可測
 - `query-shop-detail` — 前端（填表）- 編輯頁載入後不得被背景重取資料覆蓋
   - 理由：Edit 頁的 filledIdRef + refetchOnWindowFocus:false 防覆寫，屬 React 元件行為（B9 待補）
-- `query-shop-detail` — 前端（列表）- 列表頁採篩選卡片加實體列表的標準版型
-  - 理由：篩選卡片＋實體列表版型屬 React 元件（admin-list-ui.rule.md），B9 待補
 - `render-shop-front` — 已知落差（提示）- 原生表單加購成功後沒有成功提示
   - 理由：本 Rule 描述的正是 TD-49「原生表單加購成功後沒有成功提示」這個已知落差，依定義沒有對應實作可測
 - `render-shop-front` — 已知落差（版型）- 以頁面建構器排版的賣場內容不會被渲染
