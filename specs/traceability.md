@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **42**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **38**
 
 ## 逐檔覆蓋率
 
@@ -95,24 +95,16 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：本 Rule 描述的正是 TD-28「Elementor 版型不生效」這個已知落差，依定義沒有對應實作可測
 - `render-shop-via-shortcode` — 前端（後台）- 短碼模式的賣場在列表提供複製短碼
   - 理由：ProfitShop/List 的「複製短碼」按鈕，屬 React 元件行為（B9 待補）
-- `render-shop-via-shortcode` — 已知落差（存取）- 短碼模式的賣場公開網址仍然開得起來
-  - 理由：本 Rule 描述的正是 TD-13「shortcode 模式賣場公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
 - `save-variation-overrides` — 前端（展開）- 可變商品在商品名稱欄提供展開鈕
   - 理由：ItemsEditor 的 showExpandColumn:false + 自刻展開鈕，屬 React 元件行為（B9 待補）
 - `save-variation-overrides` — 前端（失效）- 賣場保存了已不存在的變體時必須顯示且可移除
   - 理由：VariationOverrideEditor 的孤兒鍵顯示與移除鈕，屬 React 元件行為（B9 待補）
 - `save-variation-overrides` — 前端（可變商品）- 商品層的三個欄位改到變體層設定，但殘留值必須顯示
   - 理由：ItemsEditor 對可變商品的殘留值顯示與一鍵清除，屬 React 元件行為（B9 待補）
-- `save-variation-overrides` — 已知落差（前台）- 變體層灌水購買人數目前沒有任何前台顯示點
-  - 理由：本 Rule 描述的正是 TD-15「變體層灌水人數無前台顯示點」這個已知落差，依定義沒有對應實作可測
 - `save-variation-overrides` — 已知落差（數量）- 變體超過 100 個時只顯示前 100 個
   - 理由：本 Rule 描述的正是 TD-16「wc-rest per_page 硬上限 100」這個已知落差，依定義沒有對應實作可測
-- `schedule-shop-availability` — 已知落差（存取）- 全部不勾只藏內容，公開網址仍然開得起來
-  - 理由：本 Rule 描述的正是 TD-46「全部不勾只藏內容、公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
 - `select-product-variation` — 已知落差（可購買性）- 混合設定下可購買性可能反轉
   - 理由：本 Rule 描述的正是 TD-53「混合設定下可購買性可能反轉」這個已知落差，依定義沒有對應實作可測
-- `select-product-variation` — 已知落差（屬性名）- 含空白或特殊符號的自訂屬性永遠匹配不到
-  - 理由：本 Rule 描述的正是「含空白或特殊符號的自訂屬性永遠匹配不到」這個已知落差，依定義沒有對應實作可測
 - `select-shop-products` — 前置（開啟）- Modal 必須提供與商品列表頁相同的篩選能力
   - 理由：ProductPickerModal 內嵌 ProductTableBody，屬 React 元件行為（B9 待補）
 - `select-shop-products` — 前置（勾選）- 已在賣場中的商品不可重複勾選

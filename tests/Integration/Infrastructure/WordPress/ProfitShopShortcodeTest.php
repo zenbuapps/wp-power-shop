@@ -976,6 +976,146 @@ final class ProfitShopShortcodeTest extends TestCase {
 		$this->assertStringNotContainsString( 'name="add-to-cart"', $html, '閉店賣場不得印出可送出的加購表單' );
 	}
 
+	/**
+	 * 🔒 現況鎖：短碼模式的賣場**公開網址仍然開得起來**
+	 *
+	 * 規格 Rule「已知落差（存取）- 短碼模式的賣場公開網址仍然開得起來」（TD-13）。
+	 *
+	 * `ProfitShopRenderer::maybe_render` **完全不看 mode**，只檢查 slug 與 status。
+	 * 站長把賣場設成 shortcode 模式並不會讓 `/profit-shop/{slug}/` 失效——
+	 * 它照樣渲染、照樣被搜尋引擎索引。`BasicTab.tsx` 那句據實告知的警語
+	 * 就是為此存在，**不可**因為列表頁有了「複製短碼」按鈕就把它清掉。
+	 *
+	 * ⚠️ 轉紅代表 Renderer 開始檢查 mode 了。那會讓**既有已上線**的 shortcode
+	 * 模式賣場網址突然變 404（blast radius 遠大於單一功能），若真的要做，
+	 * 請同步更新 TD-13、該 Rule 敘述與 BasicTab 的警語。
+	 *
+	 * @test
+	 * @group edge
+	 * @group security
+	 */
+	public function test_known_gap_shortcode_mode_shop_still_renders_via_public_url(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '短碼模式商品',
+				'regular_price' => '500',
+			]
+		);
+		$shop_id = $this->create_shop( [ $this->item_for( $product->get_id() ) ] );
+
+		// create_shop() 建立的就是 ShopMode::SHORTCODE
+		$shop = $this->repo->find( $shop_id );
+		$this->assertNotNull( $shop );
+		$this->assertSame( 'shortcode', $shop->mode->value, '前置：本測試需要 shortcode 模式的賣場' );
+
+		// 走「獨立頁面」那條渲染路徑（= 公開網址會看到的內容）
+		$html = $this->render_template_as_renderer( $shop );
+
+		$this->assertStringContainsString(
+			'短碼模式商品',
+			$html,
+			'現況：shortcode 模式的賣場，公開網址一樣渲染得出商品（TD-13）'
+		);
+	}
+
+	/**
+	 * 🔒 現況鎖：呈現區塊全部不勾時，**公開網址仍回得了內容**（只是沒有商品）
+	 *
+	 * 規格 Rule「已知落差（存取）- 全部不勾只藏內容，公開網址仍然開得起來」（TD-46）。
+	 *
+	 * 「什麼都不顯示」是**呈現設定**，不是存取控制——賣場標題與站長自訂內容照印。
+	 * 改成 404 會讓兩條渲染路徑的輸出分歧，直接打破
+	 * `test_renderer_and_shortcode_paths_render_identical_dom`
+	 * （shortcode 情境不可能對宿主頁面回 404）。
+	 *
+	 * ⚠️ 轉紅代表有人把它改成擋存取了，請同步更新 TD-46 與該 Rule 敘述。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_known_gap_empty_display_parts_still_render_page_shell(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '不該出現的商品',
+				'regular_price' => '500',
+			]
+		);
+		$shop_id = $this->create_shop(
+			[ $this->item_for( $product->get_id() ) ],
+			'publish',
+			[
+				// 已結束販售 + 三個呈現區塊全部不勾
+				'endTime'      => 1000000000000,
+				'afterDisplay' => [],
+			]
+		);
+
+		$shop = $this->repo->find( $shop_id );
+		$this->assertNotNull( $shop );
+		$html = $this->render_template_as_renderer( $shop );
+
+		// 商品不印（呈現設定生效）
+		$this->assertStringNotContainsString( '不該出現的商品', $html, '全部不勾時不得印出商品' );
+		// 但頁面殼仍在（沒有變成 404 / 空字串）
+		$this->assertNotSame( '', trim( $html ), '現況：全部不勾只是不顯示內容，頁面本身仍然渲染（TD-46）' );
+		$this->assertStringContainsString( 'ps-profit-shop-front', $html, '賣場容器仍應存在' );
+	}
+
+	/**
+	 * 🔒 現況鎖：變體層灌水購買人數**沒有任何前台顯示點**
+	 *
+	 * 規格 Rule「已知落差（前台）- 變體層灌水購買人數目前沒有任何前台顯示點」（TD-15）。
+	 *
+	 * 商品層的 `inflated_count` 會加進卡片的「已售 N 件」，變體層的則是
+	 * 「存得進去、讀得出來、沒人用」——賣場前台只渲染父商品卡片，
+	 * 變體選擇整段發生在 Modal 內，而 Modal 沒有對應的顯示位置。
+	 *
+	 * ⚠️ 轉紅代表補上顯示點了，請同步更新 TD-15 與該 Rule 敘述。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_known_gap_variation_inflated_count_has_no_frontend_display(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '變體灌水測試商品',
+				'regular_price' => '500',
+			]
+		);
+
+		// 商品層灌水 0、變體層灌水 999——若前台有顯示點，999 會出現在輸出裡
+		$item    = new OverrideItem(
+			product_id: $product->get_id(),
+			override: new PriceOverride( null, null, null ),
+			inflated_count: new InflatedCount( 0 ),
+			variations: [
+				12345 => new VariationOverride(
+					new PriceOverride( null, null, null ),
+					new InflatedCount( 999 )
+				),
+			]
+		);
+		$shop_id = $this->create_shop( [ $item ] );
+
+		$shop = $this->repo->find( $shop_id );
+		$this->assertNotNull( $shop );
+		$html = $this->render_template_as_renderer( $shop );
+
+		// ⚠️ 不可用裸數字 '999' 斷言——toast 的 style="z-index:9999" 會誤中。
+		// 顯示點若存在，會以「已售 N 件」的形式出現（與商品層同一個文案）。
+		$this->assertStringNotContainsString(
+			'已售 999',
+			$html,
+			'現況：變體層灌水購買人數在前台沒有任何顯示點（TD-15）'
+		);
+		// 商品層灌水為 0 且無真實銷量 ⇒ 整個「已售」區塊都不該出現
+		$this->assertStringNotContainsString(
+			'已售',
+			$html,
+			'商品層灌水 0 + 無真實銷量時不印已售區塊；變體層的 999 也不該從任何管道漏出來'
+		);
+	}
+
 	// ========== Helpers ==========
 
 	/**

@@ -341,3 +341,62 @@ describe('Rule: 後置（更新）- 選中變體後同步更新畫面與表單�
 		expect(submitEnabled()).toBe(false)
 	})
 })
+
+describe('Rule: 已知落差（屬性名）- 含空白或特殊符號的自訂屬性永遠匹配不到', () => {
+	/**
+	 * 🔒 現況鎖（characterization test）：**這條測的是落差確實存在**
+	 *
+	 * WooCommerce 對自訂（非 taxonomy）屬性，在 `get_available_variations()` 的
+	 * `attributes` 鍵上會套 `sanitize_title()`——「顏色 深」之類含空白的名稱會變成
+	 * `attribute_%e9%a1%8f%e8%89%b2-%e6%b7%b1`（空白 → `-`、中文 → percent-encode）。
+	 *
+	 * 而 DOM 的 `data-ps-attr-name` 來自 `get_variation_attributes()`，是**未經處理的
+	 * 原始名稱**。`findBestVariation()` 只做 `safeDecode()` + 去 `attribute_` 前綴，
+	 * 還原不出被 `sanitize_title()` 改掉的空白 ⇒ 兩邊永遠比不出相等
+	 * ⇒ 該商品**沒有任何輸入組合能匹配**，按鈕永遠停用，且沒有任何錯誤訊息。
+	 *
+	 * ⚠️ 轉紅代表有人補上了 sanitize_title 等價的正規化——那是好事，請同步：
+	 *   1. 把 select-product-variation.feature 的該 Rule 從「已知落差」改寫成正向規格
+	 *   2. 把本測試改成驗證「含空白的屬性可以正常匹配」
+	 * 不要為了讓它綠而把正規化拿掉。
+	 */
+	it('含空白的自訂屬性目前匹配不到任何變體（已知落差）', () => {
+		setupShop({
+			// DOM 上是原始名稱（含空白）
+			attributes: { '顏色 深': ['紅'], size: ['l'] },
+			// 變體 JSON 的鍵是 sanitize_title() 之後的（空白變 -、中文 percent-encode）
+			variations: [
+				v(200, {
+					'attribute_%e9%a1%8f%e8%89%b2-%e6%b7%b1': '紅',
+					size: 'l',
+				}),
+			],
+		})
+
+		chooseAttribute('顏色 深', '紅')
+		chooseAttribute('size', 'l')
+
+		// 現況：選滿了也匹配不到 → variation_id 仍為空、加購按鈕停用
+		expect(currentVariationId()).toBe('')
+		expect(submitEnabled()).toBe(false)
+	})
+
+	/**
+	 * 對照組：**不含空白**的自訂中文屬性可以正常匹配
+	 *
+	 * `sanitize_title()` 對純中文只做 percent-encode，而 `safeDecode()` 解得回來
+	 * ⇒ 這種商品是正常的。有了這條對照，上面那條紅掉時才分辨得出
+	 * 「是正規化修好了」還是「連原本能用的也壞了」。
+	 */
+	it('不含空白的中文屬性可以正常匹配（對照組）', () => {
+		setupShop({
+			attributes: { 顏色: ['紅'], size: ['l'] },
+			variations: [v(201, { 'attribute_%e9%a1%8f%e8%89%b2': '紅', size: 'l' })],
+		})
+
+		chooseAttribute('顏色', '紅')
+		chooseAttribute('size', 'l')
+
+		expect(currentVariationId()).toBe('201')
+	})
+})

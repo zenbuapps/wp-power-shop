@@ -160,7 +160,7 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       Then 「複製」應為可用狀態
 
   Rule: 已知落差（存取）- 短碼模式的賣場公開網址仍然開得起來
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-13「shortcode 模式賣場公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_known_gap_shortcode_mode_shop_still_renders_via_public_url
 
     # ⚠️ specs/tech-debt.md TD-13（部分解決）：
     #   短碼本身已實作可用，但渲染流程**完全不檢查賣場模式**，

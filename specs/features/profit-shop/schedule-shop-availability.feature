@@ -269,7 +269,7 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 畫面應說明時間以瀏覽器時區顯示而判斷以伺服器時間為準
 
   Rule: 已知落差（存取）- 全部不勾只藏內容，公開網址仍然開得起來
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-46「全部不勾只藏內容、公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_known_gap_empty_display_parts_still_render_page_shell
 
     # ⚠️ specs/tech-debt.md TD-46：呈現設定不等於存取控制。
     #   改成 404 會讓獨立頁面與短碼兩條路徑的輸出分歧，

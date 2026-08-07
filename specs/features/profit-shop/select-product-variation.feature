@@ -199,7 +199,8 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       Then 加購按鈕應為停用狀態且顯示已售完
 
   Rule: 已知落差（屬性名）- 含空白或特殊符號的自訂屬性永遠匹配不到
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是「含空白或特殊符號的自訂屬性永遠匹配不到」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/js/selectProductVariation.test.ts::含空白的自訂屬性目前匹配不到任何變體（已知落差）
+    # @covered-by: tests/js/selectProductVariation.test.ts::不含空白的中文屬性可以正常匹配（對照組）
 
     # ⚠️ specs/tech-debt.md TD-51：這是既有缺陷。
     #   變體屬性的鍵經過 WooCommerce 的標題清理（空白轉連字號、& 與 / 直接刪除），

@@ -210,7 +210,7 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       And 畫面應提供一鍵清除該覆寫的操作
 
   Rule: 已知落差（前台）- 變體層灌水購買人數目前沒有任何前台顯示點
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-15「變體層灌水人數無前台顯示點」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_known_gap_variation_inflated_count_has_no_frontend_display
 
     # ⚠️ specs/tech-debt.md TD-15：賣場前台只渲染父商品卡片，
     #    「已售 N 件」讀的是**商品層**的灌水購買人數；變體層的目前零顯示點。
