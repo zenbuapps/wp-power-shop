@@ -895,7 +895,17 @@ item  shop_id  partner  rate  actual  amount  status    post_status
 
 🔴 **但這次驗證只涵蓋 legacy posts 路徑，HPOS 路徑在真實環境仍是零驗證**：實測站台 `woocommerce_custom_orders_table_enabled = no`（未啟用 HPOS），訂單 2241 只存在於 `wp_posts`（`post_type = shop_order`），`wp_wc_orders` 內沒有這筆。這與 `settlement-hook-notes.md` 記載的「HPOS 分支只有程式碼審查、缺自動化測試覆蓋」是**同一個缺口的另一半**——自動化測試沒跑 HPOS、真實站台也不是 HPOS ⇒ **HPOS 那一半的雙路徑邏輯，目前完全沒有任何形式的驗證**（見 `specs/tech-debt.md` TD-88）。⚠️ 連帶的診斷提醒：在這個站台上做 SQL 診斷必須用 legacy 路徑（`wp_posts` + `post_type` / `post_status`），**不是** HPOS 路徑（`wp_wc_orders` + `type` / `status`）——team lead 第一次寫模擬查詢誤 JOIN `wp_wc_orders` 得到零筆，一度誤判結算查詢壞掉，改用 `wp_posts` 才撈到。
 
-**仍未驗證的部分**（誠實標註，不要含糊）：wp-admin 的 UI（結算頁 `/profit-settlements` 與訂單頁分潤面板）需要登入 wp-admin，登入憑證屬使用者獨有資訊，尚未驗證——前端目前只過了 `tsc`（127→118）與 `pnpm build` 兩道靜態閘門；夥伴報表前台（`/profit-report/{slug}/`）需夥伴密碼，同樣尚未驗證；`test_real_wcs_renewal_order_resets_paid_status` 在 wp-env 恆 skip（未裝 WooCommerce Subscriptions），續訂路徑的 hook 接線與 WCS 本身的複製行為只在單元/整合層級用手工建構的 fixture 驗證過，沒有真的呼叫過 `wcs_create_renewal_order()`；只退金額、不退數量的退款（`qty=0` 但 `total>0`）不會觸發回沖——刻意接受的既有邊界，非缺陷；現有測試無法區分「正確的 CAS」與「偽裝成 CAS 的 read-check-write」——白盒斷言待補，見 `specs/tech-debt.md` TD-72。
+**wp-admin UI 已於 2026-08-07 補驗通過**（憑證取自專案根目錄 `.env` 的 `TEST_USERNAME` / `TEST_PASSWORD`，站台經 Cloudflare tunnel 對外為 `local-turbo.powerhouse.tw`）：
+
+| 驗證項 | 實測結果 |
+|---|---|
+| 結算頁 `#/profit-settlements` | 側邊選單出現「分潤結算」；篩選卡片（夥伴 / 賣場 / 狀態 / 訂單日期區間）+ **4 張摘要卡**（待撥款 NT$60.00／1 筆、已撥款 / 已退款 / 已取消各 0）+ 列表列出 #2241、夥伴、賣場、實際單價 NT$600.00、應分潤 NT$60.00 10%、狀態「待結算」 |
+| 訂單頁分潤面板 `#/orders/edit/2241` | 「分潤資訊」區塊列出商品 / 賣場 / 夥伴 / 比例 10% / 實際單價 NT$600 / 應分潤 NT$60 / 結算狀態「待結算」+ 分潤合計 |
+| 二次確認 Modal | 點「標記已撥款」後彈出，標題「確認標記為已撥款」，**列出完整明細供覆核**（訂單 / 商品 / 夥伴 / 狀態 / 應分潤 60.00），按鈕為「取消」與「確認標記已撥款（1 筆）」 |
+| CAS 撥款寫入 | 確認後 DB 實際變為 `_settlement_status = paid` / `_settled_at = 1786071849` / `_settled_by = 2`；partner termmeta `_partner_settled_log` 寫入 `[{"date":"2026-08-07","timestamp":1786071849,"type":"settle","total":"60.00","item_count":1,"by":2}]`，格式與設計 §5.5 一致 |
+| 快取失效（Pitfall #10） | 撥款後**摘要卡立即更新**（待撥款 0 筆 / 已撥款 1 筆），**列表列約慢數秒**才轉為「已撥款 2026-08-07 11:04」且操作鈕依狀態切換為「人工沖回」。⚠️ team lead 曾在只等 12 秒時誤判為「快取失效只生效一半的 bug」，再等 8 秒即自行更新、重整後亦一致 ⇒ **是兩個查詢的 refetch 時間差，不是缺陷**。日後觀察到同型現象時，先延長等待與重整確認，不要急著歸咎快取失效 |
+
+**仍未驗證的部分**（誠實標註，不要含糊）：夥伴報表前台（`/profit-report/{slug}/`）需夥伴密碼，尚未驗證；`test_real_wcs_renewal_order_resets_paid_status` 在 wp-env 恆 skip（未裝 WooCommerce Subscriptions），續訂路徑的 hook 接線與 WCS 本身的複製行為只在單元/整合層級用手工建構的 fixture 驗證過，沒有真的呼叫過 `wcs_create_renewal_order()`；只退金額、不退數量的退款（`qty=0` 但 `total>0`）不會觸發回沖——刻意接受的既有邊界，非缺陷；現有測試無法區分「正確的 CAS」與「偽裝成 CAS 的 read-check-write」——白盒斷言待補，見 `specs/tech-debt.md` TD-72。
 
 **測試資料**：訂單 **#2241** 已**刻意保留**（未刪除）——它是目前站台上唯一一筆帶完整分潤紀錄的訂單，可用於日後驗證結算頁與夥伴報表兩塊尚未驗證的 UI。**不要**誤判為測試殘留的髒資料而刪除。
 

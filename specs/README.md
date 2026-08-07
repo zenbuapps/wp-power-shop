@@ -135,11 +135,16 @@ specs/
 > `_profit_rate` 即時讀賣場當下值全部在真實環境確認正確。完整對照表見
 > `.claude/CLAUDE.md`「Phase 17」章節；該筆訂單刻意保留供後續 UI 驗證使用。
 >
+> ✅ **wp-admin UI 已於 2026-08-07 補驗通過**：結算頁（4 張摘要卡 + 列表 + 篩選）、
+> 訂單頁分潤資訊面板、標記已撥款的二次確認 Modal、CAS 撥款寫入
+> （`_settlement_status` 轉為 `paid`、`_settled_at` / `_settled_by` 寫入、
+> partner termmeta `_partner_settled_log` 格式與設計 §5.5 一致）全部實測正常。
+> 詳見 `.claude/CLAUDE.md`「Phase 17」章節的驗證表。
+>
 > 🔴 **尚未驗證的部分**：(1) 站台**未啟用 HPOS**，本次驗證只涵蓋 legacy posts
 > 路徑，HPOS 雙路徑的 HPOS 那一半完全沒有任何形式的驗證（自動化測試與真實站台
-> 皆未覆蓋，見 `specs/tech-debt.md` TD-88）；(2) wp-admin UI（結算頁
-> `/profit-settlements`、訂單頁分潤面板）與夥伴報表前台（`/profit-report/{slug}/`）
-> 需要登入憑證，尚未驗證，前端目前只過 `tsc` / `pnpm build` 兩道靜態閘門；
+> 皆未覆蓋，見 `specs/tech-debt.md` TD-88）；(2) 夥伴報表前台
+> （`/profit-report/{slug}/`）需夥伴密碼，尚未驗證；
 > (3) 訂閱續訂路徑（`test_real_wcs_renewal_order_resets_paid_status`）在 wp-env
 > 因未安裝 WooCommerce Subscriptions 恆 skip，只在單元/整合層級以手工 fixture
 > 驗證。詳見 `.claude/CLAUDE.md`「Phase 17」章節。
