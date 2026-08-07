@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **37**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **36**
 
 ## 逐檔覆蓋率
 
@@ -51,8 +51,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
 
 - `add-to-cart-from-modal` — 已知落差（第三方）- 購物車已有訂閱商品時非同步加購可能回傳非預期格式
   - 理由：本 Rule 描述的正是 TD-42「WooCommerce Subscriptions 在 fragments 掛不存在的靜態方法」這個已知落差，依定義沒有對應實作可測
-- `apply-single-product-override-price` — 已知落差（父商品）- 無可購買變體的可變商品在單品頁仍顯示覆寫價
-  - 理由：本 Rule 描述的正是 TD-68「無可購買變體的可變父商品在單品頁仍顯示覆寫價」這個已知落差，依定義沒有對應實作可測
 - `apply-single-product-override-price` — 文案（一致）- 後台的據實揭露文案必須與實際作用範圍一致
   - 理由：VariationOverrideEditor 的據實揭露 Alert 文案，屬 React 元件內容（B9 待補）。⚠️ TD-20 即為此類文案與實際行為脫節的前例
 - `change-partner-password` — 前端（防呆）- 表單必須阻擋無意義的輸入並防止重複送出

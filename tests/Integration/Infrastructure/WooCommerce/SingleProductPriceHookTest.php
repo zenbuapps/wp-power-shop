@@ -518,6 +518,69 @@ final class SingleProductPriceHookTest extends TestCase {
 		$this->assertFalse( $fresh->is_purchasable(), '⇒ 也就加不進購物車、不會產生無歸屬銷售' );
 	}
 
+	/**
+	 * 🔒 現況鎖：無可購買變體的 variable **父商品**在單品頁仍顯示覆寫價
+	 *
+	 * 規格 Rule「已知落差（父商品）- 無可購買變體的可變商品在單品頁仍顯示覆寫價」
+	 * （TD-68）。
+	 *
+	 * 所有變體都不可購買（自身無定價、且沒有變體層覆寫）時，`build_products()`
+	 * 會把 `variations` 濾成空陣列、賣場卡片顯示「暫無可購買規格」；但**父商品自己**
+	 * 的價格 filter 仍會套上商品層覆寫價，單品頁因此看得到一個買不到的價格。
+	 *
+	 * 🔴 **不可利用**：`WC_Cart::add_to_cart()`（class-wc-cart.php:1178-1188）對
+	 * variable 父商品且 `variation_id` 不是它的變體時直接 throw，實測 `variation_id=0`
+	 * 加購回件數 0。而賣場前台不會連到那裡（卡片已是「暫無可購買規格」且不印 Modal）。
+	 *
+	 * ⚠️ 修法唯一的落點會**遞迴回正在執行的那組 filter**
+	 * （`get_available_variations()` → `variation_is_visible()` → `get_price()` view context），
+	 * 這正是它被留成已知落差的原因。轉紅代表有人找到解法了，請同步更新 TD-68。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_known_gap_parent_of_unpurchasable_variations_still_shows_override(): void {
+		// 變體自身無定價（regular_price 空字串）⇒ variation_is_visible() 會濾掉它
+		$variable = $this->createVariableProduct( [ 'variations' => [ [ 'regular_price' => '' ] ] ] );
+
+		$shop_id = $this->create_shop(
+			[
+				new OverrideItem(
+					product_id: $variable->get_id(),
+					// 只有**商品層**覆寫，沒有變體層 ⇒ PricelessRescuePolicy 不救
+					override: new PriceOverride( '888', null, null ),
+					inflated_count: new InflatedCount( 0 )
+				),
+			],
+			'publish',
+			'known-gap-parent'
+		);
+
+		$this->simulate_single_product( $variable->get_id() );
+		$_GET['profit_shop_id'] = (string) $shop_id;
+
+		$hook = new SingleProductPriceHook( $this->repo );
+		$hook->maybe_register_filters();
+		$this->registered_hooks[] = $hook;
+
+		$fresh = \wc_get_product( $variable->get_id() );
+		$this->assertInstanceOf( \WC_Product_Variable::class, $fresh );
+
+		// 前提：所有變體都不可購買（清單為空）
+		$this->assertSame(
+			[],
+			$fresh->get_available_variations(),
+			'前置：本測試需要「所有變體都不可購買」的商品'
+		);
+
+		// 現況：父商品自己仍套上商品層覆寫價（TD-68）
+		$this->assertSame(
+			'888',
+			(string) $fresh->get_price(),
+			'現況：無可購買變體的父商品，單品頁仍顯示商品層覆寫價（TD-68，不可利用但確實存在）'
+		);
+	}
+
 	// ========== Helpers ==========
 
 	/**

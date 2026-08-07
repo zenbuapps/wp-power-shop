@@ -142,7 +142,7 @@ Feature: 商品單頁套用賣場覆寫價
       Then 變體 1051 不應出現在可選變體中
 
   Rule: 已知落差（父商品）- 無可購買變體的可變商品在單品頁仍顯示覆寫價
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-68「無可購買變體的可變父商品在單品頁仍顯示覆寫價」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_known_gap_parent_of_unpurchasable_variations_still_shows_override
 
     # ⚠️ specs/tech-debt.md TD-68：刻意不修。
     #   顧客加不進購物車（WooCommerce 對可變父商品直接拒絕），
