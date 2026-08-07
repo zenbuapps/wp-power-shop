@@ -998,6 +998,104 @@ final class ProfitShopShortcodeTest extends TestCase {
 	 *
 	 * @return int 賣場 ID
 	 */
+	/**
+	 * 已售件數 = WC 真實銷量 + 賣場設定的灌水購買人數
+	 *
+	 * ⚠️ 這條在 Phase 9 只做過真實站台人工驗證（實測「已售 880 件」＝ 873 + 7），
+	 * 從來沒有自動化測試守著。B7 盤點時被標為真缺口，於此補上。
+	 *
+	 * 兩個相加的來源刻意取不同數值（7 / 3），避免「只加了其中一項」也剛好通過。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_sold_count_is_real_sales_plus_inflated_count(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '已售件數商品',
+				'regular_price' => '500',
+			]
+		);
+		// WC 真實銷量
+		$product->set_total_sales( 7 );
+		$product->save();
+
+		$item = new OverrideItem(
+			product_id: $product->get_id(),
+			override: new PriceOverride( null, null, null ),
+			inflated_count: new InflatedCount( 3 )
+		);
+
+		$html = $this->render( $this->create_shop( [ $item ] ) );
+
+		$this->assertStringContainsString( '已售 10 件', $html, '已售件數應為真實銷量 7 + 灌水 3 = 10' );
+		$this->assertStringNotContainsString( '已售 7 件', $html, '不得只印真實銷量（漏加灌水數）' );
+		$this->assertStringNotContainsString( '已售 3 件', $html, '不得只印灌水數（漏加真實銷量）' );
+	}
+
+	/**
+	 * 兩者皆為 0 時完全不印「已售」區塊
+	 *
+	 * `> 0` 守門：全新商品印「已售 0 件」反而是負面訊號。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_sold_count_block_is_omitted_when_zero(): void {
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => '零銷量商品',
+				'regular_price' => '500',
+			]
+		);
+
+		$html = $this->render( $this->create_shop( [ $this->item_for( $product->get_id() ) ] ) );
+
+		$this->assertStringNotContainsString( '已售', $html, '真實銷量與灌水數皆為 0 時不得印出已售區塊' );
+	}
+
+	/**
+	 * 賣場頁必須自行輸出 WooCommerce notices
+	 *
+	 * 賣場頁不是 WooCommerce 的 template（`is_woocommerce()` 為 false），佈景主題掛在
+	 * `woocommerce_before_main_content` 上的 `woocommerce_output_all_notices` **不會**被觸發。
+	 * 少了這段，使用者按下「加入購物車」之後畫面除了重新載入之外沒有任何變化，
+	 * 功能看起來像是壞掉的。
+	 *
+	 * 本測試同時鎖住容器 class（`ps-shop-notices`）——那是 template 自印的識別，
+	 * 不是 WooCommerce 給的。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_shop_page_prints_woocommerce_notices_itself(): void {
+		if ( ! \function_exists( 'wc_add_notice' ) || null === \WC()->session ) {
+			$this->markTestSkipped( 'WC session 未就緒，無法寫入 notice' );
+		}
+
+		$product = $this->createSimpleProduct(
+			[
+				'name'          => 'Notice 測試商品',
+				'regular_price' => '500',
+			]
+		);
+
+		\wc_add_notice( '已成功加入購物車測試訊息', 'success' );
+
+		$html = $this->render( $this->create_shop( [ $this->item_for( $product->get_id() ) ] ) );
+
+		$this->assertStringContainsString(
+			'ps-shop-notices',
+			$html,
+			'賣場頁必須自印 notices 容器；少了它加購結果對使用者不可見'
+		);
+		$this->assertStringContainsString(
+			'已成功加入購物車測試訊息',
+			$html,
+			'WC session 內的 notice 必須被印出'
+		);
+	}
+
 	private function create_shop( array $items, string $status = 'publish', array $settings = [] ): int {
 		++self::$slug_seq;
 
