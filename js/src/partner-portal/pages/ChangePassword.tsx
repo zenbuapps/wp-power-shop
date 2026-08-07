@@ -57,6 +57,13 @@ import { useAuth } from '../auth/AuthContext'
 import { useChangePassword } from '../hooks/useChangePassword'
 import { mapPartnerException } from '../utils/partnerExceptionMapper'
 import { parseRetryAfter } from '../utils/retryAfter'
+import {
+	MIN_PASSWORD_LENGTH,
+	isSubmitDisabled,
+	validateConfirmMatches,
+	validateNewPasswordDiffers,
+	validatePasswordStrength,
+} from './passwordRules'
 
 type TFormValues = {
 	current_password: string
@@ -227,35 +234,25 @@ const ChangePasswordComponent = () => {
 							label="新密碼"
 							rules={[
 								{ required: true, message: '請輸入新密碼' },
-								{ min: 8, message: '密碼至少需 8 字元' },
+								{ min: MIN_PASSWORD_LENGTH, message: `密碼至少需 ${MIN_PASSWORD_LENGTH} 字元` },
 								{
 									validator: (_, value: string | undefined) => {
-										if (!value) return Promise.resolve()
-
-										// 客戶端先做基本格式檢查（後端仍會 enforce）
-										if (!/[A-Za-z]/.test(value)) {
-											return Promise.reject(
-												new Error('密碼需含至少 1 個英文字母')
-											)
-										}
-										if (!/[0-9]/.test(value)) {
-											return Promise.reject(new Error('密碼需含至少 1 個數字'))
-										}
-										return Promise.resolve()
+										// 客戶端先做基本格式檢查（後端 PartnerPassword VO 仍會 enforce）
+										const error = validatePasswordStrength(value)
+										return error
+											? Promise.reject(new Error(error))
+											: Promise.resolve()
 									},
 								},
 								({ getFieldValue }) => ({
 									validator(_, value: string | undefined) {
-										if (!value) return Promise.resolve()
-										const current = getFieldValue('current_password') as
-											| string
-											| undefined
-										if (current && value === current) {
-											return Promise.reject(
-												new Error('新密碼不可與目前密碼相同')
-											)
-										}
-										return Promise.resolve()
+										const error = validateNewPasswordDiffers(
+											value,
+											getFieldValue('current_password') as string | undefined
+										)
+										return error
+											? Promise.reject(new Error(error))
+											: Promise.resolve()
 									},
 								}),
 							]}
@@ -271,14 +268,13 @@ const ChangePasswordComponent = () => {
 								{ required: true, message: '請再次輸入新密碼' },
 								({ getFieldValue }) => ({
 									validator(_, value: string | undefined) {
-										if (!value) return Promise.resolve()
-										const next = getFieldValue('new_password') as
-											| string
-											| undefined
-										if (next && value !== next) {
-											return Promise.reject(new Error('兩次輸入的新密碼不一致'))
-										}
-										return Promise.resolve()
+										const error = validateConfirmMatches(
+											value,
+											getFieldValue('new_password') as string | undefined
+										)
+										return error
+											? Promise.reject(new Error(error))
+											: Promise.resolve()
 									},
 								}),
 							]}
@@ -295,7 +291,11 @@ const ChangePasswordComponent = () => {
 									type="primary"
 									htmlType="submit"
 									loading={mutation.isLoading}
-									disabled={mutation.isLoading || isCoolingDown || success}
+									disabled={isSubmitDisabled({
+										isSubmitting: mutation.isLoading,
+										isCoolingDown,
+										isSuccess: success,
+									})}
 								>
 									{isCoolingDown ? `請於 ${secondsLeft} 秒後重試` : '更新密碼'}
 								</Button>

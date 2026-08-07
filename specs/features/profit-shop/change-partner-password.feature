@@ -184,7 +184,13 @@ Feature: 分潤夥伴自助修改密碼
       Then 以 "a1 <b>  c&d" 登入應成功
 
   Rule: 前端（防呆）- 表單必須阻擋無意義的輸入並防止重複送出
-    # @covered-by: NOT-COVERED ChangePassword.tsx 的 Form rule 與三重 disabled 守門，專案無前端測試框架（B9 待補）
+    # @covered-by: tests/js/changePasswordRules.test.ts::🔴 相同時擋下（後端不會擋，但會把人登出）
+    # @covered-by: tests/js/changePasswordRules.test.ts::不一致時擋下
+    # @covered-by: tests/js/changePasswordRules.test.ts::🔴 飛行中停用（再按一次會送出第二個改密請求）
+    # @covered-by: tests/js/changePasswordRules.test.ts::🔴 rate-limit 倒數期間停用（再送只會加深鎖定）
+    # @covered-by: tests/js/changePasswordRules.test.ts::🔴 成功後停用（那 1.5 秒的 token 已經失效）
+    # @covered-by: tests/js/changePasswordRules.test.ts::三個條件缺一不可（逐一驗證每個都能獨立觸發停用）
+    # @covered-by: tests/js/changePasswordRules.test.ts::🔴 不得比後端更嚴：後端允許的符號 / 中文一律放行
 
     Example: 新密碼與目前密碼相同時不允許送出
       When 夥伴在改密表單將新密碼填為與目前密碼相同
