@@ -287,14 +287,35 @@ final class CptProfitShopRepository implements ProfitShopRepositoryInterface {
 			$shop->items()
 		);
 
-		// JSON 內不含 magic-quote 字元（單/雙引號、NUL、反斜線會被 json_encode 自行 escape），
-		// 因此不需 wp_slash 包裹。改加 JSON_UNESCAPED_UNICODE 讓中文以原字元儲存，
-		// 提升 DB 可讀性並降低 _profit_shop_items 占用空間。
+		// 🔴 JSON 字串**必須** wp_slash() 後才能交給 update_post_meta()。
+		//
+		// 這裡曾經寫著「JSON 內不含 magic-quote 字元（會被 json_encode 自行 escape），
+		// 因此不需 wp_slash 包裹」——**那個推理是反的，而且造成過真實的資料遺失**：
+		// json_encode 的 escape 動作**本身就是在字串裡放進反斜線**（`"` → `\"`、`\` → `\\`），
+		// 而 update_post_meta() → update_metadata() 內部會 wp_unslash() 把那些反斜線吃掉。
+		// escape 不是保護，escape 正是受害者。
+		//
+		// 實測（2026-08-07）：
+		// 寫入 `{"note":"他說\"限時優惠\"開跑"}`
+		// 讀回 `{"note":"他說"限時優惠"開跑"}` ← 反斜線被吃 → JSON 破損
+		// 於是 decode_settings() 的 json_decode 回 null → **整個 settings 變成 []**
+		// 亦即站長只要在 Phase 16 的「自訂文字」欄位打一個雙引號並儲存，
+		// startTime / endTime / btnColor / showStock / beforeDisplay / afterDisplay
+		// 會**全部消失且沒有任何錯誤訊息**（HTTP 200、前端顯示儲存成功）。
+		// 反斜線的情況更陰險：`a\\b` 讀回 `a\b`，JSON 仍合法（`\b` 是 backspace 的合法
+		// escape）但值已被靜默竄改，連 json_decode 都不會報錯。
+		//
+		// 與 CLAUDE.md Pitfall #25（夥伴明文密碼必須先 wp_slash）是**同一個機制**。
+		// 回歸鎖：CptProfitShopRepositoryTest::test_save_round_trip_with_chinese_characters
+		// （該測試的 note 欄位刻意含 `"` 與 `\`，拿掉 wp_slash 會立刻轉紅）。
+		//
+		// JSON_UNESCAPED_UNICODE 維持不變：讓中文以原字元儲存，提升 DB 可讀性
+		// 並降低 _profit_shop_items 占用空間（中文不產生反斜線，與本議題無關）。
 		$items_json    = (string) \wp_json_encode( $items_payload, JSON_UNESCAPED_UNICODE );
 		$settings_json = (string) \wp_json_encode( $shop->settings, JSON_UNESCAPED_UNICODE );
 
-		\update_post_meta( $post_id, self::META_ITEMS, $items_json );
-		\update_post_meta( $post_id, self::META_SETTINGS, $settings_json );
+		\update_post_meta( $post_id, self::META_ITEMS, \wp_slash( $items_json ) );
+		\update_post_meta( $post_id, self::META_SETTINGS, \wp_slash( $settings_json ) );
 	}
 
 	/**

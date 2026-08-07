@@ -498,6 +498,110 @@ final class CptProfitShopRepositoryTest extends TestCase {
 		);
 	}
 
+	/**
+	 * 🔴 回歸鎖：settings 含**雙引號**時，整包不得消失
+	 *
+	 * 這是 `persist_meta()` 未 `wp_slash()` 時最嚴重的症狀。`json_encode` 把 `"`
+	 * escape 成 `\"`，`update_post_meta()` → `update_metadata()` 內部的 `wp_unslash()`
+	 * 把那個反斜線吃掉 ⇒ JSON 結構破損 ⇒ `decode_settings()` 的 `json_decode` 回 null
+	 * ⇒ **整個 settings 變成 `[]`**（含 startTime / endTime / btnColor / 排程設定）。
+	 *
+	 * 真實觸發路徑不需要攻擊者：Phase 16 的 `beforeText` / `afterText` 是站長自由輸入，
+	 * 經 `WP::sanitize_text_field_deep()` 後雙引號原樣保留，打一句
+	 * `他說"限時優惠"已結束` 按下儲存即可重現，而且 HTTP 200、前端顯示儲存成功、零錯誤訊息。
+	 *
+	 * @test
+	 * @group edge
+	 * @group security
+	 */
+	public function test_settings_with_double_quotes_survive_round_trip(): void {
+		$text = '他說"限時優惠"已結束';
+		$shop = $this->build_shop_aggregate(
+			[
+				'slug'     => 'quote-shop',
+				'settings' => [
+					'afterText' => $text,
+					'startTime' => 1786000000000,
+					'btnColor'  => '#ff0000',
+				],
+			]
+		);
+
+		$loaded = $this->repo->find( $this->repo->save( $shop ) );
+
+		$this->assertNotNull( $loaded );
+		$this->assertSame( $text, $loaded->settings['afterText'] ?? null, '含雙引號的文字應原樣還原' );
+
+		// 同組其他設定不得被連帶清空——這才是這個缺陷真正的殺傷力
+		$this->assertSame( 1786000000000, $loaded->settings['startTime'] ?? null, 'startTime 不得被連帶清空' );
+		$this->assertSame( '#ff0000', $loaded->settings['btnColor'] ?? null, 'btnColor 不得被連帶清空' );
+	}
+
+	/**
+	 * 🔴 回歸鎖：settings 含**反斜線**時，值不得被靜默竄改
+	 *
+	 * ⚠️ 這條比雙引號那條更陰險，斷言方式也必須不同：反斜線被 `wp_unslash()` 吃掉之後
+	 * `{"note":"a\\b"}` 變成 `{"note":"a\b"}`，**JSON 仍然合法**（`\b` 是 backspace 的
+	 * 合法 escape）、`json_decode` 也不會報錯——只有「值」被悄悄換掉了。
+	 *
+	 * ⇒ 只斷言「解得開 / settings 非空」會**完全漏掉**這個缺陷，
+	 * 必須逐字比對還原後的字串本身。
+	 *
+	 * @test
+	 * @group edge
+	 * @group security
+	 */
+	public function test_settings_with_backslash_are_not_silently_mangled(): void {
+		$text = 'a\\b 與 C:\\path\\to\\file';
+		$shop = $this->build_shop_aggregate(
+			[
+				'slug'     => 'backslash-shop',
+				'settings' => [ 'note' => $text ],
+			]
+		);
+
+		$loaded = $this->repo->find( $this->repo->save( $shop ) );
+
+		$this->assertNotNull( $loaded );
+		$this->assertSame(
+			$text,
+			$loaded->settings['note'] ?? null,
+			'含反斜線的值必須逐字還原（JSON 解得開不等於值正確：\\b 會被解讀成 backspace）'
+		);
+	}
+
+	/**
+	 * 🔴 回歸鎖：雙引號 + 反斜線混合
+	 *
+	 * 兩種 escape 同時出現時的交互作用，是前兩條各自測不到的組合。
+	 *
+	 * @test
+	 * @group edge
+	 * @group security
+	 */
+	public function test_settings_with_mixed_quotes_and_backslashes_survive_round_trip(): void {
+		$text = '保留中文 "引號" 與符號 / \\ 應原樣保留';
+		$shop = $this->build_shop_aggregate(
+			[
+				'slug'     => 'mixed-escape-shop',
+				'settings' => [
+					'note'      => $text,
+					'afterText' => 'JSON escape 測試："\\"',
+				],
+			]
+		);
+
+		$loaded = $this->repo->find( $this->repo->save( $shop ) );
+
+		$this->assertNotNull( $loaded );
+		$this->assertSame( $text, $loaded->settings['note'] ?? null, '混合 escape 應原樣還原' );
+		$this->assertSame(
+			'JSON escape 測試："\\"',
+			$loaded->settings['afterText'] ?? null,
+			'以反斜線結尾的字串是最容易破壞 JSON 結構的形狀'
+		);
+	}
+
 	// ========== Helpers ==========
 
 	/**
