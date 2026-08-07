@@ -59,6 +59,8 @@ Feature: 儲存賣場商品的價格覆寫設定
     # @covered-by: tests/Unit/Domain/ValueObject/PriceOverrideTest.php::test_construct_throws_when_sale_price_greater_than_regular
     # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_sale_price_greater_than_regular_price_returns_400_validation_failed
     # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_sale_price_greater_than_regular_price_throws_invalid_price_override
+    # @covered-by: tests/js/priceOverrideUtils.test.ts::特價高於原價時回報違規
+    # @covered-by: tests/js/priceOverrideUtils.test.ts::任一欄為 null 時不比較（後端才是唯一真相）
 
     Example: 特價高於原價時系統應拒絕儲存
       When 管理者 "Admin" 儲存賣場 "夏季賣場" 的商品設定
@@ -98,6 +100,9 @@ Feature: 儲存賣場商品的價格覆寫設定
     # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_both_price_fields_empty_persists_as_null
     # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_missing_override_key_results_in_all_null_price_fields
     # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_empty_string_regular_price_is_treated_as_null
+    # @covered-by: tests/js/priceOverrideUtils.test.ts::round-trip 保持語意（含 0 這個邊界）
+    # @covered-by: tests/js/priceOverrideUtils.test.ts::非數字字串視為沒設定
+    # @covered-by: tests/js/priceOverrideUtils.test.ts::數字 0 必須轉成字串 0，不可被吃成 null
 
     Example: 只設定特價時原價欄位應為 null
       When 管理者 "Admin" 儲存賣場 "夏季賣場" 的商品設定

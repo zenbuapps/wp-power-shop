@@ -33,11 +33,20 @@ export const emptyVariationOverride = (): TVariationOverride => ({
 /**
  * 後端十進位字串 → InputNumber 值
  *
- * null / 非數字 → `undefined`，讓 InputNumber 顯示 placeholder（＝沿用原價）。
+ * null / 空字串 / 非數字 → `undefined`，讓 InputNumber 顯示 placeholder（＝沿用原價）。
  * ⚠️ 不可回 0 —— `'0'`（免費贈品）與「沒設定」是兩件事。
+ *
+ * 🔴 **空字串必須與 null 同義**，不可交給 `Number()` 判斷：`Number('')` 是 **0**
+ * （不是 NaN），少了這道守門「沒設定」會被還原成「覆寫為 0 元」——站長按下儲存
+ * 就把商品變成免費贈品，而畫面上只是欄位裡多了一個 0。
+ *
+ * 後端對此早有一致的語意（`ProfitShopHydrator` 把空字串正規化為 null，見
+ * `ProfitShopHydratorTest::test_empty_string_regular_price_is_treated_as_null`），
+ * 前端這一側原本沒有對齊。回歸鎖：
+ * `tests/js/priceOverrideUtils.test.ts::非數字字串視為沒設定`
  */
 export const toInputValue = (price: string | null): number | undefined => {
-	if (price === null) return undefined
+	if (price === null || price === '') return undefined
 	const parsed = Number(price)
 	return Number.isFinite(parsed) ? parsed : undefined
 }
