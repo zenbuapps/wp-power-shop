@@ -51,7 +51,11 @@ Feature: 呈現分潤賣場前台
       Then 系統應回應 404
 
   Rule: 前置（速率）- 賣場頁對同一來源有存取頻率上限
-    # @covered-by: NOT-COVERED PageRateLimitService 對賣場頁的 429 處理（Phase 5-A.1）目前無對應測試，屬真缺口
+    # @covered-by: tests/Unit/Application/Service/PageRateLimitServiceTest.php::test_requests_under_the_limit_are_allowed
+    # @covered-by: tests/Unit/Application/Service/PageRateLimitServiceTest.php::test_request_over_the_limit_throws
+    # @covered-by: tests/Unit/Application/Service/PageRateLimitServiceTest.php::test_retry_after_reflects_remaining_window
+    # @covered-by: tests/Unit/Application/Service/PageRateLimitServiceTest.php::test_window_is_not_extended_by_continued_requests
+    # @covered-by: tests/Unit/Application/Service/PageRateLimitServiceTest.php::test_different_page_keys_are_counted_independently
 
     Example: 同一 IP 在一分鐘內超過 30 次請求時回 429
       When 同一來源 IP 在 60 秒內對賣場頁發出第 31 次請求
