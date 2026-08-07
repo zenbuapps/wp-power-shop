@@ -189,7 +189,7 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 夥伴 "夥伴A" 的密碼應維持不變
 
   Rule: 已知落差（建立）- 建立夥伴時的密碼沒有後端強度驗證
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-33「CreatePartner 未過 PartnerPassword VO」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopKnownGapsTest.php::test_known_gap_create_partner_accepts_weak_password
 
     # ⚠️ specs/tech-debt.md TD-33：這是已知的規則不一致，刻意未修。
     #   建立頁只有「至少 8 字元」的前端規則，後端不過強度驗證；

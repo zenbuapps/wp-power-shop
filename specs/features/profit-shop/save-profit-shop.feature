@@ -176,7 +176,7 @@ Feature: 建立與更新分潤賣場
       And 畫面應顯示尚有欄位未填寫的提示
 
   Rule: 已知落差（驗證）- 永久連結在後端沒有必填與格式驗證
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是「永久連結在後端沒有必填與格式驗證」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopKnownGapsTest.php::test_known_gap_backend_does_not_validate_slug_format
 
     # ⚠️ specs/tech-debt.md TD-14：前端 required、後端不驗。
     #   繞過前端直接呼叫 API 可建出 slug 為空的賣場，其公開網址會是打不開的
@@ -187,7 +187,7 @@ Feature: 建立與更新分潤賣場
       Then 系統應回傳建立成功
 
   Rule: 已知落差（數量）- 賣場商品數量上限只在前端把關
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是「數量上限只在前端把關、後端無對應驗證」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopKnownGapsTest.php::test_known_gap_backend_accepts_more_items_than_frontend_limit
 
     # ⚠️ 單次批次 100 筆與賣場總數 500 筆都只在前端擋，後端無對應驗證。
     #   繞過前端直接呼叫 API 可以送出超過 500 筆的商品陣列而不被拒絕。

@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **49**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **42**
 
 ## 逐檔覆蓋率
 
@@ -85,8 +85,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：Edit 頁的 initialPasswordRef 比對住在 React 元件，專案無前端測試框架（B9 待補）
 - `manage-partner-credentials` — 前端（產生）- 密碼欄位旁的產生按鈕只填入不送出
   - 理由：PartnerForm 的「產生」按鈕（crypto.getRandomValues，只填入不送出），專案無前端測試框架（B9 待補）
-- `manage-partner-credentials` — 已知落差（建立）- 建立夥伴時的密碼沒有後端強度驗證
-  - 理由：本 Rule 描述的正是 TD-33「CreatePartner 未過 PartnerPassword VO」這個已知落差，依定義沒有對應實作可測
 - `query-settlements` — 已知落差 - 目前未提供的查詢能力
   - 理由：本 Rule 描述的是「目前未提供」的查詢能力，依定義沒有對應實作可測
 - `query-shop-detail` — 前端（填表）- 編輯頁載入後不得被背景重取資料覆蓋
@@ -99,10 +97,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：ProfitShop/List 的「複製短碼」按鈕，屬 React 元件行為（B9 待補）
 - `render-shop-via-shortcode` — 已知落差（存取）- 短碼模式的賣場公開網址仍然開得起來
   - 理由：本 Rule 描述的正是 TD-13「shortcode 模式賣場公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
-- `save-profit-shop` — 已知落差（驗證）- 永久連結在後端沒有必填與格式驗證
-  - 理由：本 Rule 描述的正是「永久連結在後端沒有必填與格式驗證」這個已知落差，依定義沒有對應實作可測
-- `save-profit-shop` — 已知落差（數量）- 賣場商品數量上限只在前端把關
-  - 理由：本 Rule 描述的正是「數量上限只在前端把關、後端無對應驗證」這個已知落差，依定義沒有對應實作可測
 - `save-variation-overrides` — 前端（展開）- 可變商品在商品名稱欄提供展開鈕
   - 理由：ItemsEditor 的 showExpandColumn:false + 自刻展開鈕，屬 React 元件行為（B9 待補）
 - `save-variation-overrides` — 前端（失效）- 賣場保存了已不存在的變體時必須顯示且可移除
@@ -115,8 +109,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：本 Rule 描述的正是 TD-16「wc-rest per_page 硬上限 100」這個已知落差，依定義沒有對應實作可測
 - `schedule-shop-availability` — 已知落差（存取）- 全部不勾只藏內容，公開網址仍然開得起來
   - 理由：本 Rule 描述的正是 TD-46「全部不勾只藏內容、公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
-- `schedule-shop-availability` — 已知落差（驗證）- 排程欄位沒有後端驗證
-  - 理由：本 Rule 描述的正是 TD-47「排程欄位無後端 Domain 驗證」這個已知落差，依定義沒有對應實作可測
 - `select-product-variation` — 已知落差（可購買性）- 混合設定下可購買性可能反轉
   - 理由：本 Rule 描述的正是 TD-53「混合設定下可購買性可能反轉」這個已知落差，依定義沒有對應實作可測
 - `select-product-variation` — 已知落差（屬性名）- 含空白或特殊符號的自訂屬性永遠匹配不到
@@ -135,12 +127,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：destroyOnHidden + 關閉時 reset，屬 React 元件行為（B9 待補）
 - `select-shop-products` — 後置（加入）- 未勾選任何商品時確認按鈕應為停用狀態
   - 理由：確認按鈕 disabled 狀態，屬 React 元件行為（B9 待補）
-- `select-shop-products` — 後置（加入）- 批次加入必須去重且靜默略過重複項
-  - 理由：handleBatchAdd 的雙層 dedupe 住在 ItemsEditor，屬 React 元件行為（B9 待補）
-- `select-shop-products` — 後置（加入）- 單次批次加入不得超過 100 筆
-  - 理由：100 筆上限只在前端把關，後端無對應驗證（見 profit-shop.rule.md §12.9）
-- `select-shop-products` — 後置（加入）- 賣場商品總數超過 500 筆時應警示但不阻擋
-  - 理由：500 筆軟上限只在前端警示，後端無對應驗證（見 profit-shop.rule.md §12.9）
 - `view-order-profit-panel` — 後置（呈現）- 逐一列出帶有分潤歸屬的訂單品項
   - 理由：B9 待補 Playwright；面板是 React 元件，專案目前無前端測試框架
 - `view-order-profit-panel` — 後置（狀態）- 結算狀態以中文呈現且與結算頁一致

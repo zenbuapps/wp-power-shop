@@ -140,7 +140,7 @@ Feature: 透過商品選擇 Modal 加入賣場商品
 
   Rule: 後置（加入）- 批次加入必須去重且靜默略過重複項
     # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_product_id_zero_or_negative_is_silently_skipped
-    # @covered-by: NOT-COVERED handleBatchAdd 的雙層 dedupe 住在 ItemsEditor，屬 React 元件行為（B9 待補）
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopKnownGapsTest.php::test_backend_rejects_duplicate_product_in_same_shop
 
     # Q4 決議下已加入的商品在 Modal 內 checkbox disabled，理論上勾不到；
     # 本 Rule 為縱深防禦，涵蓋「Modal 開啟後賣場 items 被其他來源變更」的競態。
@@ -167,7 +167,7 @@ Feature: 透過商品選擇 Modal 加入賣場商品
       Then 賣場商品 102 應只出現 1 次
 
   Rule: 後置（加入）- 單次批次加入不得超過 100 筆
-    # @covered-by: NOT-COVERED 100 筆上限只在前端把關，後端無對應驗證（見 profit-shop.rule.md §12.9）
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopKnownGapsTest.php::test_known_gap_backend_accepts_more_items_than_frontend_limit
 
     # 上限依據：WC REST per_page 上限為 100，商品顯示資訊補齊查詢一次打得完；
     # 且 ItemsEditor 每次按鍵重建整個 items 陣列（ItemsEditor.tsx:106-112），
@@ -186,7 +186,7 @@ Feature: 透過商品選擇 Modal 加入賣場商品
       And Modal 不應顯示數量上限提示
 
   Rule: 後置（加入）- 賣場商品總數超過 500 筆時應警示但不阻擋
-    # @covered-by: NOT-COVERED 500 筆軟上限只在前端警示，後端無對應驗證（見 profit-shop.rule.md §12.9）
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopKnownGapsTest.php::test_known_gap_backend_accepts_more_items_than_frontend_limit
 
     Example: 加入後總數超過軟上限應顯示效能警示
       Given 賣場 "夏季賣場" 已有 480 筆商品

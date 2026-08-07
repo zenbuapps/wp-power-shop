@@ -283,7 +283,7 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       And 頁面應只有賣場標題與站長自訂內容
 
   Rule: 已知落差（驗證）- 排程欄位沒有後端驗證
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-47「排程欄位無後端 Domain 驗證」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopKnownGapsTest.php::test_known_gap_backend_accepts_end_time_before_start_time
 
     # ⚠️ specs/tech-debt.md TD-47：繞過前端直接呼叫 API 可送出任意組合。
     #   後果有界：時間顛倒只會讓賣場永不開賣，不會產生安全問題。
