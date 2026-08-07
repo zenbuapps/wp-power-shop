@@ -25,6 +25,10 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
     And 賣場 "夏季賣場" 的商品列表包含商品 101
 
   Rule: 前置（狀態）- 販售狀態由伺服器時間與起訖時間決定
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_shop_status_is_published_without_schedule
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_shop_status_is_coming_before_start_time
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_shop_status_is_closed_after_end_time
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_shop_status_is_published_within_window
 
     # 一律以**伺服器時間**判斷，永不讀取任何客戶端時間——
     # 否則會出現「後台已開賣、前台仍顯示未開始」。
@@ -52,6 +56,8 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 狀態應為 "coming"
 
   Rule: 前置（正規化）- 壞掉的時間資料視為未設定而不誤關店
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_invalid_timestamps_are_treated_as_unset
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_timestamp_strings_are_cast_to_int
 
     # ⚠️ specs/tech-debt.md TD-63：這是 fail-open，而且**這個判斷同時是安全閘門**。
     #   裁決維持現狀：誤關店的商業損失立即且明顯，而要寫壞這份設定需要管理權限
@@ -75,6 +81,11 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
         | 布林值 | 未設定   | published | 非數值視為未設定         |
 
   Rule: 前置（呈現）- 呈現區塊為白名單過濾的多選陣列
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_display_parts_default_to_products_only
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_display_parts_are_independent
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_empty_display_parts_means_show_nothing
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_unknown_display_parts_are_filtered
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_legacy_string_display_mode_is_migrated
 
     Example: 未設定呈現區塊時退回只顯示商品
       Given 賣場 "夏季賣場" 的設定中沒有呈現區塊的鍵
@@ -100,6 +111,10 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 儲存結果的順序應固定
 
   Rule: 後置（呈現）- 呈現結論由後端算好，兩條渲染路徑只讀結論
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_published_state_always_shows_products_only
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_text_part_without_content_is_not_shown
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_closed_shop_without_display_setting_keeps_browse_behaviour
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_closed_shop_with_no_parts_renders_nothing
 
     # 販售狀態有三態、呈現設定有兩組，若讓樣板自行配對，
     # 獨立頁面與短碼兩條路徑就各有一份配對邏輯要維持一致——
@@ -128,6 +143,8 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 頁面不應出現空的文字區塊
 
   Rule: 安全（Modal）- 任何呈現組合都不得印出商品 Modal
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_no_display_combination_ever_renders_modal_when_closed
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_closed_shop_never_renders_modal_for_rescued_variations
 
     # 🔴 Modal 內含一張真正的加購表單，即使按鈕停用，表單本身仍在 DOM 內，
     #   使用者改掉停用屬性就能送出。不印出來才是唯一可靠的做法。
@@ -148,6 +165,9 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
         | countdown, text, products  |
 
   Rule: 後置（倒數）- 倒數盤的目標時間依狀態決定
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_coming_shop_with_countdown_renders_countdown_block
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_countdown_and_products_can_coexist
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_closed_state_uses_after_settings_with_zero_countdown
 
     Example: 尚未開賣時倒數到開賣時間
       Given 賣場 "夏季賣場" 尚未開賣且勾選顯示倒數
@@ -175,6 +195,7 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 天數欄位應以純文字顯示 120
 
   Rule: 已知落差（倒數）- 已結束販售時的倒數盤一律歸零
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_closed_shop_with_countdown_renders_zeroed_board
 
     # ⚠️ specs/tech-debt.md TD-45：已結束的賣場沒有「未來的目標時間」可以倒數，
     #   真正傳達訊息的是搭配的自訂文字。
@@ -188,6 +209,7 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 倒數盤的四個欄位應皆為 0
 
   Rule: 前置（文字）- 自訂文字有長度上限且以字元計
+    # @covered-by: tests/Unit/Infrastructure/WordPress/ProfitShopFrontDataSettingsTest.php::test_display_text_is_normalised
 
     Example: 超過上限的文字被截斷
       When 管理者輸入超過 200 字元的自訂文字
@@ -203,6 +225,7 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 結果應為空字串
 
   Rule: 前端（後台）- 排程分頁的送出必須合併既有設定
+    # @covered-by: NOT-COVERED ScheduleTab 的 mergeScheduleSettings，屬 React 元件行為（B9 待補）
 
     Example: 只修改排程時其餘設定必須保留
       Given 賣場 "夏季賣場" 的設定已包含庫存與購買人數顯示開關
@@ -238,6 +261,7 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       Then 畫面應說明時間以瀏覽器時區顯示而判斷以伺服器時間為準
 
   Rule: 已知落差（存取）- 全部不勾只藏內容，公開網址仍然開得起來
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-46「全部不勾只藏內容、公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-46：呈現設定不等於存取控制。
     #   改成 404 會讓獨立頁面與短碼兩條路徑的輸出分歧，
@@ -251,6 +275,7 @@ Feature: 設定賣場的開啟關閉時間與期間外呈現
       And 頁面應只有賣場標題與站長自訂內容
 
   Rule: 已知落差（驗證）- 排程欄位沒有後端驗證
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-47「排程欄位無後端 Domain 驗證」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-47：繞過前端直接呼叫 API 可送出任意組合。
     #   後果有界：時間顛倒只會讓賣場永不開賣，不會產生安全問題。

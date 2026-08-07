@@ -30,6 +30,12 @@ Feature: 商品單頁套用賣場覆寫價
     And 賣場 "夏季賣場" 的商品列表包含商品 101 與 103
 
   Rule: 前置（範圍）- 只有商品單頁且帶合法賣場識別時才套用覆寫價
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_without_query_string_no_filter_is_registered
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_non_single_product_page_registers_no_filter
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_nonexistent_shop_leaves_price_untouched
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_draft_shop_leaves_price_untouched
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_product_not_in_shop_leaves_price_untouched
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_closed_shop_registers_no_filter_and_keeps_priceless_variation_unpurchasable
 
     Scenario Outline: 依情境決定是否套用覆寫價
       Given 賣場 "夏季賣場" 對商品 101 設定覆寫原價 "500" 與特價 "450"
@@ -52,6 +58,9 @@ Feature: 商品單頁套用賣場覆寫價
       Then 顯示的價格應完整回到商品原本的 "1000"
 
   Rule: 後置（變體）- 單一變體價格與變體價格區間都必須套用
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_simple_product_price_is_overridden_on_single_product_page
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_variation_override_applies_to_that_variation_only
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_regular_only_override_clears_original_sale_price
 
     # 兩者是兩組不同的 filter：WooCommerce 讀取變體價格區間時走的是 edit context，
     # 單一變體的實際結帳價走的是 view context。漏掉任一組就會出現
@@ -82,6 +91,9 @@ Feature: 商品單頁套用賣場覆寫價
       Then 變體 1032 的價格應維持原本的 "45"
 
   Rule: 快取（隔離）- 變體價格快取必須依賣場與覆寫內容分桶
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_variation_prices_hash_differs_per_shop
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_variation_prices_hash_untouched_for_other_products
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_variation_prices_hash_changes_when_override_value_changes
 
     # WooCommerce 把變體價格陣列存在暫存快取，其快取鍵只納入掛在價格 filter 上的
     # **callback 名稱**，不含賣場識別，也不含覆寫值本身。
@@ -105,6 +117,7 @@ Feature: 商品單頁套用賣場覆寫價
       Then 不屬於賣場 1932 的其他商品其價格快取不應受影響
 
   Rule: 隔離（購物車）- 單品頁的價格 filter 永遠不得影響購物車品項
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_disarm_removes_every_filter_and_restores_original_prices
 
     # 🔴 這道隔離不能靠「請求類型」論證——filter 一旦掛上就整個請求不解除，
     #    而購物車與商品頁**在同一個請求裡並存**。
@@ -117,6 +130,8 @@ Feature: 商品單頁套用賣場覆寫價
       Then 該購物車品項的小計應維持商品原價 "1000"
 
   Rule: 政策（無定價）- 商品層覆寫不得救起沒有變體層覆寫價的無定價變體
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_parent_level_override_does_not_rescue_priceless_variation
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_priceless_variation_without_override_stays_unpurchasable
 
     # 顯示層與加購層共用同一份政策，見 authorize-priceless-cart-item.feature。
 
@@ -127,6 +142,7 @@ Feature: 商品單頁套用賣場覆寫價
       Then 變體 1051 不應出現在可選變體中
 
   Rule: 已知落差（父商品）- 無可購買變體的可變商品在單品頁仍顯示覆寫價
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-68「無可購買變體的可變父商品在單品頁仍顯示覆寫價」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-68：刻意不修。
     #   顧客加不進購物車（WooCommerce 對可變父商品直接拒絕），
@@ -142,6 +158,7 @@ Feature: 商品單頁套用賣場覆寫價
       And 顧客仍無法將商品 105 加入購物車
 
   Rule: 文案（一致）- 後台的據實揭露文案必須與實際作用範圍一致
+    # @covered-by: NOT-COVERED VariationOverrideEditor 的據實揭露 Alert 文案，屬 React 元件內容（B9 待補）。⚠️ TD-20 即為此類文案與實際行為脫節的前例
 
     # ⚠️ 這條是流程規則，不是執行期行為。
     #   曾經發生：規劃階段先寫了「單品頁仍顯示原價」的緩解文案，

@@ -20,6 +20,7 @@ Feature: 匯入舊版一頁商店為分潤賣場
       | 7002      | 舊版賣場B   |              | 是          |
 
   Rule: 權限（寫入）- 匯入需要 manage_options
+    # @covered-by: tests/Integration/Application/LegacyImporterTest.php::test_list_legacy_shops_returns_200
 
     Example: 僅具備 manage_woocommerce 者不得匯入
       Given 使用者僅具備 manage_woocommerce 能力
@@ -27,6 +28,9 @@ Feature: 匯入舊版一頁商店為分潤賣場
       Then 系統應拒絕該請求
 
   Rule: 前置（參數）- 必須指定存在的分潤夥伴
+    # @covered-by: tests/Unit/Application/UseCase/Migration/ImportLegacyShopTest.php::test_throws_legacy_shop_not_importable_when_partner_term_id_missing
+    # @covered-by: tests/Unit/Application/UseCase/Migration/ImportLegacyShopTest.php::test_throws_partner_not_found_when_partner_term_id_invalid
+    # @covered-by: tests/Integration/Application/LegacyImporterTest.php::test_import_without_partner_term_id_returns_422
 
     Example: 未指定夥伴時拒絕匯入
       When 管理者 "Admin" 匯入舊版賣場 7001 且未指定夥伴
@@ -42,6 +46,8 @@ Feature: 匯入舊版一頁商店為分潤賣場
         | 404    | not_found |
 
   Rule: 前置（來源）- 舊版資料必須存在
+    # @covered-by: tests/Unit/Application/UseCase/Migration/ImportLegacyShopTest.php::test_throws_legacy_shop_not_importable_when_legacy_id_invalid
+    # @covered-by: tests/Unit/Application/UseCase/Migration/ListImportableLegacyShopsTest.php::test_returns_empty_when_no_legacy_shops
 
     Example: 舊版資料不存在時拒絕匯入
       When 管理者 "Admin" 匯入舊版賣場 999999 並指定夥伴 5
@@ -51,6 +57,8 @@ Feature: 匯入舊版一頁商店為分潤賣場
       And 回應的 reason 應為 "legacy_not_found"
 
   Rule: 後置（匯入）- 匯入後產生草稿賣場，不直接上線
+    # @covered-by: tests/Unit/Application/UseCase/Migration/ImportLegacyShopTest.php::test_imports_legacy_shop_with_valid_partner
+    # @covered-by: tests/Integration/Application/LegacyImporterTest.php::test_import_with_partner_creates_new_profit_shop
 
     Example: 匯入成功後新賣場為草稿
       When 管理者 "Admin" 匯入舊版賣場 7001 並指定夥伴 5
@@ -78,6 +86,8 @@ Feature: 匯入舊版一頁商店為分潤賣場
       Then 新賣場的 settings 應包含來源的顯示設定
 
   Rule: 後置（保留）- 匯入不刪除也不修改舊版資料
+    # @covered-by: tests/Unit/Application/UseCase/Migration/ListImportableLegacyShopsTest.php::test_lists_all_legacy_shops
+    # @covered-by: tests/Unit/Application/UseCase/Migration/ListImportableLegacyShopsTest.php::test_lists_legacy_with_settings_included
 
     Example: 匯入後舊版賣場仍然存在且可用
       When 管理者 "Admin" 匯入舊版賣場 7001 並指定夥伴 5
@@ -85,6 +95,7 @@ Feature: 匯入舊版一頁商店為分潤賣場
       And 舊版賣場 7001 的內容應維持不變
 
   Rule: 前端（閘門）- 不可逆操作必須經過四道閘門
+    # @covered-by: NOT-COVERED ImportModal 的四道閘門（見 profit-shop.rule.md §12.4），屬 React 元件行為（B9 待補）
 
     Example: 不可匯入的來源其匯入按鈕為停用並說明原因
       Given 舊版賣場 7003 標記為不可匯入

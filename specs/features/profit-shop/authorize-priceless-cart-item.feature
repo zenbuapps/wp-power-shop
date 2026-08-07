@@ -37,6 +37,9 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
     And 賣場 "課程賣場" 的商品列表包含商品 201
 
   Rule: 前置（政策）- 商品層覆寫不得救起「站長從未定價的半成品變體」
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_parent_level_override_never_rescues_priceless_variation_on_add_to_cart
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_real_variation_level_override_still_rescues_priceless_variation
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_parent_level_override_does_not_rescue_priceless_variation
 
     # R-4 裁決。站長設商品層覆寫的意圖是「這個商品在我的賣場賣 X 元」，
     # 不會預期連沒填價格的半成品變體都一起上架；ItemsEditor 的展開列本來就
@@ -69,6 +72,7 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       Then 加購應成功
 
   Rule: 前置（政策）- 「變體條目存在」不等於「有變體層覆寫價」
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_empty_variation_entry_is_not_treated_as_variation_level_override
 
     # 🔴 判準必須與取價服務逐字相同：
     #   null !== $override && ( null !== regular_price || null !== sale_price )
@@ -97,6 +101,9 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       Then 加購應失敗
 
   Rule: 閘門①（顯示）- 覆寫價只在「取得變體清單」這個動作的範圍內生效
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_armed_filters_make_priceless_variation_visible_and_purchasable
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_disarm_removes_every_filter_and_restores_original_prices
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_re_arm_replaces_previous_context
 
     Example: 帶賣場情境時無定價變體出現在可選清單中
       Given 賣場 "課程賣場" 對變體 2011 設定變體層覆寫價 "270"
@@ -115,6 +122,10 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       And 頁面中不應存在商品 201 的商品 Modal
 
   Rule: 閘門②（加購）- 加購授權是一次性的，且必須綁在單一目標商品上
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_pending_add_authorization_is_cleared_after_add
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_pending_add_authorization_does_not_cover_sibling_variation
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_priceless_variation_cannot_be_added_without_profit_shop_id
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_closed_shop_rejects_hand_crafted_post_for_priceless_variation
 
     # 加購時拿不到 WC_Product 物件（只有 id），因此這道只能用一次性旗標。
     # 比對鍵一律是 `variation_id ?: product_id`——用父商品會讓兄弟變體一起被放行。
@@ -138,6 +149,8 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       Then 該筆殘留授權應已被清除
 
   Rule: 閘門③（載入）- 每次載入購物車都必須逐筆重新驗章
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_priceless_cart_item_survives_session_reload_via_per_item_hook
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_priced_products_are_untouched_by_authorization
 
     # 這道 hook 是全 WooCommerce 唯一帶 cart item key / values / product 的
     # per-item purchasable hook，因此也是唯一能把授權綁在單一 cart item 上的位置。
@@ -175,6 +188,8 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       And 顧客應看到一則「已無法購買」的錯誤提示
 
   Rule: 閘門④（Store API）- Cart Block 與 Store API 讀到的是同一個商品實例
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_priceless_cart_item_survives_session_reload_via_per_item_hook
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_priceless_variation_with_override_can_be_added_to_cart
 
     Example: Cart Block 顯示的無定價品項價格與購物車頁一致
       Given 顧客已從賣場 1932 合法加購變體 2011 且覆寫價為 "270"
@@ -186,6 +201,7 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       Then 加購應失敗
 
   Rule: 撤銷（授權）- 只靠救援才有價的品項必須可被站長停掉
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_rescued_item_loses_authorization_when_shop_unpublished_or_product_removed
 
     # 🔴 這條與「已在購物車內的品項不受販售期間影響」是**兩條不同的規則**，
     #   差異點才是關鍵，不可為了 DRY 併成一條：
@@ -221,6 +237,8 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       Then 系統不應為救援回查發出任何賣場查詢
 
   Rule: 還原（安全）- 無定價商品驗章失敗時不得變成 0 元
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_tampered_priceless_cart_item_is_removed_not_zeroed
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_priceless_product_without_override_cannot_be_added_to_cart
 
     # 守門欄位必須是「這個商品自身有沒有價格」（get_price('edit')），
     # **不可**寫成「sale 與 regular 皆空」——只寫 _price 是 WooCommerce 明文承認的
@@ -243,6 +261,8 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       And 該品項不應以 0 元留在購物車中
 
   Rule: 不變量（隔離）- 顯示層的價格覆寫永遠不得影響任何購物車品項
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_disarm_removes_every_filter_and_restores_original_prices
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_priced_products_are_untouched_by_authorization
 
     # cart item 的價格由簽章驗證獨佔決定。
     #

@@ -37,6 +37,8 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
     And 已存在 status 為 publish 且不限販售期間的分潤賣場 "夏季賣場" 其 id 為 1932
 
   Rule: 前置（正規化）- 價格在簽章、驗證、套用三處必須用同一套正規化
+    # @covered-by: tests/Unit/Application/Service/CartPriceSignatureServiceTest.php::test_sign_produces_deterministic_output_for_same_inputs
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_before_calculate_totals_sets_product_price_to_override_when_signature_valid
 
     # 正規化實作是 wc_format_decimal($price, '')，行為是「補足到站台小數位數」，
     # 不是 trim trailing zeros。任一路徑漏正規化，簽章就會對不上、
@@ -60,6 +62,8 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       And 結果不應為 "0.00"
 
   Rule: 前置（寫入）- 加購時必須同時寫入五筆價格相關 meta 與一筆簽章
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_profit_shop_id_writes_override_meta_to_cart_item
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_cart_item_regular_and_sale_price_reflect_shop_override
 
     Example: 同時覆寫原價與特價
       Given 賣場 "夏季賣場" 對商品 101 設定覆寫原價 "500" 與覆寫特價 "450"
@@ -82,6 +86,11 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       Then 該購物車品項不應帶有分潤簽章
 
   Rule: 後置（套價）- 驗章通過後 price / regular / sale 必須成套套用
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_cart_item_regular_and_sale_price_reflect_shop_override
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_only_sale_overridden_keeps_product_original_regular_price
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_only_regular_overridden_clears_product_sale_price
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_null_regular_override_is_not_normalized_into_zero
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_variation_override_sets_variation_regular_and_sale_price
 
     Example: 購物車顯示賣場覆寫後的劃線原價與實收價
       Given 賣場 "夏季賣場" 對商品 101 設定覆寫原價 "500" 與覆寫特價 "450"
@@ -107,6 +116,8 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       And 該購物車品項不應呈現「原價劃掉→特價」的樣式
 
   Rule: 後置（一致性）- 賣場卡片、單品頁與購物車三處價格必須相同
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_simple_product_price_is_overridden_on_single_product_page
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_shop_cart_item_does_not_pollute_other_product_instances
 
     Example: 同一組覆寫價在三處呈現一致
       Given 賣場 "夏季賣場" 對商品 101 設定覆寫原價 "500" 與覆寫特價 "450"
@@ -117,6 +128,8 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       And 三處顯示的原價皆應為 "500"
 
   Rule: 後置（優惠券）- 套用覆寫特價後品項會被視為特價中
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_override_makes_cart_item_on_sale_for_exclude_sale_items_coupon
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_coupon_percentage_discount_applies_on_top_of_override
 
     # 刻意接受的行為變更：語意上該品項確實在特價中，與單品頁既有行為一致。
 
@@ -128,6 +141,9 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       Then 該購物車品項不應獲得折扣
 
   Rule: 安全（簽章）- 任一被簽章保護的欄位被竄改都必須驗章失敗
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_v2_cart_item_with_tampered_regular_price_falls_back_to_original
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_v2_cart_item_with_missing_regular_meta_falls_back_to_original
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_before_calculate_totals_falls_back_to_original_when_signature_missing
 
     Scenario Outline: 竄改分潤 meta 後品項退回商品原價
       Given 顧客已從賣場 1932 加購商品 101 且覆寫價為 "500" / "450"
@@ -153,6 +169,8 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       Then 該購物車品項應退回商品原價
 
   Rule: 安全（簽章）- 簽章必須綁定商品身分，不得搬移到其他商品
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_v3_signature_cannot_be_transplanted_to_another_product
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_v3_signature_bound_to_wrong_product_is_rejected
 
     # v3 起 payload 納入 product_id 與 variation_id。
     # 兩個都簽：只簽 target 已足以阻擋搬移，額外簽 product_id 是為了鎖住
@@ -172,6 +190,10 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       Then 該購物車品項應退回商品原價
 
   Rule: 相容（版本）- 簽章分三個版本，舊版本永久保留驗證能力
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_legacy_v1_cart_item_still_applies_price_and_is_not_treated_as_tampering
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_legacy_v1_signature_ignores_injected_regular_price_meta
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_v1_signature_with_forged_v2_prefix_falls_back_to_original_price
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_mixed_v1_and_v2_cart_items_are_evaluated_independently
 
     # 🔴 舊版本分支不是死碼，且不設下架期限。
     #   登入使用者的持久化購物車（usermeta）沒有任何過期機制，
@@ -226,6 +248,8 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       Then 該購物車品項應退回商品原價
 
   Rule: 後置（還原）- 驗章失敗的還原必須同時還原三個價格欄位
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_signature_failure_also_restores_regular_and_sale_price
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_price_only_product_survives_signature_failure_and_falls_back_to_own_price
 
     # 同一個 request 內 calculate_totals() 會被呼叫多次。若第一次驗章通過
     # （已寫入覆寫 regular/sale）、第二次因竄改而失敗，只還原 price
@@ -237,6 +261,8 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
       Then 該品項的 price / regular_price / sale_price 應全部回到商品原本的值
 
   Rule: 效能（重入）- 套價流程不得巢狀重入自己
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_apply_override_never_re_enters_itself
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_reentrancy_guard_preserves_mixed_cart_correctness
 
     # 還原流程可能呼叫 remove_cart_item()，而 WooCommerce 在
     # woocommerce_cart_item_removed 上掛了 calculate_totals（priority 20），

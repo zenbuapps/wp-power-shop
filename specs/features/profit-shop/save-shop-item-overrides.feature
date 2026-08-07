@@ -36,6 +36,11 @@ Feature: 儲存賣場商品的價格覆寫設定
     And 已存在分潤賣場 "夏季賣場"
 
   Rule: 前置（參數）- override 各價格欄位若提供必須為非負十進位字串
+    # @covered-by: tests/Unit/Domain/ValueObject/PriceOverrideTest.php::test_construct_throws_when_regular_price_is_negative
+    # @covered-by: tests/Unit/Domain/ValueObject/PriceOverrideTest.php::test_construct_throws_when_price_is_non_numeric_string
+    # @covered-by: tests/Unit/Domain/ValueObject/PriceOverrideTest.php::test_zero_prices_are_valid
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_negative_regular_price_returns_400_validation_failed
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_non_numeric_regular_price_returns_400_validation_failed
 
     Scenario Outline: 傳入非法價格字串時系統應拒絕儲存
       When 管理者 "Admin" 儲存賣場 "夏季賣場" 的商品設定
@@ -51,6 +56,9 @@ Feature: 儲存賣場商品的價格覆寫設定
         | abc    |
 
   Rule: 前置（參數）- sale_price 不得高於 regular_price
+    # @covered-by: tests/Unit/Domain/ValueObject/PriceOverrideTest.php::test_construct_throws_when_sale_price_greater_than_regular
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_sale_price_greater_than_regular_price_returns_400_validation_failed
+    # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_sale_price_greater_than_regular_price_throws_invalid_price_override
 
     Example: 特價高於原價時系統應拒絕儲存
       When 管理者 "Admin" 儲存賣場 "夏季賣場" 的商品設定
@@ -61,6 +69,8 @@ Feature: 儲存賣場商品的價格覆寫設定
         | validation_failed |
 
   Rule: 前置（參數）- product_id 必須對應存在的商品
+    # @covered-by: tests/Unit/Application/Service/ItemValidatorTest.php::test_throws_product_not_found_when_product_missing
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_nonexistent_product_id_returns_404_not_found
 
     Example: 商品不存在時系統應拒絕儲存
       When 管理者 "Admin" 儲存賣場 "夏季賣場" 的商品設定
@@ -71,6 +81,8 @@ Feature: 儲存賣場商品的價格覆寫設定
         | not_found |
 
   Rule: 後置（持久化）- 價格覆寫必須完整寫入且可原樣讀回
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_put_nested_items_round_trips_through_get
+    # @covered-by: tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php::test_find_returns_aggregate_with_items
 
     Example: 儲存後重新查詢應還原相同的覆寫值
       When 管理者 "Admin" 儲存賣場 "夏季賣場" 的商品設定
@@ -82,6 +94,10 @@ Feature: 儲存賣場商品的價格覆寫設定
         | 101        | 50000         | 49900      |            | 30             |
 
   Rule: 後置（持久化）- 未提供的價格欄位必須保存為 null 代表沿用原價
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_only_sale_price_set_leaves_regular_price_null
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_both_price_fields_empty_persists_as_null
+    # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_missing_override_key_results_in_all_null_price_fields
+    # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_empty_string_regular_price_is_treated_as_null
 
     Example: 只設定特價時原價欄位應為 null
       When 管理者 "Admin" 儲存賣場 "夏季賣場" 的商品設定
@@ -101,6 +117,7 @@ Feature: 儲存賣場商品的價格覆寫設定
       And 賣場商品 102 的 signup_fee 應為 null
 
   Rule: 後置（持久化）- 儲存必須以整體覆寫語意處理 items
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_update_with_fewer_items_removes_missing_products
 
     Example: 未包含在送出 items 中的商品應自賣場移除
       Given 賣場 "夏季賣場" 的商品列表為
@@ -116,6 +133,9 @@ Feature: 儲存賣場商品的價格覆寫設定
         | 101        | 30             |
 
   Rule: 後置（回應）- items 每筆必須包含契約定義的完整欄位
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_get_response_items_contain_full_contract_fields
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_put_flat_price_override_is_ignored_and_get_reflects_null
+    # @covered-by: tests/Unit/Domain/Entity/OverrideItemTest.php::test_to_array_serializes_per_spec_2_3
 
     Example: 查詢賣場時每筆商品項目應包含指定欄位
       When 管理者 "Admin" 重新查詢賣場 "夏季賣場"

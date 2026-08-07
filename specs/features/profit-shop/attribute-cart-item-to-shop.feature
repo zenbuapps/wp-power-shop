@@ -44,6 +44,7 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       | 102        |               |            |
 
   Rule: 前置（來源）- profit_shop_id 只從 $_GET 與 $_POST 讀取
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_profit_shop_id_writes_override_meta_to_cart_item
 
     # 刻意排除 $_COOKIE：避免攻擊者透過 XSS 在受害者瀏覽器植入 profit_shop_id
     # 進行分潤歸因竄改。雖然閘門 ④ 仍會擋下未授權商品，收斂攻擊面本身有價值。
@@ -67,6 +68,7 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       And 該購物車品項應以商品原價計價
 
   Rule: 前置（格式）- profit_shop_id 必須是正整數字串
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_nonexistent_profit_shop_id_falls_back_to_original_price
 
     Scenario Outline: 非正整數的 profit_shop_id 一律視同未提供
       When 顧客加購商品 101 並帶入參數
@@ -88,6 +90,7 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       Then 該購物車品項不應歸屬於任何賣場
 
   Rule: 前置（短路）- 上游已帶入 profit_shop_id 時不重覆注入
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_closed_shop_rejects_upstream_supplied_profit_shop_id
 
     # AddToCartHook 尊重上游（第三方外掛以 add_to_cart() 第 5 參數注入）的值。
     # 這代表**四道閘門在這條路徑上被整段跳過**，因此
@@ -99,6 +102,7 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       Then 該購物車品項應歸屬於賣場 1932
 
   Rule: 閘門①（存在）- 賣場必須存在
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_nonexistent_profit_shop_id_falls_back_to_original_price
 
     Example: 偽造不存在的賣場 ID 時不成立歸屬
       When 顧客加購商品 101 並帶入參數
@@ -116,6 +120,7 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       And 系統應寫入一筆錯誤紀錄且訊息中不含換行字元
 
   Rule: 閘門②（狀態）- 賣場必須為 publish
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_draft_profit_shop_falls_back_to_original_price
 
     # draft 賣場常被站長當作「促銷預覽」使用，其覆寫價不得洩漏到顧客購物車。
 
@@ -127,6 +132,8 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       Then 該購物車品項不應歸屬於任何賣場
 
   Rule: 閘門③（期間）- 賣場必須在販售期間內
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_sale_window_gate_rejects_before_start_and_ignores_unset_schedule
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_closed_shop_rejects_hand_crafted_post_for_priced_product
 
     # 販售期間的定義與賣場前台「是否印出商品 Modal」共用同一份實作
     # （ProfitShopFrontData::is_sale_window_open）。兩者若各寫一份，
@@ -157,6 +164,7 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       And 該購物車品項不應帶有任何分潤 meta
 
   Rule: 閘門④（成員）- 商品必須在該賣場的商品列表內
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_when_product_not_in_shop_falls_back
 
     # 防「持賣場 A 的合法 ID，套到賣場 A 沒有的商品上」。
 
@@ -176,6 +184,8 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       Then 該購物車品項應歸屬於賣場 1932
 
   Rule: 縱深（重驗）- 定價階段必須重新驗證同樣四道閘門
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_closed_shop_rejects_upstream_supplied_profit_shop_id
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_before_calculate_totals_falls_back_to_original_when_signature_invalid
 
     # 涵蓋「上游已帶 profit_shop_id」而跳過 AddToCartHook 的路徑。
 
@@ -193,6 +203,8 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
         | 賣場 "夏季賣場" 商品列表不含 103 | 103        | ④       |
 
   Rule: 環境（後台）- 純後台請求不掛載歸屬 hook
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_hook_does_not_register_in_admin_context
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_hook_registers_in_ajax_admin_context
 
     Example: 後台非 AJAX 請求不註冊 hook
       Given 目前為 WordPress 後台且非 AJAX 請求
@@ -203,6 +215,10 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       Then 系統應註冊加購歸屬的 filter
 
   Rule: 後置（歸屬）- 歸屬成立後必須寫入完整分潤 meta 與簽章
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_profit_shop_id_writes_override_meta_to_cart_item
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_cart_item_meta_survives_session_serialization
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_multiple_cart_items_from_different_shops
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_same_product_from_different_shops_treats_as_different_cart_items
 
     Example: 歸屬成立後 cart item 帶有六筆分潤 meta
       When 顧客加購商品 101 並帶入參數

@@ -23,6 +23,8 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
     And 站台存在一個頁面 "活動說明"
 
   Rule: 後置（一致）- 短碼與獨立頁面渲染逐字相同的 DOM
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_renderer_and_shortcode_paths_render_identical_dom
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_output_uses_div_wrapper_and_never_main
 
     Example: 兩條路徑的商品區塊輸出完全相同
       When 系統以獨立頁面路徑渲染賣場 1932
@@ -42,6 +44,8 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       And 商品 Modal 應可正常開啟
 
   Rule: 安全（設定）- 短碼路徑必須套用與獨立頁面相同的販售期間判斷
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_shortcode_respects_closed_shop_status
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_no_display_combination_ever_renders_modal_when_closed
 
     Example: 已結束販售的賣場以短碼嵌入時不得可加購
       Given 賣場 "夏季賣場" 已結束販售
@@ -55,6 +59,10 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       Then 輸出中不應存在加購成功通知的容器
 
   Rule: 前置（參數）- 短碼的賣場識別必須是純數字且不接受前導零
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_non_numeric_id_returns_empty_string
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_negative_or_zero_id_returns_empty_string
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_numeric_looking_but_invalid_ids_are_rejected
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_missing_atts_does_not_error
 
     Scenario Outline: 非法的短碼識別一律不渲染
       When 頁面內含賣場識別為 "<id>" 的短碼
@@ -69,6 +77,9 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
         | 1.5  |
 
   Rule: 安全（可見性）- 短碼的可見性判斷與獨立頁面逐字一致
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_draft_shop_returns_empty_string_for_visitor
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_draft_shop_renders_for_privileged_user
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_trashed_shop_returns_empty_string
 
     Scenario Outline: 依賣場狀態與檢視者權限決定是否渲染
       Given 賣場 "夏季賣場" 的狀態為 "<status>"
@@ -83,6 +94,9 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
         | trash   | 對該賣場有編輯權限的使用者   | 不渲染   |
 
   Rule: 安全（訊息）- 失敗訊息不得洩漏賣場是否存在
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_draft_and_missing_shop_give_indistinguishable_hints
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_debug_hint_is_only_visible_to_editors
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_nonexistent_id_returns_empty_string_for_visitor
 
     # 只有具備編輯文章能力（例如作者）的使用者才看得到除錯提示；
     # 而「找不到 / 已刪除」與「未發佈且無預覽權限」**共用同一句訊息**——
@@ -105,6 +119,7 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
         | 賣場 1932 為草稿且該使用者無預覽權限 |
 
   Rule: 後置（隔離）- 短碼渲染失敗不得影響宿主頁面
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_missing_atts_does_not_error
 
     Example: 渲染過程拋出例外時回傳空字串
       Given 賣場渲染過程將拋出例外
@@ -118,6 +133,7 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       Then 系統不應在短碼位置之外產生任何輸出
 
   Rule: 後置（多重）- 同一頁可放多個不同賣場的短碼
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_do_shortcode_renders_shop_content
 
     Example: 一頁兩個賣場的短碼各自獨立運作
       Given 另有分潤賣場 "秋季賣場" 其 id 為 2000
@@ -126,6 +142,7 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       And 點擊任一賣場的卡片應開啟該賣場的商品 Modal
 
   Rule: 後置（SEO）- 短碼路徑不注入標題與正規網址
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_output_contains_no_seo_meta
 
     # 宿主頁面自己有，注入會造成重複的標題。
 
@@ -135,6 +152,7 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       And 頁面不應出現第二個 canonical 連結
 
   Rule: 前端（後台）- 短碼模式的賣場在列表提供複製短碼
+    # @covered-by: NOT-COVERED ProfitShop/List 的「複製短碼」按鈕，屬 React 元件行為（B9 待補）
 
     Example: 複製短碼可用於未設定永久連結的賣場
       Given 賣場 "夏季賣場" 的模式為 shortcode 且未設定永久連結
@@ -142,6 +160,7 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       Then 「複製」應為可用狀態
 
   Rule: 已知落差（存取）- 短碼模式的賣場公開網址仍然開得起來
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-13「shortcode 模式賣場公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-13（部分解決）：
     #   短碼本身已實作可用，但渲染流程**完全不檢查賣場模式**，

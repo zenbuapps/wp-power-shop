@@ -20,6 +20,10 @@ Feature: 查詢分潤賣場詳情與列表
       | 1932 | summer-sale | publish | page | 5               | 15   |
 
   Rule: 後置（詳情）- 單一賣場回應必須包含完整設定欄位
+    # @covered-by: tests/Integration/Application/ProfitShopCrudTest.php::test_get_shop_returns_full_output
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_get_response_items_contain_full_contract_fields
+    # @covered-by: tests/Unit/Application/UseCase/Shop/GetShopTest.php::test_returns_shop_output_when_id_exists
+    # @covered-by: tests/Unit/Application/UseCase/Shop/GetShopTest.php::test_throws_not_found_when_id_does_not_exist
 
     Example: 查詢賣場詳情
       When 管理者 "Admin" 查詢賣場 1932
@@ -61,6 +65,7 @@ Feature: 查詢分潤賣場詳情與列表
         | 404    | not_found |
 
   Rule: 後置（詳情）- 回應不得夾帶商品的當下資訊
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_get_response_items_contain_full_contract_fields
 
     Example: 商品項目不包含名稱與 SKU
       When 管理者 "Admin" 查詢賣場 1932
@@ -68,6 +73,9 @@ Feature: 查詢分潤賣場詳情與列表
       And 商品項目不應包含 sku 欄位
 
   Rule: 後置（列表）- 賣場列表支援分頁
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ListShopsTest.php::test_returns_all_shops_when_no_filter
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ListShopsTest.php::test_filters_by_partner_term_id
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ListShopsTest.php::test_returns_empty_array_when_no_shops
 
     Example: 查詢賣場列表
       When 管理者 "Admin" 查詢賣場列表
@@ -78,6 +86,7 @@ Feature: 查詢分潤賣場詳情與列表
       Then 實際生效的 per_page 應為 100
 
   Rule: 前端（填表）- 編輯頁載入後不得被背景重取資料覆蓋
+    # @covered-by: NOT-COVERED Edit 頁的 filledIdRef + refetchOnWindowFocus:false 防覆寫，屬 React 元件行為（B9 待補）
 
     # React Query 在視窗重新取得焦點時會重取資料，若無條件回填表單，
     # 使用者打字到一半的內容會被覆蓋。
@@ -93,6 +102,7 @@ Feature: 查詢分潤賣場詳情與列表
       Then 表單應填入新賣場的資料
 
   Rule: 前端（列表）- 列表頁採篩選卡片加實體列表的標準版型
+    # @covered-by: NOT-COVERED 篩選卡片＋實體列表版型屬 React 元件（admin-list-ui.rule.md），B9 待補
 
     Example: 列表頁呈現兩張卡片
       When 管理者 "Admin" 開啟賣場列表頁

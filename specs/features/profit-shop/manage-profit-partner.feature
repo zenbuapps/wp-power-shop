@@ -17,6 +17,9 @@ Feature: 管理分潤夥伴
     And 已存在分潤夥伴 "夥伴A" 其 term_id 為 5 且 slug 為 "partner-a"
 
   Rule: 權限（寫入）- 建立、更新與刪除夥伴需要 manage_options
+    # @covered-by: tests/Integration/Application/PartnerCrudTest.php::test_create_partner_requires_manage_options
+    # @covered-by: tests/Integration/Infrastructure/Rest/SetPartnerPasswordEndpointTest.php::test_non_admin_cannot_set_password
+    # @covered-by: tests/Integration/Infrastructure/Rest/RegeneratePasswordTest.php::test_non_admin_cannot_regenerate_password
 
     Scenario Outline: 僅具備 manage_woocommerce 者不得寫入夥伴
       Given 使用者僅具備 manage_woocommerce 能力
@@ -35,6 +38,10 @@ Feature: 管理分潤夥伴
       Then 系統應回傳夥伴列表
 
   Rule: 前置（slug）- slug 必須合法且不得與既有夥伴重複
+    # @covered-by: tests/Integration/Application/PartnerCrudTest.php::test_duplicate_slug_is_rejected
+    # @covered-by: tests/Unit/Application/UseCase/Partner/CreatePartnerTest.php::test_throws_invalid_partner_slug_for_reserved_word
+    # @covered-by: tests/Unit/Application/UseCase/Partner/CreatePartnerTest.php::test_throws_invalid_partner_slug_for_illegal_chars
+    # @covered-by: tests/Unit/Application/UseCase/Partner/CreatePartnerTest.php::test_slug_conflict_uses_unified_profit_partner_kind
 
     Example: slug 格式不合法時拒絕建立
       When 管理者 "Admin" 以 slug "Partner A!" 建立夥伴
@@ -50,6 +57,9 @@ Feature: 管理分潤夥伴
       And 回應的 conflicts 應包含一筆 conflict_kind 為 "profit_partner" 的項目
 
   Rule: 後置（建立）- 建立成功後回傳夥伴資料與報表網址
+    # @covered-by: tests/Unit/Application/UseCase/Partner/CreatePartnerTest.php::test_creates_partner_with_hashed_password
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_report_url_matches_registered_report_prefix
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_report_url_ignores_stale_report_slug_option
 
     Example: 建立夥伴後可取得其報表網址
       When 管理者 "Admin" 以名稱 "夥伴C" 與 slug "partner-c" 建立夥伴
@@ -61,6 +71,8 @@ Feature: 管理分潤夥伴
       Then 該夥伴的聯絡 email 應被保存
 
   Rule: 後置（更新）- 更新不存在的夥伴回 404
+    # @covered-by: tests/Unit/Application/UseCase/Partner/DeletePartnerTest.php::test_throws_partner_not_found_when_id_invalid
+    # @covered-by: tests/Integration/Infrastructure/Rest/SetPartnerPasswordEndpointTest.php::test_returns_404_when_partner_missing
 
     Example: 更新不存在的夥伴
       When 管理者 "Admin" 更新 term_id 為 999999 的夥伴
@@ -69,6 +81,10 @@ Feature: 管理分潤夥伴
         | 404    | not_found |
 
   Rule: 後置（刪除）- 仍被賣場引用的夥伴不得刪除
+    # @covered-by: tests/Integration/Application/PartnerInUseTest.php::test_delete_partner_with_active_shop_returns_409
+    # @covered-by: tests/Integration/Application/PartnerInUseTest.php::test_delete_idle_partner_succeeds
+    # @covered-by: tests/Unit/Application/UseCase/Partner/DeletePartnerTest.php::test_throws_partner_still_in_use_when_partner_has_shops
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_is_in_use_returns_true_when_attached_to_shop
 
     Example: 夥伴仍掛在賣場上時拒絕刪除
       Given 已存在分潤賣場 "夏季賣場" 其分潤夥伴為 "夥伴A"
@@ -90,6 +106,9 @@ Feature: 管理分潤夥伴
         | 404    | not_found |
 
   Rule: 後置（圖片）- 只持久化 attachment ID，網址為唯讀衍生欄位
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_save_persists_image_id_and_resolves_url_on_read
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_save_with_null_image_id_clears_existing_meta
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_deleted_attachment_yields_null_url_but_keeps_id
 
     Example: 儲存時忽略傳入的圖片網址
       When 管理者 "Admin" 更新夥伴 "夥伴A" 並同時傳入 image_id 為 88 與一個偽造的 image_url
@@ -122,6 +141,9 @@ Feature: 管理分潤夥伴
       Then 畫面應呈現預設頭像而非破圖
 
   Rule: 後置（列表）- 夥伴列表可依關鍵字與圖片有無篩選
+    # @covered-by: tests/Integration/Application/PartnerCrudTest.php::test_list_partners_returns_collection
+    # @covered-by: tests/Unit/Application/UseCase/Partner/ListPartnersTest.php::test_returns_partners_in_id_ascending_order
+    # @covered-by: NOT-COVERED 「依關鍵字與圖片有無篩選」是 List/Filter.tsx 的 client-side useMemo 過濾，專案無前端測試框架（B9 待補）
 
     Example: 以關鍵字篩選夥伴
       When 管理者 "Admin" 以關鍵字 "partner-a" 篩選夥伴列表

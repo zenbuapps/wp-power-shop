@@ -27,6 +27,7 @@ Feature: 從商品 Modal 非同步加入購物車
     And 顧客為未登入的訪客
 
   Rule: 後置（成功）- 加購成功時不換頁、關閉 Modal 並顯示成功通知
+    # @covered-by: NOT-COVERED AJAX 成功後關 Modal + toast，住在 inc/assets/js/profit-shop-front.js（IIFE），專案無 JS 測試框架（B8/B9 待補）
 
     Example: simple 商品的非同步加購
       When 顧客在商品 101 的 Modal 按下「加入購物車」
@@ -55,6 +56,7 @@ Feature: 從商品 Modal 非同步加入購物車
       Then 成功通知應顯示在畫面上方且不被頁首遮蔽
 
   Rule: 後置（載入）- 送出期間必須有明確的載入狀態
+    # @covered-by: NOT-COVERED setSubmitBusy 的 spinner / aria-busy，同上（B8/B9 待補）
 
     Example: 送出期間按鈕停用並顯示載入指示
       When 顧客按下「加入購物車」且請求尚未回應
@@ -62,6 +64,7 @@ Feature: 從商品 Modal 非同步加入購物車
       And 加購按鈕應顯示載入指示
 
   Rule: 安全（重送）- 飛行中必須擋住第二次送出
+    # @covered-by: NOT-COVERED modal.psSubmitting 旗標 + setSubmitEnabled 尊重它，同上（B8/B9 待補）。⚠️ 失效後果是顧客被重複收費
 
     # 原生表單沒有這個問題（送出後整頁導航、DOM 直接消失）。
     # 🔴 少了「切換變體時的解鎖也要尊重飛行中旗標」這一條，
@@ -78,6 +81,7 @@ Feature: 從商品 Modal 非同步加入購物車
       Then 加購按鈕應維持停用狀態
 
   Rule: 安全（重送）- 任何失敗都不得自動重送表單
+    # @covered-by: NOT-COVERED 「業務失敗一律導向 product_url、不自動重送」，同上（B8/B9 待補）
 
     # 訊息機制沒有去重，重送會讓同一則錯誤顯示兩次；
     # 邊界情況（第一次其實成功了）更會造成**重複加購、顧客被重複收費**。
@@ -108,6 +112,8 @@ Feature: 從商品 Modal 非同步加入購物車
       Then 畫面仍應顯示加入購物車成功的通知
 
   Rule: 降級（漸進增強）- 四道關卡任一不成立就退回原生表單送出
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_open_shop_renders_ajax_dom_contract
+    # @covered-by: NOT-COVERED canAjax() 四道關卡的 JS 分支，同上（B8/B9 待補）
 
     Scenario Outline: 依環境與商品狀態決定是否走非同步加購
       Given <condition>
@@ -130,6 +136,7 @@ Feature: 從商品 Modal 非同步加入購物車
       Then 瀏覽器應照常執行原生表單送出
 
   Rule: 降級（任意屬性）- 選中含任意屬性的變體必須走原生表單
+    # @covered-by: NOT-COVERED hasAnyAttribute() 降級走原生表單，同上（B8 待補）
 
     # 🔴 這是**正確**的降級，不是回歸。
     #   非同步端點全文不讀送來的屬性欄位，它一律自己從變體物件反查——
@@ -145,6 +152,8 @@ Feature: 從商品 Modal 非同步加入購物車
       And 畫面不應顯示非同步的成功通知
 
   Rule: 安全（歸屬）- 非同步通道仍完整經過四道分潤閘門
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_profit_shop_id_writes_override_meta_to_cart_item
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_nonexistent_profit_shop_id_falls_back_to_original_price
 
     Example: 帶合法賣場識別時套用覆寫價
       Given 賣場 "夏季賣場" 對商品 101 設定覆寫原價 "300" 與特價 "240"
@@ -160,6 +169,7 @@ Feature: 從商品 Modal 非同步加入購物車
       Then 該購物車品項應以商品原價計價
 
   Rule: 錯誤（就地）- 失敗訊息顯示在 Modal 內而非關閉 Modal
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_open_shop_renders_ajax_dom_contract
 
     Example: 失敗時 Modal 不關閉且就地顯示錯誤
       When 顧客的加購因故失敗
@@ -168,6 +178,7 @@ Feature: 從商品 Modal 非同步加入購物車
       And 錯誤區塊應提供「查看購物車」的連結
 
   Rule: 已知落差（訊息）- 業務失敗的原因必須離開賣場頁才看得到
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-41「業務失敗原因須離開賣場頁才看得到」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-41：非同步端點的失敗分支只回「失敗」與商品頁網址，
     #   真正的原因寫在 session 訊息裡，回應之前沒有任何可夾帶訊息的擴充點。
@@ -181,6 +192,7 @@ Feature: 從商品 Modal 非同步加入購物車
       And 賣場頁上不會顯示庫存不足的原文訊息
 
   Rule: 已知落差（第三方）- 購物車已有訂閱商品時非同步加購可能回傳非預期格式
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-42「WooCommerce Subscriptions 在 fragments 掛不存在的靜態方法」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-42：第三方訂閱外掛在購物車片段事件上掛了一個
     #   不存在的方法，在特定情境會讓回應變成非 JSON。

@@ -25,6 +25,9 @@ Feature: 管理分潤夥伴的報表登入密碼
     And 已存在分潤夥伴 "夥伴A" 其 term_id 為 5
 
   Rule: 前置（同步）- 雜湊與明文必須成套寫入且明文不得被跳脫改寫
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_save_persists_plain_password_alongside_hash
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_save_preserves_backslash_and_quotes_in_plain_password
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_save_creates_term_with_hashed_password
 
     # 只寫一邊的症狀是「站長把後台看到的密碼給了夥伴、夥伴卻登不進去」，
     # 兩邊都沒有任何錯誤訊息。
@@ -45,6 +48,8 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 登入應失敗
 
   Rule: 前置（相容）- 功能上線前建立的夥伴沒有明文可還原
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_legacy_partner_without_plain_meta_reads_password_as_null
+    # @covered-by: tests/Unit/Application/UseCase/Partner/ListPartnersTest.php::test_partner_without_stored_plain_password_is_null
 
     Example: 無明文時後台顯示無法顯示而非空白
       Given 夥伴 "夥伴A" 只有密碼雜湊而沒有明文
@@ -59,6 +64,8 @@ Feature: 管理分潤夥伴的報表登入密碼
       And 滑鼠移入時應顯示停用原因
 
   Rule: 安全（洩漏）- 明文只能出現在管理者專用端點
+    # @covered-by: tests/Integration/Application/PartnerCrudTest.php::test_partner_me_endpoint_never_exposes_plain_password
+    # @covered-by: tests/Integration/Application/PartnerCrudTest.php::test_create_partner_returns_output_with_plain_password
 
     Example: 夥伴自己查詢身分時不得取得密碼明文
       Given 夥伴 "夥伴A" 已登入自助報表頁
@@ -70,6 +77,8 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 回應應包含 password 欄位
 
   Rule: 路徑（更新）- 從編輯頁儲存時，空白代表不變更密碼
+    # @covered-by: tests/Integration/Infrastructure/Persistence/PartnerTermRepositoryTest.php::test_save_without_password_keeps_existing_plain_password
+    # @covered-by: tests/Unit/Application/DTO/DtoRoundTripTest.php::test_partner_input_normalizes_empty_password_to_null
 
     # 密碼在編輯頁是隨主表單送出的一般欄位，站長可能清空後按儲存。
     # 未正規化就會把空字串當新密碼寫進去——夥伴的密碼變成空值、從此登不進報表頁，
@@ -89,6 +98,7 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 表單應可正常送出
 
   Rule: 路徑（更新）- 只在密碼真的改動時才送出
+    # @covered-by: NOT-COVERED Edit 頁的 initialPasswordRef 比對住在 React 元件，專案無前端測試框架（B9 待補）
 
     # 儲存端只要收到密碼就會更新密碼變更時間，而那會讓該夥伴所有登入 session
     # 立即失效。若每次存檔都原封不動送回同一組密碼，站長改個名稱都會把夥伴踢出報表頁。
@@ -105,6 +115,10 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 第二次儲存不應再次變更密碼變更時間
 
   Rule: 路徑（站長指定）- 站長指定密碼須通過強度驗證且回應不回傳密碼
+    # @covered-by: tests/Integration/Infrastructure/Rest/SetPartnerPasswordEndpointTest.php::test_admin_sets_password_returns_200_without_leaking_password
+    # @covered-by: tests/Integration/Infrastructure/Rest/SetPartnerPasswordEndpointTest.php::test_weak_password_returns_422_with_reasons
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/SetPartnerPasswordUseCaseTest.php::test_sets_password_when_strong_enough
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/SetPartnerPasswordUseCaseTest.php::test_rejects_too_short_password
 
     # 與「重新產生」互補而非重複，不可為了 DRY 併掉任一個：
     #   指定 —— 站長要主動交一組自己知道的密碼給夥伴
@@ -129,6 +143,11 @@ Feature: 管理分潤夥伴的報表登入密碼
         | 404    | not_found |
 
   Rule: 路徑（重新產生）- 系統產生 12 字元密碼並僅回傳一次
+    # @covered-by: tests/Integration/Infrastructure/Rest/RegeneratePasswordTest.php::test_admin_regenerates_password_returns_new_plaintext
+    # @covered-by: tests/Integration/Infrastructure/Rest/RegeneratePasswordTest.php::test_old_password_cannot_login_after_regenerate
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/RegeneratePartnerPasswordUseCaseTest.php::test_regenerate_returns_plaintext_and_persists_hash
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/RegeneratePartnerPasswordUseCaseTest.php::test_each_execution_produces_unique_password
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/RegeneratePartnerPasswordUseCaseTest.php::test_return_value_is_plaintext_only_for_one_time_display
 
     Example: 重新產生密碼回傳明文供站長轉交
       When 管理者 "Admin" 為夥伴 "夥伴A" 重新產生密碼
@@ -144,6 +163,7 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 系統應拒絕該請求
 
   Rule: 傳輸（原樣）- 夥伴端點的密碼欄位不得經過一般文字清理
+    # @covered-by: tests/Integration/Infrastructure/Rest/SetPartnerPasswordEndpointTest.php::test_password_literal_is_preserved
 
     # 一般文字清理會把密碼裡的 `<` / `>` / 連續空白靜默改寫。
     # 症狀是「站長設的密碼夥伴登不進去」，而且兩邊看到的字串**完全一樣**，極難排查。
@@ -153,6 +173,7 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 夥伴以 "a1 <b>  c&d" 登入應成功
 
   Rule: 前端（產生）- 密碼欄位旁的產生按鈕只填入不送出
+    # @covered-by: NOT-COVERED PartnerForm 的「產生」按鈕（crypto.getRandomValues，只填入不送出），專案無前端測試框架（B9 待補）
 
     Example: 點擊產生只填入欄位
       When 管理者 "Admin" 在夥伴表單點擊「產生」
@@ -168,6 +189,7 @@ Feature: 管理分潤夥伴的報表登入密碼
       Then 夥伴 "夥伴A" 的密碼應維持不變
 
   Rule: 已知落差（建立）- 建立夥伴時的密碼沒有後端強度驗證
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-33「CreatePartner 未過 PartnerPassword VO」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-33：這是已知的規則不一致，刻意未修。
     #   建立頁只有「至少 8 字元」的前端規則，後端不過強度驗證；

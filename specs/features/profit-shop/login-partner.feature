@@ -24,6 +24,9 @@ Feature: 分潤夥伴登入自助報表
     And 已存在分潤夥伴 "夥伴B" 其 slug 為 "partner-b"
 
   Rule: 後置（成功）- 登入成功回傳 token、到期時間與夥伴基本資料
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerAuthCookieTest.php::test_login_response_body_contains_token_and_expires_at
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerAuthCookieTest.php::test_login_response_sets_secure_httponly_cookie
+    # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_happy_returns_partner_snapshot_and_resets_counter
 
     Example: 以正確的 slug 與密碼登入
       When 訪客以 slug "partner-a" 與密碼 "correct-pw1" 登入
@@ -49,6 +52,9 @@ Feature: 分潤夥伴登入自助報表
       And 該來源 IP 的登入失敗計數應歸零
 
   Rule: 安全（列舉）- 帳號不存在與密碼錯誤必須回相同的錯誤
+    # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_unknown_slug_throws_invalid_credentials
+    # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_wrong_password_throws_invalid_credentials_and_records_failure
+    # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_message_does_not_distinguish_unknown_slug_from_wrong_password
 
     Scenario Outline: 兩種登入失敗回相同的錯誤碼與訊息
       When 訪客以 slug "<slug>" 與密碼 "<password>" 登入
@@ -71,6 +77,11 @@ Feature: 分潤夥伴登入自助報表
       Then 該來源 IP 的登入失敗計數應增加 1
 
   Rule: 安全（速率）- 任一維度達 5 次失敗即鎖定並回 429
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerBruteForceTest.php::test_five_failures_block_with_429
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerBruteForceTest.php::test_window_reset_unblocks_login
+    # @covered-by: tests/Unit/Application/Service/LoginRateLimiterTest.php::test_fifth_failure_blocks_and_sends_email
+    # @covered-by: tests/Unit/Application/Service/LoginRateLimiterIpDimensionTest.php::test_assert_not_blocked_throws_when_ip_exceeds_threshold_across_different_slugs
+    # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_already_blocked_short_circuits_to_too_many_attempts
 
     Example: 同一 slug 連續失敗 5 次後被鎖定
       When 訪客以 slug "partner-a" 連續 5 次輸入錯誤密碼
@@ -111,6 +122,8 @@ Feature: 分潤夥伴登入自助報表
       Then 該計數的到期時間應維持原本的視窗結束時間
 
   Rule: 通知（警示）- slug 維度達門檻時通知站長，IP 維度不寄信
+    # @covered-by: tests/Unit/Application/Service/LoginRateLimiterTest.php::test_fifth_failure_blocks_and_sends_email
+    # @covered-by: tests/Unit/Application/Service/LoginRateLimiterTest.php::test_email_failure_is_warn_and_swallowed
 
     # IP 維度不寄信是刻意的：攻擊者輪換 slug 時會把站長信箱洗版。
 
@@ -131,6 +144,7 @@ Feature: 分潤夥伴登入自助報表
       And 系統不應為 IP 維度寄出警示信
 
   Rule: 隱私（IP）- 來源 IP 永不以明文落地
+    # @covered-by: tests/Unit/Application/Service/LoginRateLimiterIpDimensionTest.php::test_ip_is_hashed_in_transient_key
 
     Example: 速率限制的儲存鍵與稽核紀錄皆不含明文 IP
       When 訪客以來源 IP "203.0.113.9" 登入失敗
@@ -153,6 +167,12 @@ Feature: 分潤夥伴登入自助報表
       Then 速率限制應以該真實來源 IP 計數
 
   Rule: 後置（token）- token 永不以明文儲存且有存活上限
+    # @covered-by: tests/Unit/Application/Service/PartnerTokenStoreTest.php::test_plaintext_token_never_stored_in_transient
+    # @covered-by: tests/Unit/Application/Service/PartnerTokenStoreTest.php::test_verify_returns_null_after_ttl_expired
+    # @covered-by: tests/Unit/Application/Service/PartnerTokenStoreTest.php::test_verify_double_checks_expires_at_even_if_transient_alive
+    # @covered-by: tests/Unit/Application/Service/PartnerTokenStoreTest.php::test_each_issue_produces_unique_token
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerTokenSecurityTest.php::test_plaintext_token_never_persists_in_transients
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerTokenSecurityTest.php::test_expired_token_returns_401_on_me
 
     Example: token 以雜湊形式儲存
       When 訪客登入成功並取得 token
@@ -166,6 +186,10 @@ Feature: 分潤夥伴登入自助報表
         | 401    | unauthorized |
 
   Rule: 後置（撤銷）- 密碼變更後既有 token 立即失效
+    # @covered-by: tests/Unit/Application/Service/PartnerTokenStorePasswordRotationTest.php::test_verify_returns_null_when_password_changed_after_issue
+    # @covered-by: tests/Unit/Application/Service/PartnerTokenStorePasswordRotationTest.php::test_verify_revokes_token_when_password_changes_within_same_second
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerPasswordRotationRevokesTokenTest.php::test_old_token_is_revoked_after_admin_regenerates_password
+    # @covered-by: tests/Integration/Infrastructure/PartnerTermRepositoryGetPasswordChangedAtTest.php::test_password_changed_at_strictly_increases_even_within_same_second
 
     # 「同秒簽發舊 token + 同秒改密」也必須被涵蓋：
     # token 的簽發時間**等於**密碼變更時間時視為已撤銷。
@@ -187,6 +211,10 @@ Feature: 分潤夥伴登入自助報表
         | 401    | unauthorized |
 
   Rule: 後置（登出）- 登出必須是冪等的且永遠清除本機狀態
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/LogoutPartnerUseCaseTest.php::test_logout_revokes_token
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/LogoutPartnerUseCaseTest.php::test_logout_with_unknown_token_does_not_throw
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerTokenSecurityTest.php::test_revoked_token_cannot_be_reused
+    # @covered-by: NOT-COVERED 「永遠清除本機狀態」住在 partner portal SPA 的 AuthContext，專案無前端測試框架（B9 待補）
 
     Example: 登出後 token 立即失效
       Given 夥伴 "夥伴A" 已登入並取得 token
@@ -212,6 +240,7 @@ Feature: 分潤夥伴登入自助報表
       And 畫面應導向登入頁
 
   Rule: 隔離（跨夥伴）- 網址的夥伴與本機登入身分不一致時必須遮蔽
+    # @covered-by: NOT-COVERED partner portal SPA 的 AuthContext 雙保險（status='loading' + partner 物件遮蔽 null），專案無前端測試框架（B9 待補）
 
     Example: 以夥伴A 的登入狀態開啟夥伴B 的報表網址
       Given 夥伴 "夥伴A" 已在瀏覽器登入
@@ -221,6 +250,7 @@ Feature: 分潤夥伴登入自助報表
       And 畫面應導向登入頁
 
   Rule: 前置（表單）- 登入頁必須從網址帶入 slug 且不可由使用者更改
+    # @covered-by: NOT-COVERED Login 頁從網址帶入 slug 並 disabled，屬 React 元件行為（B9 待補）
 
     Example: 登入表單的 slug 由網址帶入並鎖定
       When 訪客開啟 "/profit-report/partner-a/"

@@ -24,6 +24,8 @@ Feature: 建立與更新分潤賣場
     And 商品 103 具有變體 1031
 
   Rule: 前置（參數）- 分潤比例必須介於 0 到 100
+    # @covered-by: tests/Unit/Domain/ValueObject/ProfitRateTest.php::test_construct_throws_when_negative
+    # @covered-by: tests/Unit/Domain/ValueObject/ProfitRateTest.php::test_construct_throws_when_above_100
 
     Scenario Outline: 超出範圍的分潤比例被拒絕
       When 管理者 "Admin" 以分潤比例 <rate> 建立賣場
@@ -41,6 +43,8 @@ Feature: 建立與更新分潤賣場
       Then 系統應回傳建立成功
 
   Rule: 前置（參數）- 分潤夥伴必須存在
+    # @covered-by: tests/Unit/Application/UseCase/Shop/CreateShopTest.php::test_throws_partner_not_found_when_partner_term_id_invalid
+    # @covered-by: tests/Unit/Application/UseCase/Shop/UpdateShopTest.php::test_throws_partner_not_found_when_new_partner_does_not_exist
 
     Example: 指定不存在的夥伴時拒絕建立
       When 管理者 "Admin" 以 partner_term_id 999999 建立賣場
@@ -49,6 +53,9 @@ Feature: 建立與更新分潤賣場
         | 404    | not_found |
 
   Rule: 前置（參數）- 賣場商品的商品與變體必須存在且對應正確
+    # @covered-by: tests/Unit/Application/UseCase/Shop/CreateShopTest.php::test_throws_product_not_found_when_item_product_invalid
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_nonexistent_product_id_returns_404_not_found
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_variation_not_belonging_to_product_returns_400
 
     Example: 商品不存在時拒絕儲存
       When 管理者 "Admin" 建立賣場且商品列表包含 product_id 999999
@@ -63,6 +70,8 @@ Feature: 建立與更新分潤賣場
         | 400    | validation_failed |
 
   Rule: 前置（衝突）- 建立時必須檢查永久連結衝突
+    # @covered-by: tests/Unit/Application/UseCase/Shop/CreateShopTest.php::test_throws_slug_conflict_when_slug_duplicates_existing_resource
+    # @covered-by: tests/Integration/Application/SlugConflictTest.php::test_rejects_wp_reserved_word_slug
 
     Example: 永久連結與既有資源衝突時拒絕建立
       Given 站台已存在 slug 為 "summer-sale" 的頁面
@@ -73,6 +82,7 @@ Feature: 建立與更新分潤賣場
       And 回應應包含 conflicts 清單
 
   Rule: 前置（衝突）- 更新時只有在永久連結真的改動才檢查衝突
+    # @covered-by: tests/Unit/Application/UseCase/Shop/UpdateShopTest.php::test_throws_slug_conflict_when_new_slug_collides
 
     # 否則賣場會跟自己衝突。
 
@@ -90,6 +100,11 @@ Feature: 建立與更新分潤賣場
         | 409    | slug_conflict |
 
   Rule: 後置（持久化）- 更新採整體覆寫語意且必須可原樣讀回
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_put_nested_items_round_trips_through_get
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_update_with_fewer_items_removes_missing_products
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_put_flat_price_override_is_ignored_and_get_reflects_null
+    # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_from_input_and_to_output_round_trip_preserves_nested_override_and_variations
+    # @covered-by: tests/Integration/Application/ProfitShopCrudTest.php::test_update_shop_persists_changes
 
     Example: 更新後重新查詢應還原相同內容
       Given 已存在分潤賣場 "夏季賣場"
@@ -108,6 +123,8 @@ Feature: 建立與更新分潤賣場
         | 404    | not_found |
 
   Rule: 後置（順序）- 賣場商品的陣列順序即前台顯示順序
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_items_order_is_preserved_through_round_trip
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_reordered_items_persist_the_new_order
 
     # 順序本身就是業務資料，不是實作細節。
     # 任何一層改用 product_id 當鍵、或中途排序，拖曳排序就會靜默失效
@@ -131,6 +148,9 @@ Feature: 建立與更新分潤賣場
       Then 賣場商品列表的第一筆應為商品 103
 
   Rule: 後置（設定）- settings 為自由欄位，送出時必須以既有內容為底合併
+    # @covered-by: tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php::test_settings_with_double_quotes_survive_round_trip
+    # @covered-by: tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php::test_save_round_trip_with_chinese_characters
+    # @covered-by: NOT-COVERED 「以既有內容為底合併」的 mergeScheduleSettings 住在 React utils.ts，專案無前端測試框架（B9 待補）
 
     # settings 內同時放著前台顯示開關、排程與 legacy 匯入帶進來的未知鍵。
     # 只送部分欄位會把其餘的整批清掉，而且沒有任何錯誤訊息。
@@ -142,6 +162,7 @@ Feature: 建立與更新分潤賣場
       Then settings 應仍包含 showStock 與 showBuyerCount
 
   Rule: 前端（表單）- 多分頁表單的驗證失敗必須導向出錯的分頁
+    # @covered-by: NOT-COVERED ProfitShopForm 的 FIELD_TO_TAB 導向出錯分頁，屬 React 元件行為（B9 待補）
 
     # 非作用中的分頁是隱藏的，欄位驗證有跑、紅字有渲染，但使用者看不到。
     # 若父層只是靜默 return，畫面上完全沒有任何回饋——使用者會回報「按了建立沒反應」。
@@ -154,6 +175,7 @@ Feature: 建立與更新分潤賣場
       And 畫面應顯示尚有欄位未填寫的提示
 
   Rule: 已知落差（驗證）- 永久連結在後端沒有必填與格式驗證
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是「永久連結在後端沒有必填與格式驗證」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-14：前端 required、後端不驗。
     #   繞過前端直接呼叫 API 可建出 slug 為空的賣場，其公開網址會是打不開的
@@ -164,6 +186,7 @@ Feature: 建立與更新分潤賣場
       Then 系統應回傳建立成功
 
   Rule: 已知落差（數量）- 賣場商品數量上限只在前端把關
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是「數量上限只在前端把關、後端無對應驗證」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ 單次批次 100 筆與賣場總數 500 筆都只在前端擋，後端無對應驗證。
     #   繞過前端直接呼叫 API 可以送出超過 500 筆的商品陣列而不被拒絕。

@@ -17,6 +17,9 @@ Feature: 變更分潤賣場的上下架狀態與複製賣場
     And 已存在分潤賣場 "夏季賣場" 其 id 為 1932 且狀態為 "draft"
 
   Rule: 後置（上架）- 上架把狀態改為 publish 且為冪等操作
+    # @covered-by: tests/Unit/Application/UseCase/Shop/PublishShopTest.php::test_publishes_draft_shop
+    # @covered-by: tests/Unit/Application/UseCase/Shop/PublishShopTest.php::test_publishing_already_published_shop_is_idempotent
+    # @covered-by: tests/Unit/Domain/Entity/ProfitShopChangeStatusTest.php::test_change_status_draft_to_publish_succeeds
 
     Example: 草稿賣場上架後狀態為 publish
       When 管理者 "Admin" 上架賣場 "夏季賣場"
@@ -35,6 +38,9 @@ Feature: 變更分潤賣場的上下架狀態與複製賣場
         | 404    | not_found |
 
   Rule: 後置（下架）- 下架把狀態改為 draft 且為冪等操作
+    # @covered-by: tests/Unit/Application/UseCase/Shop/UnpublishShopTest.php::test_unpublishes_published_shop
+    # @covered-by: tests/Unit/Application/UseCase/Shop/UnpublishShopTest.php::test_unpublishing_draft_shop_is_idempotent
+    # @covered-by: tests/Unit/Domain/Entity/ProfitShopChangeStatusTest.php::test_change_status_publish_to_draft_succeeds
 
     Example: 已上架的賣場下架後狀態為 draft
       Given 賣場 "夏季賣場" 的狀態為 "publish"
@@ -46,6 +52,8 @@ Feature: 變更分潤賣場的上下架狀態與複製賣場
       Then 系統應回傳成功
 
   Rule: 後置（下架）- 下架後公開網址關閉但已在購物車的品項不受追溯影響
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_shortcode_respects_closed_shop_status
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_draft_profit_shop_falls_back_to_original_price
 
     # 「加入購物車 = 價格已鎖定」，活動結束那秒靜默清空所有顧客的購物車比放行更糟。
     # 唯一例外是「只靠賣場覆寫價才有價格」的品項，見
@@ -69,6 +77,9 @@ Feature: 變更分潤賣場的上下架狀態與複製賣場
       Then 該品項應仍在購物車中且維持覆寫價
 
   Rule: 後置（複製）- 複製產生一份草稿副本且不影響來源賣場
+    # @covered-by: tests/Unit/Application/UseCase/Shop/DuplicateShopTest.php::test_duplicates_shop_with_new_id_and_draft_status
+    # @covered-by: tests/Unit/Application/UseCase/Shop/DuplicateShopTest.php::test_duplicated_title_has_copy_suffix
+    # @covered-by: tests/Unit/Application/UseCase/Shop/DuplicateShopTest.php::test_throws_not_found_when_source_shop_does_not_exist
 
     Example: 複製後產生新的草稿賣場
       Given 賣場 "夏季賣場" 的狀態為 "publish" 且分潤比例為 15
@@ -99,6 +110,9 @@ Feature: 變更分潤賣場的上下架狀態與複製賣場
         | 404    | not_found |
 
   Rule: 後置（刪除）- 刪除為移至垃圾桶，之後公開網址一律 404
+    # @covered-by: tests/Unit/Application/UseCase/Shop/DeleteShopTest.php::test_deletes_existing_shop
+    # @covered-by: tests/Integration/Application/ProfitShopCrudTest.php::test_delete_shop_makes_subsequent_get_return_404
+    # @covered-by: tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php::test_find_returns_null_for_trashed_shop
 
     Example: 刪除賣場後公開網址回 404
       Given 賣場 "夏季賣場" 的狀態為 "publish"
@@ -119,6 +133,7 @@ Feature: 變更分潤賣場的上下架狀態與複製賣場
       Then 回應的 available 應為 true
 
   Rule: 前端（列表）- 操作欄依賣場狀態與模式呈現不同的主要動作
+    # @covered-by: NOT-COVERED ProfitShop/List 的 renderPrimaryAction 依 mode / status 切換動作，屬 React 元件行為（B9 待補）
 
     # ⚠️ 各動作的停用條件刻意分開判斷，不為了 DRY 併成一個函式——
     #    它們看起來高度相似，但差異點正是關鍵。

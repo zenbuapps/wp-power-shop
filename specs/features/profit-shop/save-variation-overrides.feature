@@ -31,6 +31,8 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
     And 已存在分潤賣場 "夏季賣場" 且其商品列表包含商品 103
 
   Rule: 前置（參數）- 變體必須屬於該商品
+    # @covered-by: tests/Unit/Application/Service/ItemValidatorTest.php::test_throws_invalid_variation_when_variation_does_not_belong_to_product
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_variation_not_belonging_to_product_returns_400
 
     Example: 變體不屬於該商品時拒絕儲存
       When 管理者 "Admin" 為商品 101 設定變體 1031 的覆寫
@@ -43,6 +45,8 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 系統應忽略該筆而不報錯
 
   Rule: 前置（參數）- 變體層價格必須符合與商品層相同的規則
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_variation_sale_price_greater_than_regular_returns_400
+    # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_variation_sale_price_greater_than_regular_throws
 
     Scenario Outline: 非法的變體價格被拒絕
       When 管理者 "Admin" 為變體 1031 設定 regular_price 為 "<price>"
@@ -66,6 +70,10 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 錯誤訊息應同時指出對應的商品與變體
 
   Rule: 前置（參數）- 灌水購買人數必須為非負整數
+    # @covered-by: tests/Unit/Domain/ValueObject/InflatedCountTest.php::test_negative_value_clamped_to_zero
+    # @covered-by: tests/Unit/Domain/ValueObject/InflatedCountTest.php::test_construct_with_zero_value
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_negative_variation_inflated_count_is_sanitized_to_zero
+    # @covered-by: tests/Unit/Application/UseCase/Shop/Support/ProfitShopHydratorTest.php::test_string_variation_inflated_count_is_cast_to_int
 
     Example: 負數的灌水購買人數被正規化為 0
       When 管理者 "Admin" 為變體 1031 設定灌水購買人數為 -5
@@ -73,6 +81,9 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 變體 1031 的灌水購買人數應為 0
 
   Rule: 後置（持久化）- 變體層設定必須完整寫入且可原樣讀回
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_put_variation_overrides_round_trip_through_get
+    # @covered-by: tests/Unit/Domain/Entity/OverrideItemTest.php::test_to_array_serializes_variation_inflated_count
+    # @covered-by: tests/Unit/Domain/Entity/OverrideItemTest.php::test_set_variation_override_preserves_existing_inflated_count
 
     Example: 儲存後重新查詢應還原相同的變體設定
       When 管理者 "Admin" 為變體 1031 設定
@@ -97,6 +108,9 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 商品 103 的 variations 應為空
 
   Rule: 相容（舊資料）- 缺少灌水購買人數欄位的舊資料讀為 0 且價格仍可讀出
+    # @covered-by: tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php::test_legacy_variations_json_without_inflated_count_defaults_to_zero
+    # @covered-by: tests/Integration/Infrastructure/Persistence/CptProfitShopRepositoryTest.php::test_legacy_variations_json_is_upgraded_on_next_save
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_variation_without_inflated_count_defaults_to_zero
 
     Example: 舊格式資料的灌水購買人數讀為 0
       Given 賣場 "夏季賣場" 的變體 1031 為只有 override 而無 inflated_count 的舊格式
@@ -110,6 +124,10 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 變體 1031 的資料應包含 inflated_count 欄位
 
   Rule: 後置（取價）- 變體層覆寫整組生效，不與商品層逐欄混用
+    # @covered-by: tests/Unit/Domain/Service/OverridePriceResolverTest.php::test_variation_override_takes_precedence_over_parent
+    # @covered-by: tests/Unit/Domain/Service/OverridePriceResolverTest.php::test_variation_override_does_not_merge_field_wise_with_parent
+    # @covered-by: tests/Unit/Domain/Service/OverridePriceResolverTest.php::test_variation_override_with_no_prices_falls_back_to_parent
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_variation_override_does_not_merge_field_wise_with_parent
 
     Scenario Outline: 依變體層是否有覆寫價決定採用哪一層
       Given 賣場 "夏季賣場" 對商品 103 設定商品層覆寫 <parent>
@@ -126,6 +144,7 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
         | 完全未設定   | 完全未設定   | 商品原價     | 兩層皆無覆寫                 |
 
   Rule: 前端（展開）- 可變商品在商品名稱欄提供展開鈕
+    # @covered-by: NOT-COVERED ItemsEditor 的 showExpandColumn:false + 自刻展開鈕，屬 React 元件行為（B9 待補）
 
     Example: 展開鈕位於商品圖片左側
       When 管理者 "Admin" 檢視賣場商品表格
@@ -161,6 +180,7 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 展開的仍應是商品 103
 
   Rule: 前端（失效）- 賣場保存了已不存在的變體時必須顯示且可移除
+    # @covered-by: NOT-COVERED VariationOverrideEditor 的孤兒鍵顯示與移除鈕，屬 React 元件行為（B9 待補）
 
     # 不可靜默隱藏——那會讓一筆仍在資料中、可能影響取價的設定從畫面上消失。
 
@@ -171,6 +191,7 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       And 變體 1099 應提供移除操作
 
   Rule: 前端（可變商品）- 商品層的三個欄位改到變體層設定，但殘留值必須顯示
+    # @covered-by: NOT-COVERED ItemsEditor 對可變商品的殘留值顯示與一鍵清除，屬 React 元件行為（B9 待補）
 
     # ⚠️ 「不能只是把輸入框藏起來」：
     #    商品層的覆寫價與灌水購買人數即使沒有輸入框**仍然會生效**
@@ -189,6 +210,7 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       And 畫面應提供一鍵清除該覆寫的操作
 
   Rule: 已知落差（前台）- 變體層灌水購買人數目前沒有任何前台顯示點
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-15「變體層灌水人數無前台顯示點」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-15：賣場前台只渲染父商品卡片，
     #    「已售 N 件」讀的是**商品層**的灌水購買人數；變體層的目前零顯示點。
@@ -202,6 +224,7 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 變體層灌水購買人數欄位的提示應說明該數值目前僅會儲存而尚未在前台顯示
 
   Rule: 已知落差（數量）- 變體超過 100 個時只顯示前 100 個
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-16「wc-rest per_page 硬上限 100」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-16：WooCommerce REST API 的單頁上限是 100，
     #    不是本專案的選擇。已有 UI 揭露，不是靜默截斷。

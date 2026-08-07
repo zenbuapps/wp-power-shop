@@ -17,6 +17,7 @@ Feature: 補齊賣場商品的顯示資訊
       | 102 | iPhone 15   | simple | publish | IP15-128 |
 
   Rule: 前置（參數）- 僅在賣場含有商品時才發出補齊查詢
+    # @covered-by: NOT-COVERED useShopItemProducts 的 enabled 守門，屬 React hook 行為（B9 待補）
 
     Example: 賣場沒有商品時不應發出補齊查詢
       Given 已存在分潤賣場 "空賣場" 且其商品列表為空
@@ -24,6 +25,7 @@ Feature: 補齊賣場商品的顯示資訊
       Then 系統不應發出商品補齊查詢
 
   Rule: 前置（參數）- 補齊查詢必須以賣場 items 的 product_id 集合為範圍
+    # @covered-by: NOT-COVERED useShopItemProducts 的 include= 分 chunk 查詢，屬 React hook 行為（B9 待補）
 
     Example: 補齊查詢應一次帶入所有 product_id
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為
@@ -36,6 +38,7 @@ Feature: 補齊賣場商品的顯示資訊
         | 101,102 |
 
   Rule: 後置（回應）- 補齊後每筆賣場商品應呈現名稱與 SKU
+    # @covered-by: NOT-COVERED ItemsEditor 商品欄的 _enrichState 四分支顯示，屬 React 元件行為（B9 待補）
 
     Example: 補齊成功後商品欄應顯示名稱與 SKU
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為
@@ -47,6 +50,7 @@ Feature: 補齊賣場商品的顯示資訊
         | 101        | MacBook Pro | MBP-2024 |
 
   Rule: 後置（失效）- 商品已刪除時必須標記失效且仍可移除
+    # @covered-by: NOT-COVERED 「商品已失效」Tag 與移除鈕，屬 React 元件行為（B9 待補）
 
     Example: 商品已刪除時應標記失效並保留移除操作
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為
@@ -60,6 +64,7 @@ Feature: 補齊賣場商品的顯示資訊
       And 賣場商品 101 應正常顯示名稱
 
   Rule: 後置（降級）- 補齊查詢失敗不得阻擋賣場編輯
+    # @covered-by: NOT-COVERED 補齊查詢失敗不阻擋儲存，屬 React 元件行為（B9 待補）；後端儲存路徑本身不依賴補齊查詢，見 ProfitShopItemsRoundTripTest 全檔
 
     Example: 補齊查詢失敗時仍應可編輯與儲存賣場
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為

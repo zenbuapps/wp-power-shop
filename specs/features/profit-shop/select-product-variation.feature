@@ -26,6 +26,7 @@ Feature: 賣場商品 Modal 的變體選擇與比對
     And 賣場 "夏季賣場" 的商品列表包含商品 103
 
   Rule: 前置（選滿）- 必須選滿畫面上所有屬性才允許加購
+    # @covered-by: NOT-COVERED isAllAttributesChosen() 住在 inc/assets/js/profit-shop-front.js（IIFE、零 export），專案無 JS 測試框架（B8 vitest 待補）
 
     # 「選滿」刻意以畫面上的屬性群組數為來源，**不可**改從變體資料的鍵集反推。
     # 兩道防線不能押在同一個假設上：「變體必含全部屬性鍵」正是 wildcard 比對
@@ -47,6 +48,7 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       Then 加購按鈕應為停用狀態
 
   Rule: 前置（比對）- 空字串屬性是 wildcard，不參與否決
+    # @covered-by: NOT-COVERED matchVariation() 的 wildcard 豁免，同上（B8 vitest 待補）
 
     Example: 任意屬性的變體可被任何尺寸選擇匹配
       Given 商品 103 具有變體 A 其屬性為「顏色=紅、尺寸=任意」
@@ -65,6 +67,7 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       And 畫面應提示該組合無法購買
 
   Rule: 前置（挑選）- 具體屬性數最多的變體勝出
+    # @covered-by: NOT-COVERED findBestVariation() 的具體度計分，同上（B8 vitest 待補）。⚠️ Pitfall #31：挑錯變體等於收錯錢，舊寫法實測 12.4% 挑錯率，目前零自動化測試
 
     # 🔴 規則是「掃完全部候選、取具體屬性數最多者」，**不是**「第一個命中者勝」。
     #
@@ -106,6 +109,7 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       Then 應匹配到釘死較多屬性的那一個
 
   Rule: 前置（平局）- 互不支配時取排列順序的第一個
+    # @covered-by: NOT-COVERED 互不支配時取陣列第一個，同上（B8 vitest 待補）
 
     # ⚠️ 這是唯一沒有客觀正解的情況：站長的兩條規則本身就衝突，
     #    資料裡沒有任何欄位承載「哪條優先」。
@@ -122,6 +126,7 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       Then 應匹配到變體 1
 
   Rule: 安全（守門）- 兩道守門不可移除
+    # @covered-by: NOT-COVERED keys.length>0（防 vacuous truth）與 picked===null（fail-closed）兩道守門，同上（B8 vitest 待補）
 
     Example: 屬性為空物件的變體不得成為候選
       # 防 vacuous truth：內層比對一次都不跑時，比對結果會保持初值「相符」。
@@ -136,6 +141,7 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       Then 該變體不應被選中
 
   Rule: 後置（更新）- 選中變體後必須同步更新畫面與表單欄位
+    # @covered-by: NOT-COVERED 選中變體後重寫 variation_id / attribute_* hidden input，同上（B8 vitest 待補）
 
     Example: 選中變體後更新價格與庫存
       Given 賣場 "夏季賣場" 對變體 1031 設定覆寫原價 "999" 與特價 "888"
@@ -170,6 +176,7 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       Then 屬性選擇應回到未選取狀態
 
   Rule: 已知落差（可購買性）- 混合設定下可購買性可能反轉
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-53「混合設定下可購買性可能反轉」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-55：這是刻意的取捨，不是回歸。
     #   #1{任意,任意} 有庫存 與 #2{紅,任意} 缺貨 並存時，選「紅」會挑到 #2 而顯示缺貨。
@@ -184,6 +191,7 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       Then 加購按鈕應為停用狀態且顯示已售完
 
   Rule: 已知落差（屬性名）- 含空白或特殊符號的自訂屬性永遠匹配不到
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是「含空白或特殊符號的自訂屬性永遠匹配不到」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-51：這是既有缺陷。
     #   變體屬性的鍵經過 WooCommerce 的標題清理（空白轉連字號、& 與 / 直接刪除），

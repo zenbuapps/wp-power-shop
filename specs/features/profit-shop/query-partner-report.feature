@@ -42,6 +42,12 @@ Feature: 分潤夥伴查詢自己的分潤報表
     And 夥伴 "夥伴A" 已登入並持有有效 token
 
   Rule: 安全（範圍）- 報表範圍鎖死於 token，請求參數一律不予採信
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportsScopeTest.php::test_partner_a_token_can_only_see_partner_a_kpi
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportsScopeTest.php::test_partner_a_token_settlements_query_string_attack_ignored
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/PartnerReportScopeIsolationTest.php::test_filter_criteria_does_not_expose_partner_term_id_field
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/PartnerReportScopeIsolationTest.php::test_kpi_use_case_locks_partner_term_id
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/PartnerReportScopeIsolationTest.php::test_execute_signature_takes_partner_term_id_as_first_explicit_arg
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/ListPartnerSettlementsUseCaseTest.php::test_does_not_leak_other_partners_settlements
 
     Scenario Outline: 以請求參數指定他人 partner_term_id 不得改變資料範圍
       When 夥伴 "夥伴A" 以自己的 token 查詢 <report> 並在 query string 帶入 partner_term_id 為 9
@@ -81,6 +87,9 @@ Feature: 分潤夥伴查詢自己的分潤報表
       And 系統不應查詢任何其他夥伴的資料
 
   Rule: 後置（KPI）- KPI 摘要依結算狀態分別加總
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerKpiUseCaseTest.php::test_happy_returns_kpi_report_for_partner
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerKpiUseCaseTest.php::test_no_data_returns_zero_kpi
+    # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementSummaryProviderRealAggregationTest.php::test_summary_returns_correct_totals_for_partner_a
 
     Example: KPI 依狀態分別加總且金額為兩位小數字串
       When 夥伴 "夥伴A" 查詢期間 2026-08-01 至 2026-08-31 的 KPI 摘要
@@ -97,6 +106,8 @@ Feature: 分潤夥伴查詢自己的分潤報表
       Then 回應應包含 period_start 與 period_end 欄位
 
   Rule: 後置（趨勢）- 趨勢資料依指定粒度分組
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerTrendUseCaseTest.php::test_happy_returns_trend_series
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerTrendUseCaseTest.php::test_passes_interval_to_provider
 
     Example: 以日為粒度取得趨勢序列
       When 夥伴 "夥伴A" 以日為粒度查詢 2026-08-01 至 2026-08-03 的趨勢
@@ -107,6 +118,8 @@ Feature: 分潤夥伴查詢自己的分潤報表
       Then 序列中的金額總和應等於夥伴 "夥伴A" 的期間銷售總額
 
   Rule: 後置（明細）- 結算明細支援狀態篩選與分頁
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/ListPartnerSettlementsUseCaseTest.php::test_happy_returns_paginated_list
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/ListPartnerSettlementsUseCaseTest.php::test_empty_list_returns_zero_total
 
     Example: 不指定狀態時回傳全部結算紀錄
       When 夥伴 "夥伴A" 查詢結算明細
@@ -136,6 +149,7 @@ Feature: 分潤夥伴查詢自己的分潤報表
         | per_page |
 
   Rule: 前置（分頁）- 分頁參數必須有上限以防資源耗盡
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/ListPartnerSettlementsUseCaseTest.php::test_happy_returns_paginated_list
 
     Scenario Outline: 分頁參數超過上限時收斂到上限值
       When 夥伴 "夥伴A" 以 page 為 <page> 且 per_page 為 <per_page> 查詢結算明細
@@ -154,6 +168,7 @@ Feature: 分潤夥伴查詢自己的分潤報表
       Then 實際生效的 per_page 應為 20
 
   Rule: 前置（期間）- 日期區間必須被正規化且有合理上限
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerTrendUseCaseTest.php::test_passes_interval_to_provider
 
     Example: 超出合理範圍的時間戳被收斂
       When 夥伴 "夥伴A" 以極大的時間戳查詢報表
@@ -161,6 +176,7 @@ Feature: 分潤夥伴查詢自己的分潤報表
       And 系統不應拋出錯誤
 
   Rule: 資料（訂單）- 未成立的訂單不計入報表
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_cancelled_orders_are_excluded
 
     Example: 已取消或失敗的訂單不計入報表金額
       Given 夥伴 "夥伴A" 名下有一筆屬於已取消訂單的結算紀錄
@@ -168,6 +184,9 @@ Feature: 分潤夥伴查詢自己的分潤報表
       Then 該筆金額不應計入任何 KPI 欄位
 
   Rule: 相容（HPOS）- 訂單儲存模式切換不影響報表結果
+    # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementSummaryProviderRealAggregationTest.php::test_summary_works_under_hpos_enabled
+    # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementSummaryProviderRealAggregationTest.php::test_summary_works_under_legacy_post_orders
+    # @covered-by: MANUAL 兩條互斥，須跑 composer test:both-order-storage 兩輪才會都執行
 
     Example: 啟用 HPOS 與未啟用時回傳相同的 KPI
       Given 站台已啟用 HPOS
@@ -175,6 +194,8 @@ Feature: 分潤夥伴查詢自己的分潤報表
       Then 回應應與未啟用 HPOS 時相同
 
   Rule: 後置（格式）- 夥伴端點一律回傳裸 payload
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportsScopeTest.php::test_no_token_returns_401
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportsScopeTest.php::test_invalid_token_returns_401
 
     Example: 報表回應不裹 code / message / data 外層
       When 夥伴 "夥伴A" 查詢 KPI 摘要

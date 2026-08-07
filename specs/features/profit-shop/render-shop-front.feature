@@ -25,6 +25,9 @@ Feature: 呈現分潤賣場前台
     And 賣場 "夏季賣場" 的商品列表包含商品 101、103 與 104
 
   Rule: 前置（存取）- 依賣場狀態決定可見性
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_draft_shop_returns_empty_string_for_visitor
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_draft_shop_renders_for_privileged_user
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_trashed_shop_returns_empty_string
 
     Scenario Outline: 各種狀態下的存取結果
       Given 賣場 "夏季賣場" 的狀態為 "<status>"
@@ -48,6 +51,7 @@ Feature: 呈現分潤賣場前台
       Then 系統應回應 404
 
   Rule: 前置（速率）- 賣場頁對同一來源有存取頻率上限
+    # @covered-by: NOT-COVERED PageRateLimitService 對賣場頁的 429 處理（Phase 5-A.1）目前無對應測試，屬真缺口
 
     Example: 同一 IP 在一分鐘內超過 30 次請求時回 429
       When 同一來源 IP 在 60 秒內對賣場頁發出第 31 次請求
@@ -58,6 +62,7 @@ Feature: 呈現分潤賣場前台
       Then 系統不應查詢賣場資料
 
   Rule: 後置（SEO）- 賣場頁必須注入自己的標題與正規網址且不重複
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_output_contains_no_seo_meta
 
     Example: 賣場頁的標題包含賣場名稱與夥伴名稱
       When 訪客開啟賣場 "夏季賣場" 的公開網址
@@ -70,6 +75,9 @@ Feature: 呈現分潤賣場前台
       And canonical 應指向 "/profit-shop/summer-sale/"
 
   Rule: 後置（內容）- 商品資訊必須直接印在 HTML 內
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_publish_shop_renders_product_name
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_price_override_is_rendered
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_priceless_variations_with_override_render_prices_on_both_paths
 
     Example: 商品名稱與價格出現在初始 HTML
       When 訪客開啟賣場 "夏季賣場" 的公開網址
@@ -86,6 +94,8 @@ Feature: 呈現分潤賣場前台
       Then 頁面應呈現該段文案
 
   Rule: 後置（卡片）- 每張卡片只印一個動作元素以支援無 JS 環境
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_open_shop_renders_ajax_dom_contract
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_variable_product_without_any_purchasable_variation_says_so
 
     Scenario Outline: 依商品類型決定卡片的動作元素
       When 訪客開啟賣場 "夏季賣場" 的公開網址
@@ -117,6 +127,8 @@ Feature: 呈現分潤賣場前台
       And 頁面中不應存在商品 103 的商品 Modal
 
   Rule: 後置（已售）- 已售件數為真實銷量加上灌水購買人數
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_sold_count_is_real_sales_plus_inflated_count
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_sold_count_block_is_omitted_when_zero
 
     Example: 顯示真實銷量加灌水人數的合計
       Given 商品 101 的真實銷量為 873 且賣場設定的灌水購買人數為 7
@@ -134,6 +146,9 @@ Feature: 呈現分潤賣場前台
       Then 卡片不應顯示任何已售件數
 
   Rule: 後置（Modal）- 每個可購買商品各有一個獨立的商品 Modal
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_open_shop_renders_ajax_dom_contract
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_no_display_combination_ever_renders_modal_when_closed
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_closed_shop_never_renders_modal_for_rescued_variations
 
     Example: 點擊卡片開啟對應的商品 Modal
       When 訪客點擊商品 101 的卡片
@@ -159,6 +174,7 @@ Feature: 呈現分潤賣場前台
       Then 卡片的原生動作應照常執行
 
   Rule: 後置（多賣場）- 同一頁可存在多個賣場且互不干擾
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_renderer_and_shortcode_paths_render_identical_dom
 
     # 資料印在各自的賣場容器內，查找一律限定在最近的賣場容器祖先。
 
@@ -169,6 +185,7 @@ Feature: 呈現分潤賣場前台
       And 該 Modal 的加購表單應帶賣場 2000 的識別
 
   Rule: 後置（提示）- 賣場頁必須自行輸出加購結果訊息
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_shop_page_prints_woocommerce_notices_itself
 
     # 賣場頁不是 WooCommerce 的樣板頁，佈景主題掛在 WooCommerce 內容區的訊息輸出
     # 不會被觸發。少了它，使用者按下加購後畫面除了重新載入之外沒有任何變化。
@@ -178,6 +195,7 @@ Feature: 呈現分潤賣場前台
       Then 賣場頁應包含 WooCommerce 的訊息輸出區塊
 
   Rule: 已知落差（提示）- 原生表單加購成功後沒有成功提示
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-49「原生表單加購成功後沒有成功提示」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-49：訊息容器有渲染，但內容是空的
     #   （WooCommerce session 裡本來就沒有那則訊息）。已排除快取因素。
@@ -190,6 +208,7 @@ Feature: 呈現分潤賣場前台
       And 頁面不應出現任何加購成功的文字
 
   Rule: 已知落差（版型）- 以頁面建構器排版的賣場內容不會被渲染
+    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-28「Elementor 版型不生效」這個已知落差，依定義沒有對應實作可測
 
     # ⚠️ specs/tech-debt.md TD-28：賣場頁走自訂渲染流程，
     #   頁面建構器的渲染流程不在這條路徑上。純區塊編輯器 / HTML / 短碼內容不受影響。

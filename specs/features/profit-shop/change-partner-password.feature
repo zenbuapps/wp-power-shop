@@ -22,6 +22,9 @@ Feature: 分潤夥伴自助修改密碼
     And 夥伴 "夥伴A" 已登入並持有有效 token
 
   Rule: 前置（認證）- 只有持有效夥伴 token 者能呼叫
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_unauthenticated_returns_401
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_admin_nonce_alone_is_rejected
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerVsAdminAuthIsolationTest.php::test_admin_with_wp_nonce_cannot_access_partner_reports
 
     Example: 未登入者不得修改密碼
       When 未登入的訪客嘗試修改密碼
@@ -45,6 +48,9 @@ Feature: 分潤夥伴自助修改密碼
       And 系統不應對 pseudo-slug "pwchange:0" 累計任何失敗
 
   Rule: 前置（驗證）- 必須提供正確的目前密碼
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_wrong_current_password_returns_422_invalid_credentials
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/ChangePasswordUseCaseTest.php::test_wrong_current_password_throws_invalid_credentials_and_records_failure
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/ChangePasswordUseCaseTest.php::test_happy_new_password_verifies_old_does_not
 
     Example: 目前密碼正確時允許修改
       When 夥伴 "夥伴A" 以目前密碼 "current-pw1" 修改為新密碼 "brand-new-2"
@@ -62,6 +68,11 @@ Feature: 分潤夥伴自助修改密碼
       Then 夥伴 "夥伴A" 仍可用 "current-pw1" 登入
 
   Rule: 前置（強度）- 新密碼必須符合複雜度規則
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_weak_new_password_returns_422_with_reasons
+    # @covered-by: tests/Unit/Domain/ValueObject/PartnerPasswordTest.php::test_construct_throws_when_too_short
+    # @covered-by: tests/Unit/Domain/ValueObject/PartnerPasswordTest.php::test_construct_throws_when_missing_letter
+    # @covered-by: tests/Unit/Domain/ValueObject/PartnerPasswordTest.php::test_construct_throws_when_missing_digit
+    # @covered-by: tests/Unit/Domain/ValueObject/PartnerPasswordTest.php::test_construct_throws_with_all_reasons_when_empty
 
     # 規則為累積式：一次回傳所有違反的原因。
     #   too_short      —— 少於 8 個字元（以 codepoint 計，非 byte）
@@ -92,6 +103,10 @@ Feature: 分潤夥伴自助修改密碼
       Then 系統應回傳成功
 
   Rule: 安全（速率）- 改密失敗達門檻後鎖定，且與登入維度隔離
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_too_many_wrong_current_returns_429_with_retry_after
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/ChangePasswordUseCaseTest.php::test_too_many_failures_blocks_change_password
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/ChangePasswordUseCaseTest.php::test_pwchange_pseudo_slug_does_not_pollute_login_slug_counter
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/ChangePasswordUseCaseTest.php::test_weak_new_password_throws_without_recording_rate_limit
 
     Example: 目前密碼連續錯誤 5 次後鎖定
       When 夥伴 "夥伴A" 連續 5 次以錯誤的目前密碼提交
@@ -112,6 +127,10 @@ Feature: 分潤夥伴自助修改密碼
       Then 系統應回傳成功
 
   Rule: 後置（撤銷）- 修改成功後所有既有 session 立即失效
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_old_token_revoked_after_self_change_password
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_change_password_clears_partner_cookie_with_max_age_zero
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_new_password_can_login_after_change
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/ChangePasswordUseCaseTest.php::test_password_changed_at_strictly_greater_than_old_token_issued_at
 
     Example: 修改成功後舊 token 立即失效
       When 夥伴 "夥伴A" 成功修改密碼
@@ -130,6 +149,9 @@ Feature: 分潤夥伴自助修改密碼
       And 以 "current-pw1" 登入應失敗
 
   Rule: 後置（回應）- 回應不得洩漏任何憑證且不得被快取
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_response_has_no_cache_headers
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_happy_change_password_returns_200_and_updates_meta
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/ChangePasswordUseCaseTest.php::test_output_dto_round_trip
 
     Example: 成功回應只包含成功旗標與變更時間
       When 夥伴 "夥伴A" 成功修改密碼
@@ -151,6 +173,8 @@ Feature: 分潤夥伴自助修改密碼
       And 稽核紀錄不應包含任何密碼明文
 
   Rule: 前置（傳輸）- 密碼欄位必須原樣傳遞不得被清理改寫
+    # @covered-by: tests/Integration/Infrastructure/Rest/SetPartnerPasswordEndpointTest.php::test_password_literal_is_preserved
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerChangePasswordEndpointTest.php::test_missing_required_fields_returns_400
 
     # 密碼若經過一般的文字清理，含 `<` `>` 或連續空白的密碼會被靜默改寫，
     # 症狀是「設的密碼登不進去」而且兩邊看到的字串完全一樣，極難排查。
@@ -160,6 +184,7 @@ Feature: 分潤夥伴自助修改密碼
       Then 以 "a1 <b>  c&d" 登入應成功
 
   Rule: 前端（防呆）- 表單必須阻擋無意義的輸入並防止重複送出
+    # @covered-by: NOT-COVERED ChangePassword.tsx 的 Form rule 與三重 disabled 守門，專案無前端測試框架（B9 待補）
 
     Example: 新密碼與目前密碼相同時不允許送出
       When 夥伴在改密表單將新密碼填為與目前密碼相同

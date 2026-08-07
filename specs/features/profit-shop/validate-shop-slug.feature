@@ -23,6 +23,11 @@ Feature: 即時驗證賣場永久連結
     Given 管理者 "Admin" 已登入後台
 
   Rule: 前置（格式）- 永久連結必須為 1 至 60 字元的小寫英數、底線與連字號
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ValidateSlugUseCaseTest.php::test_throws_invalid_partner_slug_when_slug_format_invalid
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ValidateSlugUseCaseTest.php::test_throws_invalid_partner_slug_when_slug_empty
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ValidateSlugUseCaseTest.php::test_throws_invalid_partner_slug_when_slug_too_long
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopValidateSlugEndpointTest.php::test_get_validate_slug_returns_400_for_invalid_format_slug
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopValidateSlugEndpointTest.php::test_get_validate_slug_returns_400_for_empty_slug
 
     Scenario Outline: 格式不合法的永久連結被拒絕
       When 管理者 "Admin" 驗證永久連結 "<slug>"
@@ -49,6 +54,9 @@ Feature: 即時驗證賣場永久連結
       Then 系統不應回傳格式錯誤
 
   Rule: 後置（可用）- 沒有任何衝突時回報可用
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ValidateSlugUseCaseTest.php::test_returns_available_when_no_conflicts
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopValidateSlugEndpointTest.php::test_get_validate_slug_returns_200_with_available_true_for_unique_slug
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopValidateSlugEndpointTest.php::test_get_validate_slug_does_not_block_trashed_powershop_slug
 
     Example: 未被佔用的永久連結回報可用
       When 管理者 "Admin" 驗證永久連結 "brand-new-shop"
@@ -56,6 +64,14 @@ Feature: 即時驗證賣場永久連結
       And 回應的 conflicts 應為空
 
   Rule: 後置（衝突）- 命中任一類衝突時回報不可用並附衝突來源
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ValidateSlugUseCaseTest.php::test_returns_unavailable_when_wordpress_reserved
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ValidateSlugUseCaseTest.php::test_returns_unavailable_when_powershop_cpt_conflict
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ValidateSlugUseCaseTest.php::test_returns_unavailable_when_partner_term_conflict
+    # @covered-by: tests/Unit/Application/UseCase/Shop/ValidateSlugUseCaseTest.php::test_returns_unavailable_when_multiple_conflicts
+    # @covered-by: tests/Integration/Application/SlugConflictTest.php::test_rejects_woocommerce_shop_page_slug
+    # @covered-by: tests/Integration/Application/SlugConflictTest.php::test_rejects_other_cpt_rewrite_slug
+    # @covered-by: tests/Integration/Application/SlugConflictTest.php::test_rejects_existing_page_slug
+    # @covered-by: tests/Integration/Application/SlugConflictTest.php::test_rejects_custom_rewrite_rule_prefix
 
     Scenario Outline: 各類衝突來源皆被偵測
       Given 站台存在 <existing>
@@ -88,6 +104,8 @@ Feature: 即時驗證賣場永久連結
       Then 回應的 conflicts 應包含 2 筆項目
 
   Rule: 後置（草稿）- 草稿賣場佔用的永久連結視為衝突
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopValidateSlugEndpointTest.php::test_get_validate_slug_returns_conflicts_for_existing_draft_powershop_slug
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopValidateSlugEndpointTest.php::test_get_validate_slug_returns_conflicts_for_existing_publish_powershop_slug
 
     Example: 草稿賣場的永久連結不可被再次使用
       Given 站台存在 slug 為 "draft-shop" 且狀態為 draft 的分潤賣場
@@ -100,6 +118,7 @@ Feature: 即時驗證賣場永久連結
       Then 回應的 available 應為 true
 
   Rule: 前端（即時）- 輸入時延遲驗證，且編輯自己時不與自己衝突
+    # @covered-by: NOT-COVERED SlugInput 的 debounce + enabled 切換 + currentSlug 比對，屬 React 元件行為（B9 待補）
 
     Example: 輸入停止後才發出驗證查詢
       When 管理者 "Admin" 連續輸入永久連結的每一個字元
