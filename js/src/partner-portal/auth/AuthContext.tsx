@@ -36,7 +36,9 @@ import {
 import { session } from './session'
 
 /** Auth 載入狀態 */
-export type TAuthStatus = 'loading' | 'authenticated' | 'guest'
+export type { TAuthStatus } from './resolveAuth'
+import type { TAuthStatus } from './resolveAuth'
+import { resolveAuth } from './resolveAuth'
 
 /**
  * Context 對外型別
@@ -82,26 +84,19 @@ const AuthProviderComponent = ({ children }: PropsWithChildren) => {
 		refetchOnWindowFocus: false,
 	})
 
-	// 跨 partner mismatch 偵測：me.partner_slug 必須等於 URL 的 SLUG
-	// !SLUG 時（env 解密失敗或測試環境）視為 matched，向後相容
-	const isPartnerMatched =
-		!SLUG || (meQuery.data?.partner_slug ?? null) === SLUG
-
-	let status: TAuthStatus
-	if (meQuery.isLoading) {
-		status = 'loading'
-	} else if (meQuery.isSuccess) {
-		// mismatch 時設 'loading' 而非 'authenticated'，等下方 useEffect 觸發 logout
-		// 期間 AuthGate 顯示 LoadingScreen 而非 redirect 到 /login，避免閃 partner A 的資料
-		status = isPartnerMatched ? 'authenticated' : 'loading'
-	} else {
-		status = 'guest'
-	}
-
-	// 雙保險：partner 對外暴露時做 mismatch 遮蔽，即使某種 race 下 status 短暫 'authenticated'，
-	// partner 物件也會是 null → Dashboard 不會閃 partner A 的姓名
-	const partner: TMeOutput | null =
-		meQuery.data && isPartnerMatched ? meQuery.data : null
+	/**
+	 * 跨夥伴遮蔽（實作與兩道防線的理由見 `./resolveAuth`）
+	 *
+	 * `isMismatch` 供下方 useEffect 觸發強制登出用。
+	 */
+	const { status, partner } = resolveAuth(
+		{
+			isLoading: meQuery.isLoading,
+			isSuccess: meQuery.isSuccess,
+			data: meQuery.data,
+		},
+		SLUG
+	)
 
 	// logout 用 ref 包住，讓 useEffect 不必把 logout 列入依賴（避免重複執行）
 	const logoutRef = useRef<() => Promise<void>>(async () => {})

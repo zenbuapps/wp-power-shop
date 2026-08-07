@@ -214,7 +214,9 @@ Feature: 分潤夥伴登入自助報表
     # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/LogoutPartnerUseCaseTest.php::test_logout_revokes_token
     # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/LogoutPartnerUseCaseTest.php::test_logout_with_unknown_token_does_not_throw
     # @covered-by: tests/Integration/Infrastructure/Rest/PartnerTokenSecurityTest.php::test_revoked_token_cannot_be_reused
-    # @covered-by: NOT-COVERED 「永遠清除本機狀態」住在 partner portal SPA 的 AuthContext，專案無前端測試框架（B9 待補）
+    # @covered-by: tests/js/partnerPortalAuth.test.ts::🔴 clear 是冪等的：連續呼叫、或本來就沒東西都不得拋錯
+    # @covered-by: tests/js/partnerPortalAuth.test.ts::沒有資料時 read 回 null
+    # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/LogoutPartnerUseCaseTest.php::test_logout_with_unknown_token_does_not_throw
 
     Example: 登出後 token 立即失效
       Given 夥伴 "夥伴A" 已登入並取得 token
@@ -240,7 +242,10 @@ Feature: 分潤夥伴登入自助報表
       And 畫面應導向登入頁
 
   Rule: 隔離（跨夥伴）- 網址的夥伴與本機登入身分不一致時必須遮蔽
-    # @covered-by: NOT-COVERED partner portal SPA 的 AuthContext 雙保險（status='loading' + partner 物件遮蔽 null），專案無前端測試框架（B9 待補）
+    # @covered-by: tests/js/partnerPortalAuth.test.ts::🔴 slug 不符時 status 是 loading，**不是** authenticated
+    # @covered-by: tests/js/partnerPortalAuth.test.ts::🔴 slug 不符時 partner 同時被遮蔽成 null（雙保險）
+    # @covered-by: tests/js/partnerPortalAuth.test.ts::🔴 slug 不符時 status **不可**是 guest
+    # @covered-by: tests/js/partnerPortalAuth.test.ts::slug 不符時回報 isMismatch，呼叫端據此觸發強制登出
 
     Example: 以夥伴A 的登入狀態開啟夥伴B 的報表網址
       Given 夥伴 "夥伴A" 已在瀏覽器登入
