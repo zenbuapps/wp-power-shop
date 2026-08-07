@@ -120,16 +120,19 @@ function validate_note( string $note ): array {
 		];
 	}
 
-	if ( 1 !== preg_match( '/^([^\s:]+\.(?:php|ts|tsx|js))::([A-Za-z0-9_]+)$/', $note, $m ) ) {
+	// PHP：方法名受識別字規則約束，可用 `function name(` 精準比對。
+	// TS/JS（vitest / Playwright）：指標是 `it()` / `test()` 的**標題字串**，
+	// 可以含中文、空白、標點，因此不能套識別字正則——改以「標題是否出現在檔內」驗證。
+	if ( 1 !== preg_match( '/^([^\s:]+\.(php|ts|tsx|js))::(.+)$/u', $note, $m ) ) {
 		return [
 			'kind'   => 'INVALID',
 			'ok'     => false,
-			'reason' => '格式不合：應為 <path>::<method> 或 MANUAL/NOT-COVERED + 理由',
+			'reason' => '格式不合：應為 <path>::<method 或測試標題> 或 MANUAL/NOT-COVERED + 理由',
 		];
 	}
 
-	[ , $rel, $method ] = $m;
-	$abs                = REPO_ROOT . '/' . $rel;
+	[ , $rel, $ext, $target ] = $m;
+	$abs                      = REPO_ROOT . '/' . $rel;
 
 	if ( ! is_file( $abs ) ) {
 		return [
@@ -141,15 +144,29 @@ function validate_note( string $note ): array {
 
 	$src = (string) file_get_contents( $abs );
 
-	// PHP 用 `function name(`；TS/JS 允許 `it('name'` / `test('name'` / `function name(`
-	$found = 1 === preg_match( '/function\s+' . preg_quote( $method, '/' ) . '\s*\(/', $src )
-	|| false !== strpos( $src, "'" . $method . "'" )
-	|| false !== strpos( $src, '"' . $method . '"' );
+	if ( 'php' === $ext ) {
+		if ( 1 !== preg_match( '/^[A-Za-z0-9_]+$/', $target ) ) {
+			return [
+				'kind'   => 'AUTO',
+				'ok'     => false,
+				'reason' => "PHP 指標必須是合法方法名：{$target}",
+			];
+		}
+		$found = 1 === preg_match( '/function\s+' . preg_quote( $target, '/' ) . '\s*\(/', $src );
+		return [
+			'kind'   => 'AUTO',
+			'ok'     => $found,
+			'reason' => $found ? '' : "方法不存在：{$rel}::{$target}",
+		];
+	}
+
+	// TS/JS：標題必須逐字出現在檔內（改了測試標題就會紅，正是我們要的成本）
+	$found = false !== strpos( $src, $target );
 
 	return [
 		'kind'   => 'AUTO',
 		'ok'     => $found,
-		'reason' => $found ? '' : "方法不存在：{$rel}::{$method}",
+		'reason' => $found ? '' : "測試標題不存在：{$rel}::{$target}",
 	];
 }
 

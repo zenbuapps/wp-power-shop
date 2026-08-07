@@ -8,6 +8,8 @@
 		"dev": "vite",
 		"build": "vite build",
 		"preview": "vite preview",
+		"test:js": "vitest run --config vitest.config.ts",
+		"test:js:watch": "vitest --config vitest.config.ts",
 		"format": "prettier-eslint --write \"js/src/**/*.tsx\"",
 		"lint:php": "phpcbf && phpcs inc --report=full -v && phpstan analyze inc --memory-limit=4096M",
 		"lint:ts": "node --max-old-space-size=8192 ./node_modules/eslint/bin/eslint.js \"js/src/**/*.{ts,tsx}\" --ext .ts,.tsx --fix --rule \"no-unused-vars: off\"",
@@ -100,6 +102,7 @@
 		"eslint-plugin-react": "^7.34.3",
 		"eslint-plugin-react-hooks": "^4.6.2",
 		"glob": "^10.4.5",
+		"jsdom": "^30.0.1",
 		"prettier": "^3.5.3",
 		"prettier-eslint": "^16.3.0",
 		"prettier-eslint-cli": "^8.0.1",
@@ -115,6 +118,7 @@
 		"vite-plugin-live-reload": "^3.0.3",
 		"vite-plugin-optimizer": "^1.4.3",
 		"vite-tsconfig-paths": "^4.3.2",
+		"vitest": "^3.2.7",
 		"yargs": "^17.7.2"
 	},
 	"packageManager": "pnpm@10.32.0"

@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **68**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **62**
 
 ## 逐檔覆蓋率
 
@@ -141,18 +141,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
   - 理由：本 Rule 描述的正是 TD-46「全部不勾只藏內容、公開網址仍開得起來」這個已知落差，依定義沒有對應實作可測
 - `schedule-shop-availability` — 已知落差（驗證）- 排程欄位沒有後端驗證
   - 理由：本 Rule 描述的正是 TD-47「排程欄位無後端 Domain 驗證」這個已知落差，依定義沒有對應實作可測
-- `select-product-variation` — 前置（選滿）- 必須選滿畫面上所有屬性才允許加購
-  - 理由：isAllAttributesChosen() 住在 inc/assets/js/profit-shop-front.js（IIFE、零 export），專案無 JS 測試框架（B8 vitest 待補）
-- `select-product-variation` — 前置（比對）- 空字串屬性是 wildcard，不參與否決
-  - 理由：matchVariation() 的 wildcard 豁免，同上（B8 vitest 待補）
-- `select-product-variation` — 前置（挑選）- 具體屬性數最多的變體勝出
-  - 理由：findBestVariation() 的具體度計分，同上（B8 vitest 待補）。⚠️ Pitfall #31：挑錯變體等於收錯錢，舊寫法實測 12.4% 挑錯率，目前零自動化測試
-- `select-product-variation` — 前置（平局）- 互不支配時取排列順序的第一個
-  - 理由：互不支配時取陣列第一個，同上（B8 vitest 待補）
-- `select-product-variation` — 安全（守門）- 兩道守門不可移除
-  - 理由：keys.length>0（防 vacuous truth）與 picked===null（fail-closed）兩道守門，同上（B8 vitest 待補）
-- `select-product-variation` — 後置（更新）- 選中變體後必須同步更新畫面與表單欄位
-  - 理由：選中變體後重寫 variation_id / attribute_* hidden input，同上（B8 vitest 待補）
 - `select-product-variation` — 已知落差（可購買性）- 混合設定下可購買性可能反轉
   - 理由：本 Rule 描述的正是 TD-53「混合設定下可購買性可能反轉」這個已知落差，依定義沒有對應實作可測
 - `select-product-variation` — 已知落差（屬性名）- 含空白或特殊符號的自訂屬性永遠匹配不到
