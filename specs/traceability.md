@@ -3,7 +3,7 @@
 
 # Feature Rule 追溯矩陣
 
-Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **62**
+Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** ｜ NOT-COVERED **56**
 
 ## 逐檔覆蓋率
 
@@ -49,18 +49,6 @@ Rule 總數 **255** ｜ 已標註 **255** ｜ 未標註 **0** ｜ MANUAL **2** �
 
 ## 標為 NOT-COVERED 的 Rule（已知缺口）
 
-- `add-to-cart-from-modal` — 後置（成功）- 加購成功時不換頁、關閉 Modal 並顯示成功通知
-  - 理由：AJAX 成功後關 Modal + toast，住在 inc/assets/js/profit-shop-front.js（IIFE），專案無 JS 測試框架（B8/B9 待補）
-- `add-to-cart-from-modal` — 後置（載入）- 送出期間必須有明確的載入狀態
-  - 理由：setSubmitBusy 的 spinner / aria-busy，同上（B8/B9 待補）
-- `add-to-cart-from-modal` — 安全（重送）- 飛行中必須擋住第二次送出
-  - 理由：modal.psSubmitting 旗標 + setSubmitEnabled 尊重它，同上（B8/B9 待補）。⚠️ 失效後果是顧客被重複收費
-- `add-to-cart-from-modal` — 安全（重送）- 任何失敗都不得自動重送表單
-  - 理由：「業務失敗一律導向 product_url、不自動重送」，同上（B8/B9 待補）
-- `add-to-cart-from-modal` — 降級（漸進增強）- 四道關卡任一不成立就退回原生表單送出
-  - 理由：canAjax() 四道關卡的 JS 分支，同上（B8/B9 待補）
-- `add-to-cart-from-modal` — 降級（任意屬性）- 選中含任意屬性的變體必須走原生表單
-  - 理由：hasAnyAttribute() 降級走原生表單，同上（B8 待補）
 - `add-to-cart-from-modal` — 已知落差（訊息）- 業務失敗的原因必須離開賣場頁才看得到
   - 理由：本 Rule 描述的正是 TD-41「業務失敗原因須離開賣場頁才看得到」這個已知落差，依定義沒有對應實作可測
 - `add-to-cart-from-modal` — 已知落差（第三方）- 購物車已有訂閱商品時非同步加購可能回傳非預期格式

@@ -27,7 +27,7 @@ Feature: 從商品 Modal 非同步加入購物車
     And 顧客為未登入的訪客
 
   Rule: 後置（成功）- 加購成功時不換頁、關閉 Modal 並顯示成功通知
-    # @covered-by: NOT-COVERED AJAX 成功後關 Modal + toast，住在 inc/assets/js/profit-shop-front.js（IIFE），專案無 JS 測試框架（B8/B9 待補）
+    # @covered-by: tests/js/addToCartFromModal.test.ts::成功後關閉 Modal 並顯示 toast
 
     Example: simple 商品的非同步加購
       When 顧客在商品 101 的 Modal 按下「加入購物車」
@@ -56,7 +56,7 @@ Feature: 從商品 Modal 非同步加入購物車
       Then 成功通知應顯示在畫面上方且不被頁首遮蔽
 
   Rule: 後置（載入）- 送出期間必須有明確的載入狀態
-    # @covered-by: NOT-COVERED setSubmitBusy 的 spinner / aria-busy，同上（B8/B9 待補）
+    # @covered-by: tests/js/addToCartFromModal.test.ts::送出後按鈕進入忙碌狀態
 
     Example: 送出期間按鈕停用並顯示載入指示
       When 顧客按下「加入購物車」且請求尚未回應
@@ -64,7 +64,8 @@ Feature: 從商品 Modal 非同步加入購物車
       And 加購按鈕應顯示載入指示
 
   Rule: 安全（重送）- 飛行中必須擋住第二次送出
-    # @covered-by: NOT-COVERED modal.psSubmitting 旗標 + setSubmitEnabled 尊重它，同上（B8/B9 待補）。⚠️ 失效後果是顧客被重複收費
+    # @covered-by: tests/js/addToCartFromModal.test.ts::第一次請求還沒回來時，第二次送出不得再發 fetch
+    # @covered-by: tests/js/addToCartFromModal.test.ts::飛行中送出的事件仍必須被 preventDefault（不得退回原生表單送出）
 
     # 原生表單沒有這個問題（送出後整頁導航、DOM 直接消失）。
     # 🔴 少了「切換變體時的解鎖也要尊重飛行中旗標」這一條，
@@ -81,7 +82,9 @@ Feature: 從商品 Modal 非同步加入購物車
       Then 加購按鈕應維持停用狀態
 
   Rule: 安全（重送）- 任何失敗都不得自動重送表單
-    # @covered-by: NOT-COVERED 「業務失敗一律導向 product_url、不自動重送」，同上（B8/B9 待補）
+    # @covered-by: tests/js/addToCartFromModal.test.ts::業務失敗回應不得觸發第二次 fetch
+    # @covered-by: tests/js/addToCartFromModal.test.ts::HTTP 失敗不得觸發第二次 fetch
+    # @covered-by: tests/js/addToCartFromModal.test.ts::fetch reject 不得觸發第二次 fetch
 
     # 訊息機制沒有去重，重送會讓同一則錯誤顯示兩次；
     # 邊界情況（第一次其實成功了）更會造成**重複加購、顧客被重複收費**。
@@ -113,7 +116,10 @@ Feature: 從商品 Modal 非同步加入購物車
 
   Rule: 降級（漸進增強）- 四道關卡任一不成立就退回原生表單送出
     # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_open_shop_renders_ajax_dom_contract
-    # @covered-by: NOT-COVERED canAjax() 四道關卡的 JS 分支，同上（B8/B9 待補）
+    # @covered-by: tests/js/addToCartFromModal.test.ts::缺 addToCartUrl 時完全不攔截送出
+    # @covered-by: tests/js/addToCartFromModal.test.ts::缺 profit_shop_id 時退回原生表單送出（不發 AJAX）
+    # @covered-by: tests/js/addToCartFromModal.test.ts::商品型別不在 AJAX 白名單時退回原生表單送出
+    # @covered-by: tests/js/addToCartFromModal.test.ts::variable 商品尚未選出變體時退回原生表單送出
 
     Scenario Outline: 依環境與商品狀態決定是否走非同步加購
       Given <condition>
@@ -136,7 +142,9 @@ Feature: 從商品 Modal 非同步加入購物車
       Then 瀏覽器應照常執行原生表單送出
 
   Rule: 降級（任意屬性）- 選中含任意屬性的變體必須走原生表單
-    # @covered-by: NOT-COVERED hasAnyAttribute() 降級走原生表單，同上（B8 待補）
+    # @covered-by: tests/js/addToCartFromModal.test.ts::選中含 Any 屬性的變體時不發 AJAX
+    # @covered-by: tests/js/addToCartFromModal.test.ts::全具體變體走 AJAX，且 product_id 送的是變體 ID
+    # @covered-by: tests/js/addToCartFromModal.test.ts::POST body 必須是 form-urlencoded（否則 PHP 不會填 $_POST、分潤靜默失效）
 
     # 🔴 這是**正確**的降級，不是回歸。
     #   非同步端點全文不讀送來的屬性欄位，它一律自己從變體物件反查——

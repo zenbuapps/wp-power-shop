@@ -111,6 +111,20 @@ export function buildShopDom(options: TBuildOptions): void {
 
     <script type="application/json" class="ps-variations-data">${JSON.stringify(variations)}</script>
   </dialog>
+
+  <!--
+    toast 由 PHP 印在**賣場容器內**（不是 dialog 內）——原生 <dialog> 開啟時進入
+    top layer，body 層元素不論 z-index 多大都在它之下且因 inert 不可點，所以
+    成功時的順序是「先關 Modal 再顯示 toast」。JS 只負責移除 tw-hidden，
+    元素本身必須已經存在。
+  -->
+  <div class="pc-toast tw-hidden" data-ps-toast>
+    <div class="pc-alert" role="status" data-ps-toast-body>
+      <svg data-ps-icon="success"></svg>
+      <svg class="tw-hidden" data-ps-icon="error"></svg>
+      <span data-ps-toast-label></span>
+    </div>
+  </div>
 </div>`
 }
 
@@ -130,6 +144,81 @@ export function runShopFrontScript(): void {
 export function setupShop(options: TBuildOptions): void {
 	buildShopDom(options)
 	runShopFrontScript()
+}
+
+/**
+ * 設定 `wp_localize_script` 注入的兩個全域
+ *
+ * `canAjax()` 要求 `CONFIG.addToCartUrl` 有值才會註冊 submit 監聽器——
+ * 沒設定的話 AJAX 路徑整段不會綁定（那是**正確**的降級，見「四道關卡」測試）。
+ */
+export function setFrontConfig(config: Record<string, string> | null): void {
+	if (config === null) {
+		delete (window as unknown as Record<string, unknown>).power_shop_front_config
+		return
+	}
+	;(window as unknown as Record<string, unknown>).power_shop_front_config = config
+}
+
+export type TFetchCall = { url: string; init: RequestInit }
+
+/** 一個可觀察、可控制回應的 fetch 替身 */
+export function stubFetch(handler: () => Promise<unknown>): TFetchCall[] {
+	const calls: TFetchCall[] = []
+	;(window as unknown as Record<string, unknown>).fetch = (url: string, init: RequestInit) => {
+		calls.push({ url, init })
+		return handler()
+	}
+	return calls
+}
+
+/** 建一個 `Response` 替身（受測程式先 `.text()` 再自行 JSON.parse） */
+export function jsonResponse(body: unknown, ok = true, status = 200): Response {
+	return {
+		ok,
+		status,
+		text: () => Promise.resolve(JSON.stringify(body)),
+	} as unknown as Response
+}
+
+/** 送出加購表單 */
+export function submitAddToCart(): void {
+	const form = document.querySelector<HTMLFormElement>('[data-ps-form]')
+	if (!form) {
+		throw new Error('找不到 [data-ps-form]')
+	}
+	form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }))
+}
+
+/** 送出加購表單並回傳該事件是否被 preventDefault（= 走 AJAX 而非原生送出） */
+export function submitAndWasPrevented(): boolean {
+	const form = document.querySelector<HTMLFormElement>('[data-ps-form]')
+	if (!form) {
+		throw new Error('找不到 [data-ps-form]')
+	}
+	const event = new window.Event('submit', { bubbles: true, cancelable: true })
+	form.dispatchEvent(event)
+	return event.defaultPrevented
+}
+
+/** 讓 microtask queue 跑完（fetch 的 .then 鏈） */
+export function flush(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+/** 加購按鈕是否處於忙碌狀態 */
+export function submitBusy(): boolean {
+	const submit = document.querySelector<HTMLButtonElement>('[data-ps-submit]')
+	return !!submit && submit.getAttribute('aria-busy') === 'true'
+}
+
+/** 選出當前 Modal（供斷言 open 狀態用） */
+export function modalEl(): HTMLElement {
+	const modal = document.querySelector<HTMLElement>('[data-ps-modal-for]')
+	if (!modal) {
+		throw new Error('找不到 [data-ps-modal-for]')
+	}
+	return modal
 }
 
 /** 點選某個屬性值（模擬使用者操作） */
