@@ -59,6 +59,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\OrderItemSettleme
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\PartnerSettledLogRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\PartnerTermRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpAdminSettlementQuery;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpProductVariationQuery;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementStatusMutator;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementSummaryProvider;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\SystemClock;
@@ -170,6 +171,19 @@ final class V2Api extends ApiBase {
 			// §6.11 validate-slug（必須在 /(?P<id>\d+) 之前，避免被 numeric route 攔截）
 			[
 				'endpoint' => 'profit-shops/validate-slug',
+				'method' => 'get',
+				'permission_callback' => null,
+			],
+
+			/*
+			 * 商品變體查詢（賣場編輯頁的變體覆寫表格）
+			 *
+			 * 🔴 刻意**不走** `wc/v3/products/{id}/variations`：那支 API 的
+			 * `per_page` 硬上限是 100，超過的變體站長在賣場編輯頁點不到，
+			 * 等於那些 SKU 永遠只能賣原價（原 TD-16）。本端點無上限、不分頁。
+			 */
+			[
+				'endpoint' => 'product-variations/(?P<id>\d+)',
 				'method' => 'get',
 				'permission_callback' => null,
 			],
@@ -482,6 +496,36 @@ final class V2Api extends ApiBase {
 
 			$output = $useCase->execute( $input );
 			return self::created( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /product-variations/{id}
+	 *
+	 * 回傳指定商品的**全部**變體（無 100 筆上限）。
+	 *
+	 * 回應形狀刻意與其他 admin endpoint 一致（`{code, message, data}`），
+	 * `data` 為 `{items, total}`。前端因此仍走 `useCustom` +
+	 * `dataProviderName: 'power-shop'`，與 profit-* 三兄弟同一條路線
+	 * （見 CLAUDE.md Pitfall #10）。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_product_variations_with_id_callback( $request ): \WP_REST_Response {
+		try {
+			$product_id = (int) $request->get_param( 'id' );
+			$items      = WpProductVariationQuery::instance()->find_by_product( $product_id );
+
+			return self::ok(
+				[
+					'items' => $items,
+					'total' => count( $items ),
+				]
+			);
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}

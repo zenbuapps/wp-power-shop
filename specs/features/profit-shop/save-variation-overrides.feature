@@ -232,16 +232,32 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       When 管理者 "Admin" 展開商品 103
       Then 變體層灌水購買人數欄位的提示應說明該數值目前僅會儲存而尚未在前台顯示
 
-  Rule: 已知落差（數量）- 變體超過 100 個時只顯示前 100 個
-    # @covered-by: tests/js/componentWiring.test.ts::🔴 上限值與 wc-rest 的硬上限一致
-    # @covered-by: tests/js/componentWiring.test.ts::🔴 截斷判斷用實際筆數，不用 total
-    # @covered-by: tests/js/componentWiring.test.ts::🔴 截斷時真的渲染出提示（不是算完就丟）
+  Rule: 前置（載入）- 變體清單必須完整載入，不得有筆數上限
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProductVariationsEndpointTest.php::test_returns_all_variations_beyond_wc_rest_limit
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProductVariationsEndpointTest.php::test_returned_ids_match_product_children_exactly
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProductVariationsEndpointTest.php::test_row_shape_matches_frontend_contract
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProductVariationsEndpointTest.php::test_guest_is_rejected
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 變體查詢打的是自訂端點，不是 wc-rest
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 不得殘留任何 wc-rest 的變體查詢路徑
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 已無 per_page 上限常數（後端沒有分頁參數可送）
 
-    # ⚠️ specs/tech-debt.md TD-16：WooCommerce REST API 的單頁上限是 100，
-    #    不是本專案的選擇。已有 UI 揭露，不是靜默截斷。
+    # ⚠️ 本 Rule 原本是「已知落差（數量）- 變體超過 100 個時只顯示前 100 個」（TD-16）。
+    #    上限來自 WooCommerce REST 的 `per_page` 硬限制（`'maximum' => 100`），
+    #    而變體層價格覆寫是逐一 variation_id 設定的 ⇒ 第 101 個之後的 SKU
+    #    在賣場裡永遠只能賣原價。
+    #
+    #    2026-08-11 起改走本外掛自訂端點 `GET /power-shop/product-variations/{id}`
+    #    （直接讀 `WC_Product_Variable::get_children()`），無上限、不分頁，
+    #    落差消失，因此改寫為正向規格。
 
-    Example: 變體超過 100 個時顯示截斷提示
+    Example: 變體超過 100 個時仍完整載入
       Given 商品 103 具有 150 個變體
       When 管理者 "Admin" 展開商品 103
-      Then 畫面應顯示僅顯示前 100 個變體的提示
+      Then 畫面應列出全部 150 個變體
+      And 畫面不應出現任何筆數被截斷的提示
+
+    Example: 變體清單不得包含重複或遺漏
+      Given 商品 103 具有 150 個變體
+      When 管理者 "Admin" 展開商品 103
+      Then 列出的變體識別碼應與該商品的變體集合完全相同
 </content>

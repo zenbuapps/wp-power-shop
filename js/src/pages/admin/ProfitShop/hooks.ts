@@ -306,14 +306,6 @@ export const useShopItemProducts = (productIds: number[]) => {
 }
 
 /**
- * 單一商品的變體查詢上限
- *
- * WC REST 的 `per_page` 硬上限就是 100，超過的變體拿不到 ——
- * 這是 API 限制不是本專案的選擇，因此不做分頁載入，改為在 UI 明講被截斷（TD-16）。
- */
-export const VARIATION_PAGE_LIMIT = 100
-
-/**
  * wc-rest 變體記錄
  *
  * `TProductBase.attributes` 宣告成 `TAttribute[] | TSimpleAttribute[]` 的聯集，
@@ -337,34 +329,40 @@ export type TShopVariationInfo = Omit<TProductVariation, 'attributes'> & {
 }
 
 /**
- * 取得單一商品的變體清單（走 wc-rest）
+ * 取得單一商品的**全部**變體（走本外掛自訂 REST，非 wc-rest）
+ *
+ * ═══ 🔴 為什麼不用 `wc/v3/products/{id}/variations` ═══
+ *
+ * 那支 API 的 `per_page` 硬上限是 100（寫死在
+ * `WC_REST_Controller::get_collection_params()`），而賣場的變體層價格覆寫是
+ * **逐一 variation_id** 設定的 ⇒ 超過 100 個變體的商品，第 101 個之後站長
+ * 在編輯頁根本點不到，那些 SKU 在賣場裡永遠只能賣原價（原 TD-16）。
+ *
+ * 改走 `GET /power-shop/product-variations/{id}`（`WpProductVariationQuery`），
+ * 直接讀 `WC_Product_Variable::get_children()`——**無上限、不分頁**。
+ *
+ * ⚠️ 因此 `useList` + `per_page` filter 那一整套已經**不再適用**：
+ * 那是為了繞開 6 個 dataProvider 共用序列化（`pagination` 只會變成
+ * Powerhouse 風格的 `paged` / `posts_per_page`，WooCommerce 不認）而寫的。
+ * 現在後端根本沒有分頁參數，改用 `useCustom` + `dataProviderName: 'power-shop'`
+ * 與 profit-* 三兄弟同一條路線（CLAUDE.md Pitfall #10）。
  *
  * ⚠️ **刻意設計成「由展開列的子元件呼叫」**，不在 ItemsEditor 那一層查：
  * rc-table 的 `expandedRowRender` 天然 lazy（沒展開過的列根本不 render），
- * 所以查詢自然只會發生在使用者真的展開的那個商品上，不會有 N+1；
+ * 所以查詢只會發生在使用者真的展開的那個商品上，不會有 N+1；
  * 收合只是 `display:none` 不會 unmount，重新展開也不會重查。
- * 反過來說，若把查詢寫在 ItemsEditor，就會為了固定 hook 數量而被迫像
- * `useShopItemProducts` 那樣寫死 N 個 `useList`。
- *
- * ⚠️ `per_page` **必須當 filter 送**（見 useShopItemProducts 同款註解）：
- * 6 個 dataProvider 共用同一個 factory，`pagination` 只會被序列化成 Powerhouse 風格的
- * `paged` / `posts_per_page`，而 WooCommerce 只認 `page` / `per_page` ——
- * 少了這條 filter 會靜默退回每頁 10 筆，變體一多就看不到後面的。
  */
 export const useProductVariations = (productId: number, enabled = true) => {
+	const apiUrl = useApiUrl('power-shop')
 	const isEnabled = enabled && Number.isFinite(productId) && productId > 0
 
-	const query = useList<TShopVariationInfo>({
-		resource: `products/${productId}/variations`,
-		dataProviderName: 'wc-rest',
-		filters: [
-			{
-				field: 'per_page',
-				operator: 'eq' as const,
-				value: VARIATION_PAGE_LIMIT,
-			},
-		],
-		pagination: { pageSize: VARIATION_PAGE_LIMIT },
+	const query = useCustom<TWrappedResponse<{
+		items: TShopVariationInfo[]
+		total: number
+	}>>({
+		url: `${apiUrl}/product-variations/${productId}`,
+		method: 'get',
+		dataProviderName: 'power-shop',
 		queryOptions: {
 			enabled: isEnabled,
 
@@ -373,14 +371,22 @@ export const useProductVariations = (productId: number, enabled = true) => {
 		},
 	})
 
-	const variations = useMemo(() => query.data?.data ?? [], [query.data])
+	// 後端回 `{code, message, data}`，Refine 再包一層 ⇒ 要剝兩層
+	const payload = query.data?.data?.data
+
+	const variations = useMemo(() => payload?.items ?? [], [payload])
 
 	return {
 		variations,
 
-		// `total` 取自 x-wp-total header；antd-toolkit 在缺 header 時 fallback 成 1，
-		// 所以只拿它當「補充資訊」用，判斷是否被截斷一律以實際筆數為準
-		total: query.data?.total ?? 0,
+		/**
+		 * 總數
+		 *
+		 * 由後端 `count($items)` 直接算出，**與 `variations.length` 恆等**——
+		 * 不像舊的 wc-rest 路徑要看 `x-wp-total` header（缺 header 時
+		 * antd-toolkit 會 fallback 成 1，那個值不可信）。
+		 */
+		total: payload?.total ?? 0,
 
 		// 停用中的查詢其 isLoading 恆為 true，不夾 isEnabled 會讓收合的列一直顯示骨架
 		isLoading: isEnabled && query.isLoading,

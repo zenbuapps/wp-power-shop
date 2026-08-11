@@ -15,7 +15,6 @@ import { ProductStock } from 'antd-toolkit/wp'
 import { memo, useMemo, type ComponentProps } from 'react'
 
 import {
-	VARIATION_PAGE_LIMIT,
 	useProductVariations,
 	type TShopVariationInfo,
 } from '@/pages/admin/ProfitShop/hooks'
@@ -135,8 +134,9 @@ const VariationOverrideEditorComponent = ({
 	productOverride,
 	disabled,
 }: TVariationOverrideEditorProps) => {
-	const { variations, total, isLoading, isError } =
-		useProductVariations(productId)
+	// `total` 刻意不解構：自訂端點回傳的變體**沒有筆數上限**，
+	// 它與 `variations.length` 恆等，取出來只會多一個永遠用不到的變數。
+	const { variations, isLoading, isError } = useProductVariations(productId)
 
 	/**
 	 * WC 實際存在的變體 + 孤兒鍵
@@ -156,8 +156,6 @@ const VariationOverrideEditorComponent = ({
 	 * 一律以實際筆數判斷，不倚賴 `total`：antd-toolkit 在缺 `x-wp-total` header 時
 	 * 會把 total fallback 成 1，拿它當條件會讓「真的被截斷」的情況靜默無提示。
 	 */
-	const isTruncated = variations.length >= VARIATION_PAGE_LIMIT
-	const knownTotal = total > variations.length ? total : undefined
 
 	const columns: TableProps<TVariationRow>['columns'] = [
 		{
@@ -427,16 +425,6 @@ const VariationOverrideEditorComponent = ({
 			 * （展開列已經夠長，那段說明每展開一個商品就重複一次）。
 			 * 內容沒有丟掉 —— 完整搬到本元件的 docblock，改動價格生效範圍時仍看得到。
 			 */}
-			{isTruncated ? (
-				<Alert
-					type="warning"
-					showIcon
-					message={`僅顯示前 ${VARIATION_PAGE_LIMIT} 個變體${
-						knownTotal ? `（共 ${knownTotal} 個）` : ''
-					}，其餘變體無法在此設定覆寫`}
-				/>
-			) : null}
-
 			{renderBody()}
 		</div>
 	)

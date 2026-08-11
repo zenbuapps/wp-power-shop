@@ -147,36 +147,44 @@ describe('Partner 登入頁的 slug 帶入', () => {
 	})
 })
 
-describe('變體超過 100 個時的截斷揭露', () => {
+describe('變體清單改走自訂 REST（不再有 100 筆上限）', () => {
 	/**
-	 * 🔒 現況鎖（characterization test）：對應 specs/tech-debt.md TD-16
+	 * 對應 specs/tech-debt.md TD-16 —— **這條落差已於 2026-08-11 修掉**，
+	 * 本組測試從「現況鎖」改寫為「正向規格」。
 	 *
-	 * WooCommerce REST API 的單頁上限硬性是 100，**不是本專案的選擇**，
-	 * 因此變體超過 100 個的商品在此只設定得到前 100 個。
+	 * 舊行為：走 `wc/v3/products/{id}/variations`，`per_page` 硬上限 100
+	 * ⇒ 超過 100 個變體的商品，第 101 個之後站長在賣場編輯頁點不到，
+	 *   那些 SKU 永遠只能賣原價。
 	 *
-	 * 這個落差本身修不掉（要改就得自己做分頁載入），但**必須被揭露**——
-	 * 靜默截斷會讓站長以為第 101 個之後的變體「沒有覆寫價」是他自己沒設，
-	 * 而實際上是介面根本沒讓他設。
+	 * 新行為：走 `GET /power-shop/product-variations/{id}`
+	 * （`WpProductVariationQuery` 直接讀 `get_children()`，無上限、不分頁）。
 	 *
-	 * ⚠️ 三個斷言各鎖一件事，缺任一個都留下一個安靜壞掉的方式：
-	 *   1. 上限值就是 wc-rest 的 100（改小會無故少顯示變體）
-	 *   2. 判斷用**實際筆數**而非 `total`（antd-toolkit 在缺 x-wp-total 時把 total
-	 *      fallback 成 1，拿它當條件會讓真的被截斷的情況完全不提示）
-	 *   3. 真的有渲染出提示，而不是只算了一個沒人用的布林值
+	 * ⚠️ 「真的回得回超過 100 筆」由 Integration 測試把關
+	 * （`ProductVariationsEndpointTest::test_returns_all_variations_beyond_wc_rest_limit`，
+	 * 建 105 個變體）。本組只鎖**前端有沒有真的改走那條路**——
+	 * 少了它，有人把 hook 改回 wc-rest 時後端測試照樣全綠，
+	 * 而畫面又靜默退回 100 筆上限。
 	 */
-	it('🔴 上限值與 wc-rest 的硬上限一致', () => {
-		const hooks = read('js/src/pages/admin/ProfitShop/hooks.ts')
-		expect(hooks).toMatch(/VARIATION_PAGE_LIMIT\s*=\s*100/)
+	const hooks = read('js/src/pages/admin/ProfitShop/hooks.ts')
+
+	it('🔴 變體查詢打的是自訂端點，不是 wc-rest', () => {
+		expect(hooks).toMatch(/\$\{apiUrl\}\/product-variations\/\$\{productId\}/)
+		expect(hooks).toMatch(/useProductVariations[\s\S]{0,600}dataProviderName:\s*'power-shop'/)
 	})
 
-	it('🔴 截斷判斷用實際筆數，不用 total', () => {
-		expect(variationEditor).toMatch(
-			/isTruncated\s*=\s*variations\.length\s*>=\s*VARIATION_PAGE_LIMIT/
-		)
+	it('🔴 不得殘留任何 wc-rest 的變體查詢路徑', () => {
+		// `products/${productId}/variations` 是舊的 wc-rest resource 寫法。
+		// 留著會讓下一個人以為兩條路都還在用。
+		expect(hooks).not.toMatch(/products\/\$\{productId\}\/variations/)
 	})
 
-	it('🔴 截斷時真的渲染出提示（不是算完就丟）', () => {
-		expect(variationEditor).toMatch(/isTruncated\s*\?\s*\(?\s*<Alert/)
-		expect(variationEditor).toMatch(/僅顯示前 \$\{VARIATION_PAGE_LIMIT\} 個變體/)
+	it('🔴 已無 per_page 上限常數（後端沒有分頁參數可送）', () => {
+		expect(hooks).not.toMatch(/VARIATION_PAGE_LIMIT/)
+		expect(variationEditor).not.toMatch(/VARIATION_PAGE_LIMIT/)
+	})
+
+	it('🔴 截斷提示已移除（沒有東西會被截斷了）', () => {
+		expect(variationEditor).not.toMatch(/isTruncated/)
+		expect(variationEditor).not.toMatch(/僅顯示前/)
 	})
 })
