@@ -232,12 +232,23 @@ final class ProfitShopRenderer {
 		* 例如 Elementor 的 `Frontend::apply_builder_in_content()` 會呼叫
 		* `Plugin::$instance->documents->get_doc_for_frontend( get_the_ID() )`。
 		*
-		* 而本 renderer 是自訂流程、不走 theme 的 single 樣板，主查詢從來沒有解析到這篇 post
-		* ⇒ `get_the_ID()` 回 false ⇒ 建構器直接放棄，`the_content` 只剩原始標記
-		* ⇒ 站長看到的是一堆沒被渲染的 shortcode / 註解，而**沒有任何錯誤訊息**。
+		* 而本 renderer 是自訂流程、不走 theme 的 single 樣板，主查詢從來沒有解析到這篇 post。
+		*
+		* 🔴 **實測（turbo.local，2026-08-11，探針夾在 template 內量測）**：
+		*
+		*     停用本方法 → get_the_ID()=738  get_queried_object_id()=0
+		*     啟用本方法 → get_the_ID()=1932 get_queried_object_id()=1932  （1932 = 賣場 post）
+		*
+		* 注意停用時**不是回 0，是回 738**——某篇完全不相干的文章（全域 $post 的殘留值）。
+		* 也就是說建構器不只是「放棄渲染」，它會拿**別人的版型資料**去查，
+		* 而這一切沒有任何錯誤訊息。
 		*
 		* 補上這段之後，`the_content` 在「正確的 post 上下文」內執行，
 		* 建構器與其他吃 `the_content` 的外掛都能正常運作。
+		*
+		* ⚠️ 上面驗的是**前提條件**（建構器查得到正確的 post id）。
+		*    「以建構器排版的賣場實際渲染出來長什麼樣」尚未端到端驗證——
+		*    測試站台的賣場都不是用建構器排的。
 		*/
 		$this->setup_shop_post_context( $shop );
 
