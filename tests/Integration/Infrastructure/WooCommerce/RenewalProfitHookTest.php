@@ -498,6 +498,213 @@ final class RenewalProfitHookTest extends TestCase {
 	}
 
 	// ====================================================================
+	//  I. filter 契約：真的走 apply_filters（不是直接呼叫 method）
+	// ====================================================================
+
+	/*
+	 * ═══ 這一整段補的是什麼 ═══
+	 *
+	 * 上面 A～H 共 18 條全部是**直接呼叫** `carry_profit()`。那證明了「這個方法算得對」，
+	 * 但沒有證明「它掛成 WordPress filter 之後還能用」——而 `wcs_renewal_order_created`
+	 * 是 **filter 不是 action**，兩者的失敗模式完全不同：
+	 *
+	 *   action 的 callback 忘記 return  ⇒ 什麼事都不會發生
+	 *   filter 的 callback 忘記 return  ⇒ 回傳 null ⇒ `wcs_create_renewal_order()` 拿到 null
+	 *                                   ⇒ **整條訂閱續訂鏈路壞掉，顧客的訂閱停止續期**
+	 *
+	 * 影響範圍遠大於分潤本身，是本 hook 風險最高的單一失誤點。
+	 *
+	 * ⚠️ 這裡**刻意不定義** `wcs_get_subscriptions_for_renewal_order()` 來讓
+	 *    `is_supported()` 變成 true。PHP 沒有「取消定義函式」這回事，一旦定義就會污染
+	 *    同一輪後續所有測試——`test_filter_registration_matches_subscriptions_availability`
+	 *    會改走「已安裝」分支，去斷言 Loader 註冊過的實例存在，而 Loader 是在 bootstrap
+	 *    當下（函式還不存在）跑的，那條會以 `ArgumentCountError` 炸掉。
+	 *
+	 *    改為**手動註冊**（與建構子逐字相同的 `add_filter` 參數）再 `apply_filters`。
+	 *    這測得到 filter 契約本身，代價是測不到「建構子會註冊」那一行——
+	 *    後者已由 `test_filter_registration_matches_subscriptions_availability`
+	 *    的未安裝分支反向鎖住。
+	 */
+
+	/**
+	 * 🔴 掛成 filter 之後必須正常運作，且回傳同一個訂單物件
+	 *
+	 * @group happy
+	 */
+	public function test_carry_profit_works_through_the_real_filter_chain(): void {
+		$shop_id = $this->create_shop( 25 );
+		$item_id = $this->make_renewal_item( $shop_id, 20, 1, '400.00', SettlementRecord::STATUS_PAID );
+		$order   = \wc_get_order( $this->order_id_of( $item_id ) );
+
+		$this->assertInstanceOf( \WC_Order::class, $order );
+
+		$hook = $this->make_hook();
+		\add_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20, 2 );
+
+		try {
+			$returned = \apply_filters( 'wcs_renewal_order_created', $order, null );
+		} finally {
+			\remove_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20 );
+		}
+
+		$this->assertSame( $order, $returned, 'filter 必須原封不動回傳續訂單物件' );
+		$this->assertSame( SettlementRecord::STATUS_PENDING, $this->meta( $item_id, '_settlement_status' ) );
+		$this->assertSame( '25', $this->meta( $item_id, '_profit_rate' ), '比例應已重讀賣場' );
+		$this->assertSame( '100.00', $this->meta( $item_id, '_profit_amount' ), '400 × 1 × 25%' );
+	}
+
+	/**
+	 * 🔴 filter 鏈上的下一個 callback 仍必須收到訂單物件
+	 *
+	 * 這條比「斷言回傳值」更接近真實失效場景：WCS 自己在
+	 * `wcs_create_renewal_order()` 內部會拿 filter 的結果繼續往下用。
+	 * 我們的 callback 若在某個分支漏了 `return`，下游拿到的就是 null——
+	 * 而直接呼叫 method 的測試**完全看不到這件事**。
+	 *
+	 * @group security
+	 */
+	public function test_downstream_filter_callback_still_receives_the_order(): void {
+		$shop_id = $this->create_shop( 10 );
+		$item_id = $this->make_renewal_item( $shop_id, 10, 1, '100.00', SettlementRecord::STATUS_PAID );
+		$order   = \wc_get_order( $this->order_id_of( $item_id ) );
+
+		$seen_by_downstream = 'never-ran';
+
+		$downstream = static function ( $value ) use ( &$seen_by_downstream ) {
+			$seen_by_downstream = $value instanceof \WC_Order ? 'order' : gettype( $value );
+			return $value;
+		};
+
+		$hook = $this->make_hook();
+		\add_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20, 2 );
+		\add_filter( 'wcs_renewal_order_created', $downstream, 30, 1 );
+
+		try {
+			\apply_filters( 'wcs_renewal_order_created', $order, null );
+		} finally {
+			\remove_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20 );
+			\remove_filter( 'wcs_renewal_order_created', $downstream, 30 );
+		}
+
+		$this->assertSame(
+			'order',
+			$seen_by_downstream,
+			'下游 callback 收到的不是 WC_Order ⇒ wcs_create_renewal_order() 會拿到壞值 ⇒ 訂閱停止續期'
+		);
+	}
+
+	/**
+	 * hook priority 必須是 20（晚於 WCS 自己在 10 的處理）
+	 *
+	 * WCS 在 `wcs_create_renewal_order()` 內部與其他 callback 都掛在預設的 10；
+	 * 我們必須在它們把 meta 複製完之後才動手，否則會重置到一半又被覆蓋回去。
+	 *
+	 * 用 reflection 讀 private const，而不是重寫一份 `20` 在測試裡——
+	 * 後者只是把同一個數字抄兩遍，改了 production 也不會紅。
+	 *
+	 * @group smoke
+	 */
+	public function test_hook_priority_is_twenty(): void {
+		$priority = ( new \ReflectionClass( RenewalProfitHook::class ) )
+			->getConstant( 'HOOK_PRIORITY' );
+
+		$this->assertSame(
+			20,
+			$priority,
+			'priority 若 <= 10 會與 WCS 自己的 meta 複製搶順序，重置結果可能被覆蓋'
+		);
+	}
+
+	/**
+	 * 🔴 母訂單的「已撥款後退款」旗標不得被續訂單繼承
+	 *
+	 * `wcs_copy_order_item()` 複製**全部** meta（只排除 `_reduced_stock`），
+	 * 所以母訂單若曾發生「已撥款之後退款」，`_profit_refund_after_paid=1`
+	 * 會一路複製到這一期的續訂單上。
+	 *
+	 * 不清掉的話，站長的結算頁會在一筆**全新、從未撥款也從未退款**的續訂分潤上
+	 * 標紅「需人工沖回」，而且沒有任何辦法讓它消失——這一期根本沒有可以沖回的東西。
+	 *
+	 * @group edge
+	 */
+	public function test_inherited_refund_after_paid_flag_is_cleared(): void {
+		$shop_id = $this->create_shop( 20 );
+		$item_id = $this->make_renewal_item( $shop_id, 20, 1, '500.00', SettlementRecord::STATUS_PAID );
+
+		// 模擬 WCS 把母訂單的旗標一併複製過來
+		$this->settlements->flag_refund_after_paid( $item_id );
+		$this->assertSame(
+			'1',
+			$this->meta( $item_id, '_profit_refund_after_paid' ),
+			'前置檢查：旗標必須真的被寫進去，否則下面的斷言在「本來就沒有」的情況下也會過'
+		);
+
+		$this->carry( $item_id );
+
+		$this->assertSame(
+			'',
+			$this->meta( $item_id, '_profit_refund_after_paid' ),
+			'續訂單不得繼承母訂單的「已撥款後退款」旗標'
+		);
+	}
+
+	/**
+	 * 🔴 走完 filter 之後，11 個結算欄位沒有任何一個殘留上一期的值
+	 *
+	 * 逐欄位掃過一遍，而不是只挑三個來看。理由：`wcs_copy_order_item()` 是
+	 * **無差別全複製**，任何一個日後新增的 `_profit_*` 欄位若忘了納入重置，
+	 * 只挑三個看的測試不會發現。
+	 *
+	 * @group happy
+	 */
+	public function test_no_stale_field_survives_a_faithful_wcs_copy(): void {
+		$shop_id = $this->create_shop( 30 );
+
+		// 這一期：數量 2、行小計 600 ⇒ 單價 300、分潤 600 × 30% = 180
+		$order = $this->make_order();
+		$item  = $this->attach_item( $order, 2, '300.00' );
+		$order->save();
+		$item_id = (int) $item->get_id();
+
+		// WCS 從母訂單複製過來的一整組舊值（刻意每一個都與正解不同）
+		$this->seed_inherited( $item_id, $shop_id, 5, '111.11', '222.22', SettlementRecord::STATUS_PAID );
+		$this->settlements->flag_refund_after_paid( $item_id );
+
+		$hook = $this->make_hook();
+		\add_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20, 2 );
+
+		try {
+			\apply_filters( 'wcs_renewal_order_created', \wc_get_order( $this->order_id_of( $item_id ) ), null );
+		} finally {
+			\remove_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20 );
+		}
+
+		$expected = [
+			// 凍結
+			'_profit_shop_id'           => (string) $shop_id,
+			'_profit_partner_term_id'   => (string) $this->partner_term_id,
+			// 動態（重讀賣場）
+			'_profit_rate'              => '30',
+			// 重算
+			'_actual_price'             => '300.00',
+			'_profit_amount'            => '180.00',
+			// 強制重置
+			'_settlement_status'        => SettlementRecord::STATUS_PENDING,
+			'_settled_at'               => '',
+			'_settled_by'               => '',
+			'_profit_refund_after_paid' => '',
+		];
+
+		foreach ( $expected as $key => $value ) {
+			$this->assertSame(
+				$value,
+				$this->meta( $item_id, $key ),
+				"{$key} 殘留了上一期的值（WCS 是無差別全複製，新欄位必須一併納入重置）"
+			);
+		}
+	}
+
+	// ====================================================================
 	//  Helpers
 	// ====================================================================
 

@@ -111,6 +111,8 @@ Feature: 訂閱續訂單帶入分潤結算資訊
     # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_renewal_clears_settled_at_and_settled_by
     # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_any_inherited_status_is_reset_to_pending
     # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_real_wcs_renewal_order_resets_paid_status
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_inherited_refund_after_paid_flag_is_cleared
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_no_stale_field_survives_a_faithful_wcs_copy
 
     # 這是本 Feature 存在的主要理由。少了這一段，站長會對同一筆分潤重複撥款，
     # 或以為已撥款而讓夥伴永遠拿不到這期的錢——兩種結果都沒有任何錯誤訊息。
@@ -140,6 +142,8 @@ Feature: 訂閱續訂單帶入分潤結算資訊
     # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_hook_returns_the_renewal_order_object
     # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_hook_returns_order_even_when_shop_repository_throws
     # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_non_order_input_is_returned_untouched
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_carry_profit_works_through_the_real_filter_chain
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_downstream_filter_callback_still_receives_the_order
 
     Example: 處理完成後回傳續訂單本身
       When 系統為母訂單 8001 建立續訂單
@@ -170,6 +174,7 @@ Feature: 訂閱續訂單帶入分潤結算資訊
 
   Rule: 環境（相依）- 未安裝訂閱外掛時整段功能不註冊
     # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_filter_registration_matches_subscriptions_availability
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/RenewalProfitHookTest.php::test_hook_priority_is_twenty
 
     Example: 未安裝訂閱外掛時不掛載續訂處理
       Given 站台未安裝 WooCommerce Subscriptions

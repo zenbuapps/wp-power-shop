@@ -471,7 +471,20 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 	/**
 	 * 驗證在 HPOS 開啟（custom orders table）下仍能正確聚合
 	 *
-	 * 🔴 **本條與下一條互斥，任一次執行只有一條會跑**。要兩條都覆蓋必須跑兩輪：
+	 * ═══ ✅ HPOS 分支已於 2026-08-11 起有**單輪內**的自動化覆蓋 ═══
+	 *
+	 * `SettlementQueryHposPathTest` 在自己的 `set_up()` 裡把 HPOS 打開、把 data sync 關掉，
+	 * 建完 fixture 後在同一輪內驗證六個查詢入口，`tear_down()` 再還原 option。
+	 * 因此**不再需要靠人記得跑第二輪**，TD-88 那個「零覆蓋」的狀態已經解除。
+	 *
+	 * 關掉 data sync 是那一檔的關鍵：sync 開著時 posts 也會有一筆合格的 `shop_order`，
+	 * legacy SQL 一樣撈得到 ⇒ 測不出分支差異。詳見該檔案的檔頭。
+	 *
+	 * 本條與下一條**仍然保留**：它們驗的是「這一份較大的聚合 fixture 在兩種儲存模式下
+	 * 算出來的金額一致」，與那一檔驗的「換到 HPOS 之後查詢還撈不撈得到」是不同的問題。
+	 * 兩條依舊互斥、依舊只有一條會跑；要兩條都覆蓋仍需跑兩輪：
+	 *
+	 * 🔴 **本條與下一條互斥，任一次執行只有一條會跑**：
 	 *
 	 * ```bash
 	 * WPE=./tests/e2e/node_modules/.bin/wp-env
@@ -512,7 +525,8 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 			$this->markTestSkipped(
 				'HPOS 未啟用（本輪跑的是 legacy posts 路徑）。要覆蓋這條請跑 HPOS 輪：'
 				. 'wp option update woocommerce_custom_orders_table_enabled yes → 重跑 → 記得還原為 no。'
-				. '⚠️ 目前沒有任何 CI matrix 會自動跑它，不跑第二輪就是零覆蓋。'
+				. 'ℹ️ HPOS 分支本身已由 SettlementQueryHposPathTest 在單輪內覆蓋，'
+				. '本條跳過**不再等於** HPOS 零驗證；它多驗的是「同一份聚合 fixture 兩種儲存模式金額一致」。'
 			);
 		}
 

@@ -48,6 +48,9 @@ Feature: 分潤夥伴查詢自己的分潤報表
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/PartnerReportScopeIsolationTest.php::test_kpi_use_case_locks_partner_term_id
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/PartnerReportScopeIsolationTest.php::test_execute_signature_takes_partner_term_id_as_first_explicit_arg
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/ListPartnerSettlementsUseCaseTest.php::test_does_not_leak_other_partners_settlements
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_kpi_ignores_partner_term_id_in_query_string
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_settlements_ignores_partner_term_id_in_query_string
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_settlements_list_is_non_empty_and_all_belong_to_self
 
     Scenario Outline: 以請求參數指定他人 partner_term_id 不得改變資料範圍
       When 夥伴 "夥伴A" 以自己的 token 查詢 <report> 並在 query string 帶入 partner_term_id 為 9
@@ -90,6 +93,7 @@ Feature: 分潤夥伴查詢自己的分潤報表
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerKpiUseCaseTest.php::test_happy_returns_kpi_report_for_partner
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerKpiUseCaseTest.php::test_no_data_returns_zero_kpi
     # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementSummaryProviderRealAggregationTest.php::test_summary_returns_correct_totals_for_partner_a
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_kpi_returns_own_non_zero_amounts
 
     Example: KPI 依狀態分別加總且金額為兩位小數字串
       When 夥伴 "夥伴A" 查詢期間 2026-08-01 至 2026-08-31 的 KPI 摘要
@@ -108,6 +112,7 @@ Feature: 分潤夥伴查詢自己的分潤報表
   Rule: 後置（趨勢）- 趨勢資料依指定粒度分組
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerTrendUseCaseTest.php::test_happy_returns_trend_series
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerTrendUseCaseTest.php::test_passes_interval_to_provider
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_trend_returns_own_data_only
 
     Example: 以日為粒度取得趨勢序列
       When 夥伴 "夥伴A" 以日為粒度查詢 2026-08-01 至 2026-08-03 的趨勢
@@ -120,6 +125,7 @@ Feature: 分潤夥伴查詢自己的分潤報表
   Rule: 後置（明細）- 結算明細支援狀態篩選與分頁
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/ListPartnerSettlementsUseCaseTest.php::test_happy_returns_paginated_list
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/ListPartnerSettlementsUseCaseTest.php::test_empty_list_returns_zero_total
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_settlements_list_is_non_empty_and_all_belong_to_self
 
     Example: 不指定狀態時回傳全部結算紀錄
       When 夥伴 "夥伴A" 查詢結算明細
@@ -184,9 +190,13 @@ Feature: 分潤夥伴查詢自己的分潤報表
       Then 該筆金額不應計入任何 KPI 欄位
 
   Rule: 相容（HPOS）- 訂單儲存模式切換不影響報表結果
+    # @covered-by: tests/Integration/Infrastructure/Persistence/SettlementQueryHposPathTest.php::test_fixture_is_really_on_hpos_and_invisible_to_legacy_sql
+    # @covered-by: tests/Integration/Infrastructure/Persistence/SettlementQueryHposPathTest.php::test_summary_for_partner_works_on_hpos
+    # @covered-by: tests/Integration/Infrastructure/Persistence/SettlementQueryHposPathTest.php::test_trend_for_partner_works_on_hpos
+    # @covered-by: tests/Integration/Infrastructure/Persistence/SettlementQueryHposPathTest.php::test_find_by_partner_works_and_stays_isolated_on_hpos
+    # @covered-by: tests/Integration/Infrastructure/Persistence/SettlementQueryHposPathTest.php::test_repository_queries_work_on_hpos
     # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementSummaryProviderRealAggregationTest.php::test_summary_works_under_hpos_enabled
     # @covered-by: tests/Integration/Infrastructure/Persistence/WpSettlementSummaryProviderRealAggregationTest.php::test_summary_works_under_legacy_post_orders
-    # @covered-by: MANUAL 兩條互斥，須跑 composer test:both-order-storage 兩輪才會都執行
 
     Example: 啟用 HPOS 與未啟用時回傳相同的 KPI
       Given 站台已啟用 HPOS

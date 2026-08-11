@@ -27,6 +27,7 @@ Feature: 分潤夥伴登入自助報表
     # @covered-by: tests/Integration/Infrastructure/Rest/PartnerAuthCookieTest.php::test_login_response_body_contains_token_and_expires_at
     # @covered-by: tests/Integration/Infrastructure/Rest/PartnerAuthCookieTest.php::test_login_response_sets_secure_httponly_cookie
     # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_happy_returns_partner_snapshot_and_resets_counter
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_partner_logs_in_with_real_password
 
     Example: 以正確的 slug 與密碼登入
       When 訪客以 slug "partner-a" 與密碼 "correct-pw1" 登入
@@ -55,6 +56,8 @@ Feature: 分潤夥伴登入自助報表
     # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_unknown_slug_throws_invalid_credentials
     # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_wrong_password_throws_invalid_credentials_and_records_failure
     # @covered-by: tests/Unit/Application/Service/PartnerAuthServiceTest.php::test_message_does_not_distinguish_unknown_slug_from_wrong_password
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_wrong_password_is_rejected_and_issues_no_token
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_other_partners_password_cannot_log_into_this_slug
 
     Scenario Outline: 兩種登入失敗回相同的錯誤碼與訊息
       When 訪客以 slug "<slug>" 與密碼 "<password>" 登入
@@ -214,6 +217,7 @@ Feature: 分潤夥伴登入自助報表
     # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/LogoutPartnerUseCaseTest.php::test_logout_revokes_token
     # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/LogoutPartnerUseCaseTest.php::test_logout_with_unknown_token_does_not_throw
     # @covered-by: tests/Integration/Infrastructure/Rest/PartnerTokenSecurityTest.php::test_revoked_token_cannot_be_reused
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_logout_revokes_token_for_reports
     # @covered-by: tests/js/partnerPortalAuth.test.ts::🔴 clear 是冪等的：連續呼叫、或本來就沒東西都不得拋錯
     # @covered-by: tests/js/partnerPortalAuth.test.ts::沒有資料時 read 回 null
     # @covered-by: tests/Unit/Application/UseCase/Partner/Auth/LogoutPartnerUseCaseTest.php::test_logout_with_unknown_token_does_not_throw
@@ -253,6 +257,26 @@ Feature: 分潤夥伴登入自助報表
       Then 畫面不應顯示夥伴 "夥伴A" 的任何資料
       And 本機的登入資訊應被清除
       And 畫面應導向登入頁
+
+  Rule: 前置（掛載）- 報表頁只在自己的網址上接手，不得攔截站台其他頁面
+    # 這條分兩個方向，缺任一個都會出大事：
+    #   沒掛上 ⇒ 夥伴開報表頁看到的是佈景主題的 404，而所有 API 測試照樣全綠
+    #   掛太廣 ⇒ 每一個頁面都被判成「找不到分潤頁面」，整個站台等同下線
+    # @covered-by: tests/Integration/Infrastructure/WordPress/PartnerPortalRendererTest.php::test_renderer_is_hooked_on_template_redirect
+    # @covered-by: tests/Integration/Infrastructure/WordPress/PartnerPortalRendererTest.php::test_non_report_request_falls_through_without_output
+    # @covered-by: tests/Integration/Infrastructure/WordPress/PartnerPortalRendererTest.php::test_query_var_is_the_one_registered_by_rewrite_rules
+    # @covered-by: tests/Integration/Infrastructure/WordPress/PartnerPortalRendererTest.php::test_mount_id_contract_is_stable
+    # @covered-by: tests/Integration/Infrastructure/WordPress/RewriteRulesTest.php::test_profit_report_rewrite_rule_exists
+    # @covered-by: tests/Integration/Infrastructure/WordPress/RewriteRulesTest.php::test_profit_report_query_var_is_registered
+
+    Example: 報表頁網址由報表頁自己接手
+      When 訪客開啟 "/profit-report/partner-a/"
+      Then 系統應輸出夥伴報表頁而非佈景主題的頁面
+
+    Example: 非報表頁網址必須原封不動交還佈景主題
+      When 訪客開啟站台的任一般頁面
+      Then 系統不應輸出任何分潤報表相關內容
+      And 頁面應由佈景主題正常渲染
 
   Rule: 前置（表單）- 登入頁必須從網址帶入 slug 且不可由使用者更改
     # @covered-by: tests/js/componentWiring.test.ts::🔴 slug 從網址帶入且使用者不可更改
