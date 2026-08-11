@@ -261,8 +261,8 @@ Feature: 無定價商品靠賣場覆寫價出售的逐筆授權
       And 該品項不應以 0 元留在購物車中
 
   Rule: 不變量（隔離）- 顯示層的價格覆寫永遠不得影響任何購物車品項
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_disarm_removes_every_filter_and_restores_original_prices
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_priced_products_are_untouched_by_authorization
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_armed_filters_never_touch_a_cart_item_object
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_every_cart_item_is_protected_not_just_the_first
 
     # cart item 的價格由簽章驗證獨佔決定。
     #

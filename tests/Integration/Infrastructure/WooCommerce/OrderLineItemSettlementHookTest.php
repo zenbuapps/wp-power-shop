@@ -588,6 +588,167 @@ final class OrderLineItemSettlementHookTest extends TestCase {
 	 *
 	 * @return int 賣場 ID
 	 */
+	/**
+	 * 🔴 寫入失敗一律靜默降級，**絕不可**中斷顧客結帳
+	 *
+	 * 對應規格：attribute-order-line-item.feature「錯誤（降級）」
+	 *
+	 * 本 hook 在 `WC_Checkout::create_order_line_items()` 內執行，此刻顧客的款項
+	 * 流程**已經啟動**。結算記帳失敗只是「少一筆分潤紀錄」（站長事後補得回來）；
+	 * 讓例外冒出去卻會變成「顧客付不了款」——後者嚴重得多。
+	 *
+	 * ⚠️ 這條在 2026-08-11 之前沒有測試：原標註指向
+	 * `test_tampered_signature_writes_no_settlement_meta`，那驗的是「驗章失敗不寫
+	 * meta」，走的是**正常的 return 路徑**，`catch (\Throwable)` 一次都不會執行。
+	 * 把整段 try/catch 拿掉也不會有任何測試轉紅。
+	 *
+	 * @test
+	 * @group error
+	 * @group security
+	 */
+	public function test_exception_during_freeze_never_breaks_checkout(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+		$shop_id = $this->create_shop( $product->get_id(), new PriceOverride( '800', '600', null ), 10 );
+		$key     = $this->add_to_cart( $product->get_id(), $shop_id );
+
+		// 真實、已簽章的 cart values（由 CartPriceOverrideHook 寫入）
+		$values = \WC()->cart->cart_contents[ $key ];
+		$this->assertArrayHasKey( '_profit_signature', $values, '測試前置：cart values 必須已簽章' );
+
+		// 只把 repository 換成一定會爆的版本，其餘依賴全用真的
+		$exploding = new class() implements \J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterface {
+			public function find( int $id ): ?ProfitShop {
+				throw new \RuntimeException( 'DB exploded during checkout' );
+			}
+			public function find_by_slug( string $slug ): ?ProfitShop {
+				throw new \RuntimeException( 'DB exploded during checkout' );
+			}
+			public function save( ProfitShop $shop ): int {
+				throw new \RuntimeException( 'DB exploded during checkout' );
+			}
+			public function delete( int $id ): void {
+				throw new \RuntimeException( 'DB exploded during checkout' );
+			}
+			/** @return ProfitShop[] */
+			public function find_by_partner( int $term_id ): array {
+				throw new \RuntimeException( 'DB exploded during checkout' );
+			}
+			/** @return ProfitShop[] */
+			public function all(): array {
+				throw new \RuntimeException( 'DB exploded during checkout' );
+			}
+		};
+
+		$hook = $this->make_hook( $exploding );
+
+		$item = new \WC_Order_Item_Product();
+		$item->set_product_id( $product->get_id() );
+		$item->set_quantity( 1 );
+
+		try {
+			// 唯一的驗法就是「呼叫它，然後這一行還跑得到」——
+			// 例外若冒出去，PHPUnit 會把這條標成 error 而不是 failure
+			$hook->freeze_settlement( $item, $key, $values, null );
+
+			$this->assertTrue(
+				true,
+				'freeze_settlement 內部拋例外時必須被吞掉，讓 WC_Checkout 繼續建單'
+			);
+
+			// 降級不等於假裝成功：不得寫入半套的分潤 meta
+			$this->assertSame(
+				'',
+				(string) $item->get_meta( '_profit_shop_id', true ),
+				'降級時不得寫入半套的分潤 meta'
+			);
+		} finally {
+			$this->unhook( $hook );
+		}
+	}
+
+	/**
+	 * 🔴 後台情境同樣必須寫入分潤 meta
+	 *
+	 * 對應規格：attribute-order-line-item.feature「環境（後台）」
+	 *
+	 * 購物車那三個 hook 都有 `is_admin() && ! wp_doing_ajax()` 就不掛載的守門。
+	 * 本 hook **刻意沒有**——退款一定發生在後台、站長手動建單也在後台。
+	 * 照抄那道守門的症狀是「後台手動建立的訂單完全沒有分潤紀錄」，
+	 * 而且沒有任何錯誤訊息。
+	 *
+	 * ⚠️ 原標註指向 `test_hook_is_registered_by_loader_at_priority_20`，
+	 * 那條在**前台**情境驗註冊，對「後台會不會被守門擋掉」一個字都沒說。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_hook_still_writes_meta_in_admin_context(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+		$shop_id = $this->create_shop( $product->get_id(), new PriceOverride( '800', '600', null ), 10 );
+		$key     = $this->add_to_cart( $product->get_id(), $shop_id );
+		$values  = \WC()->cart->cart_contents[ $key ];
+
+		\set_current_screen( 'shop_order' );
+		$hook = null;
+
+		try {
+			$this->assertTrue( \is_admin(), '測試前置：必須真的處於後台情境' );
+
+			// 在後台情境**當場**建構 hook——若有人加上 is_admin() 守門，
+			// 這一步就不會註冊 action
+			$hook = $this->make_hook( $this->repo );
+
+			$this->assertNotFalse(
+				\has_action( 'woocommerce_checkout_create_order_line_item', [ $hook, 'freeze_settlement' ] ),
+				'後台情境下 hook 仍必須註冊（退款與手動建單都發生在後台）'
+			);
+
+			$item = new \WC_Order_Item_Product();
+			$item->set_product_id( $product->get_id() );
+			$item->set_quantity( 1 );
+
+			$hook->freeze_settlement( $item, $key, $values, null );
+
+			$this->assertSame(
+				(string) $shop_id,
+				(string) $item->get_meta( '_profit_shop_id', true ),
+				'後台情境下仍必須寫入分潤 meta'
+			);
+			$this->assertNotSame(
+				'',
+				(string) $item->get_meta( '_profit_amount', true ),
+				'後台情境下仍必須算出分潤金額'
+			);
+		} finally {
+			if ( $hook ) {
+				$this->unhook( $hook );
+			}
+			\set_current_screen( 'front' );
+		}
+	}
+
+	/**
+	 * 用真實依賴建一個 hook 實例，只有 repository 可替換
+	 *
+	 * @param \J7\PowerShop\Domains\ProfitShop\Domain\Repository\ProfitShopRepositoryInterface $shops 賣場 repository
+	 */
+	private function make_hook( $shops ): OrderLineItemSettlementHook {
+		$rounding = new \J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\WcDecimalRounding();
+
+		return new OrderLineItemSettlementHook(
+			$shops,
+			$this->settlements,
+			new \J7\PowerShop\Domains\ProfitShop\Application\Service\CartPriceSignatureService( new WpSaltProvider() ),
+			new \J7\PowerShop\Domains\ProfitShop\Domain\Service\ProfitCalculator( $rounding ),
+			new \J7\PowerShop\Domains\ProfitShop\Infrastructure\WooCommerce\MoneyFormatter( $rounding )
+		);
+	}
+
+	/** 解除測試中額外建構的 hook，避免污染同一個 request 內的其他測試 */
+	private function unhook( OrderLineItemSettlementHook $hook ): void {
+		\remove_action( 'woocommerce_checkout_create_order_line_item', [ $hook, 'freeze_settlement' ], 20 );
+	}
+
 	private function create_shop( int $product_id, PriceOverride $override, int $rate ): int {
 		$shop = new ProfitShop(
 			id: 0,

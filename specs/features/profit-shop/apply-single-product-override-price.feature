@@ -117,7 +117,8 @@ Feature: 商品單頁套用賣場覆寫價
       Then 不屬於賣場 1932 的其他商品其價格快取不應受影響
 
   Rule: 隔離（購物車）- 單品頁的價格 filter 永遠不得影響購物車品項
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_disarm_removes_every_filter_and_restores_original_prices
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_armed_filters_never_touch_a_cart_item_object
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OverridePriceFiltersTest.php::test_every_cart_item_is_protected_not_just_the_first
 
     # 🔴 這道隔離不能靠「請求類型」論證——filter 一旦掛上就整個請求不解除，
     #    而購物車與商品頁**在同一個請求裡並存**。

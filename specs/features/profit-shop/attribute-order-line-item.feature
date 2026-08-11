@@ -244,7 +244,7 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       Then 該筆紀錄應被標示為需人工設定比例
 
   Rule: 錯誤（降級）- 任何失敗一律靜默降級，永不中斷顧客結帳
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_tampered_signature_writes_no_settlement_meta
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_exception_during_freeze_never_breaks_checkout
 
     Example: 寫入分潤 meta 失敗時訂單仍然成立
       Given 寫入分潤 meta 的過程將拋出例外
@@ -254,7 +254,7 @@ Feature: 結帳時把購物車的分潤歸屬寫進訂單品項
       And 顧客不應看到任何錯誤訊息
 
   Rule: 環境（後台）- 後台情境同樣必須寫入分潤 meta
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_hook_is_registered_by_loader_at_priority_20
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/OrderLineItemSettlementHookTest.php::test_hook_still_writes_meta_in_admin_context
 
     # 🔴 不可照抄購物車 hook 的「後台且非 AJAX 就不掛載」守門。
     #    退款一定發生在後台；站長手動建單也在後台。照抄的症狀是

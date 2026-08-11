@@ -371,6 +371,119 @@ final class OverridePriceFiltersTest extends TestCase {
 	 * @param int           $product_id 商品 ID
 	 * @param PriceOverride $override   商品層覆寫
 	 */
+	/**
+	 * 🔴 不變量：顯示層的價格 filter 永遠不得影響任何購物車品項
+	 *
+	 * 對應規格：apply-single-product-override-price.feature「隔離（購物車）」
+	 *          authorize-priceless-cart-item.feature「不變量（隔離）」
+	 *
+	 * ── 這條測試在 2026-08-11 之前不存在，而它守的是一條真實漏洞（TD-62）──
+	 *
+	 * `SingleProductPriceHook` 在 template_redirect prio 20 掛上 filter 之後
+	 * **整個 request 都不解除**，而購物車與商品頁**在同一個 request 裡並存**：
+	 * 佈景主題 / 外掛（mini-cart fragments、免運進度條、幣別切換器）只要在渲染期
+	 * 再呼叫一次 calculate_totals()，一筆**完全沒有 _profit_* meta、沒有簽章**的
+	 * cart item 就會被套上覆寫價（文件實測 1000 → 27）——整條 HMAC 保護被繞過。
+	 *
+	 * 曾經的安全論證是「購物車**請求**不會走到顯示層」，那個前提是「請求類型」，
+	 * 而請求類型不是隔離邊界。正解是 `is_cart_item_object()` 的**物件身分**比對：
+	 * `WC_Product_Factory::get_product()` 每次都 `new`、不做實例快取 ⇒ 購物車裡的
+	 * 實例與單品頁拿到的必然是不同物件，零誤判。
+	 *
+	 * ⚠️ 實測：把那道守門中性化之後，**415 條 Integration 測試全部通過**。
+	 * 這條測試存在的唯一理由就是讓那件事不再可能。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_armed_filters_never_touch_a_cart_item_object(): void {
+		$product = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+
+		\WC()->cart->empty_cart();
+		$key = \WC()->cart->add_to_cart( $product->get_id(), 1 );
+		$this->assertIsString( $key, '測試前置：商品應加入購物車' );
+
+		// 購物車品項**自己的** WC_Product 實例（與上面那個 $product 是不同物件）
+		$cart_object = \WC()->cart->cart_contents[ $key ]['data'];
+		$this->assertNotSame(
+			$product,
+			$cart_object,
+			'測試前提：wc_get_product() 不做實例快取，購物車拿到的必須是另一個物件'
+		);
+
+		$filters = new OverridePriceFilters( new OverridePriceResolver() );
+		$filters->arm(
+			1932,
+			$product->get_id(),
+			$this->item_with( $product->get_id(), new PriceOverride( null, '27', null ) )
+		);
+
+		try {
+			// 購物車品項：即使 filter 已 armed、product_id 也完全相同，一律不得被改價
+			$this->assertSame(
+				'1000',
+				(string) $filters->filter_price( '1000', $cart_object ),
+				'🔴 購物車品項的價格由 CartPriceOverrideHook + HMAC 簽章獨佔決定，顯示層 filter 不得插手'
+			);
+			$this->assertSame(
+				'1000',
+				(string) $filters->filter_regular_price( '1000', $cart_object )
+			);
+			$this->assertSame(
+				'1000',
+				(string) $filters->filter_sale_price( '1000', $cart_object )
+			);
+
+			// 對照組：**同一個商品**在單品頁（另一個實例）仍必須套用覆寫價。
+			// 兩者必須同時成立，才證明判準是「物件身分」而不是 product ID——
+			// 用 ID 比對會把單品頁一起排掉，等於廢掉整個 Phase 9。
+			$display_object = \wc_get_product( $product->get_id() );
+			$this->assertSame(
+				'27',
+				(string) $filters->filter_price( '1000', $display_object ),
+				'單品頁的實例仍必須套用覆寫價（否則判準退化成 product ID 比對）'
+			);
+		} finally {
+			$filters->disarm();
+			\WC()->cart->empty_cart();
+		}
+	}
+
+	/**
+	 * 購物車內有**多筆**品項時，每一筆都受保護
+	 *
+	 * 防止「只比對第一筆」這種退化：`is_cart_item_object()` 是 foreach 全部 cart_contents，
+	 * 改成只看某一筆同樣不會被上面那條測試抓到。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_every_cart_item_is_protected_not_just_the_first(): void {
+		$a = $this->createSimpleProduct( [ 'regular_price' => '1000' ] );
+		$b = $this->createSimpleProduct( [ 'regular_price' => '2000' ] );
+
+		\WC()->cart->empty_cart();
+		$key_a = \WC()->cart->add_to_cart( $a->get_id(), 1 );
+		$key_b = \WC()->cart->add_to_cart( $b->get_id(), 1 );
+		$this->assertIsString( $key_a );
+		$this->assertIsString( $key_b );
+
+		$filters = new OverridePriceFilters( new OverridePriceResolver() );
+		$filters->arm( 1932, $b->get_id(), $this->item_with( $b->get_id(), new PriceOverride( null, '27', null ) ) );
+
+		try {
+			// 第二筆（非第一筆）同樣不得被改價
+			$this->assertSame(
+				'2000',
+				(string) $filters->filter_price( '2000', \WC()->cart->cart_contents[ $key_b ]['data'] ),
+				'購物車第二筆品項同樣必須受保護'
+			);
+		} finally {
+			$filters->disarm();
+			\WC()->cart->empty_cart();
+		}
+	}
+
 	private function item_with( int $product_id, PriceOverride $override ): OverrideItem {
 		return new OverrideItem(
 			product_id: $product_id,

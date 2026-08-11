@@ -44,7 +44,10 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       | 102        |               |            |
 
   Rule: 前置（來源）- profit_shop_id 只從 $_GET 與 $_POST 讀取
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_profit_shop_id_writes_override_meta_to_cart_item
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_shop_id_is_read_from_get
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_shop_id_is_read_from_post
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_cookie_alone_never_attributes_to_shop
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_cookie_does_not_override_legitimate_get
 
     # 刻意排除 $_COOKIE：避免攻擊者透過 XSS 在受害者瀏覽器植入 profit_shop_id
     # 進行分潤歸因竄改。雖然閘門 ④ 仍會擋下未授權商品，收斂攻擊面本身有價值。
@@ -68,7 +71,9 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       And 該購物車品項應以商品原價計價
 
   Rule: 前置（格式）- profit_shop_id 必須是正整數字串
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_add_to_cart_with_nonexistent_profit_shop_id_falls_back_to_original_price
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_malformed_shop_id_is_rejected
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_non_positive_shop_id_is_rejected
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_array_shop_id_is_rejected
 
     Scenario Outline: 非正整數的 profit_shop_id 一律視同未提供
       When 顧客加購商品 101 並帶入參數
@@ -90,7 +95,8 @@ Feature: 加購時將購物車品項歸屬到分潤賣場
       Then 該購物車品項不應歸屬於任何賣場
 
   Rule: 前置（短路）- 上游已帶入 profit_shop_id 時不重覆注入
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_closed_shop_rejects_upstream_supplied_profit_shop_id
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_upstream_value_is_not_overwritten_by_request
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/AddToCartHookTest.php::test_upstream_value_survives_when_request_is_empty
 
     # AddToCartHook 尊重上游（第三方外掛以 add_to_cart() 第 5 參數注入）的值。
     # 這代表**四道閘門在這條路徑上被整段跳過**，因此
