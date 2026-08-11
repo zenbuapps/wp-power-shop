@@ -1284,6 +1284,104 @@ final class ProfitShopShortcodeTest extends TestCase {
 	 *
 	 * @return string template 輸出
 	 */
+	// ====================================================================
+	//  WooCommerce 通知：必須由 renderer 先搶先收（TD-49）
+	// ====================================================================
+
+	/**
+	 * 🔴 renderer 預先渲染好的通知必須被印出來
+	 *
+	 * TD-49 的根因是「等到 template 才呼叫 `wc_print_notices()` 已經太遲」：
+	 * 佈景主題 / 頁面建構器的頁首在 `get_header()` 期間就呼叫過一次，
+	 * 而該函式印完會**清空** session ⇒ 執行到 template 時通知已經是空的。
+	 * 真實站台實測（Blocksy + Elementor）：get_header 前 1 則、template 內 0 則。
+	 *
+	 * renderer 因此改在 `get_header()` **之前**把通知渲染成字串收下來，
+	 * 再交給 template 印。本條鎖住 template 這一端真的會印。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_template_prints_notices_captured_by_renderer(): void {
+		$shop_id = $this->create_shop( [] );
+		$shop    = CptProfitShopRepository::instance()->find( $shop_id );
+
+		$this->assertInstanceOf( ProfitShop::class, $shop );
+
+		$html = $this->render_template_with_notices( $shop, '<ul class="woocommerce-message">已加入您的購物車</ul>' );
+
+		$this->assertStringContainsString( 'ps-shop-notices', $html, '必須印出通知容器' );
+		$this->assertStringContainsString( '已加入您的購物車', $html, 'renderer 收下來的通知必須被印出' );
+	}
+
+	/**
+	 * 沒有通知時不印空容器
+	 *
+	 * 空的 `<div class="woocommerce">` 會被佈景主題的 WooCommerce 樣式撐出一段
+	 * 莫名其妙的空白，看起來像版面壞掉。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_template_prints_no_container_when_captured_notices_are_empty(): void {
+		$shop_id = $this->create_shop( [] );
+		$shop    = CptProfitShopRepository::instance()->find( $shop_id );
+
+		$this->assertInstanceOf( ProfitShop::class, $shop );
+
+		$html = $this->render_template_with_notices( $shop, '' );
+
+		$this->assertStringNotContainsString( 'ps-shop-notices', $html );
+	}
+
+	/**
+	 * 🔴 shortcode 路徑（沒有 renderer 預收的通知）必須維持原本行為
+	 *
+	 * 宿主頁面的 `get_header()` 早就跑完了，搶不到——這條確保那個退路還在，
+	 * 而不是被改成「只有 renderer 路徑才會印通知」。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_shortcode_path_falls_back_to_wc_print_notices(): void {
+		if ( ! \function_exists( 'wc_add_notice' ) || null === \WC()->session ) {
+			$this->markTestSkipped( 'WC session 未就緒，無法寫入 notice' );
+		}
+
+		$shop_id = $this->create_shop( [] );
+		$shop    = CptProfitShopRepository::instance()->find( $shop_id );
+
+		$this->assertInstanceOf( ProfitShop::class, $shop );
+
+		\wc_add_notice( '短碼路徑的通知', 'success' );
+
+		// 不傳 $ps_notices_html ⇒ 走 template 內建的 wc_print_notices()
+		$html = $this->render_template_as_renderer( $shop );
+
+		$this->assertStringContainsString( '短碼路徑的通知', $html );
+	}
+
+	/**
+	 * 以「renderer 已預收通知」的方式渲染 template
+	 *
+	 * @param ProfitShop $shop          賣場
+	 * @param string     $notices_html  預先渲染好的通知 HTML
+	 *
+	 * @return string
+	 */
+	private function render_template_with_notices( ProfitShop $shop, string $notices_html ): string {
+		$shop_for_template = $shop;
+		$front_settings    = ProfitShopFrontData::settings( $shop );
+		$ps_notices_html   = $notices_html;
+
+		$class_dir = \dirname( (string) ( new \ReflectionClass( ProfitShopShortcode::class ) )->getFileName() );
+
+		\ob_start();
+		require $class_dir . '/templates/profit-shop-front.php';
+
+		return (string) \ob_get_clean();
+	}
+
 	private function render_template_as_renderer( ProfitShop $shop ): string {
 		$shop_for_template = $shop;
 		$front_settings    = ProfitShopFrontData::settings( $shop );

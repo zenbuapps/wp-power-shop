@@ -198,18 +198,35 @@ Feature: 呈現分潤賣場前台
       When 訪客以原生表單完成一次加購
       Then 賣場頁應包含 WooCommerce 的訊息輸出區塊
 
-  Rule: 已知落差（提示）- 原生表單加購成功後沒有成功提示
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-49「原生表單加購成功後沒有成功提示」這個已知落差，依定義沒有對應實作可測
+  Rule: 後置（提示）- 原生表單加購成功後必須顯示成功提示
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_template_prints_notices_captured_by_renderer
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_template_prints_no_container_when_captured_notices_are_empty
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_shortcode_path_falls_back_to_wc_print_notices
 
-    # ⚠️ specs/tech-debt.md TD-49：訊息容器有渲染，但內容是空的
-    #   （WooCommerce session 裡本來就沒有那則訊息）。已排除快取因素。
-    #   與 TD-41 是同一區塊的兩面：TD-41 是 AJAX 路徑的**失敗**訊息看不到，
-    #   本條是原生路徑的**成功**訊息看不到。
+    # ⚠️ 本 Rule 原本是「已知落差（提示）- 原生表單加購成功後沒有成功提示」（TD-49）。
+    #
+    #    根因不是「session 裡沒有那則訊息」——真實站台實測（Blocksy + Elementor）在
+    #    renderer 前後各夾一個探針，結果是：
+    #        get_header() 之前 → 通知 1 則
+    #        template 內      → 通知 0 則
+    #    佈景主題 / 頁面建構器的頁首在 `get_header()` 期間就呼叫過 `wc_print_notices()`，
+    #    而該函式印完會**清空** session ⇒ 等執行到 template 時已經沒有東西可印，
+    #    而那次的輸出又落在不會顯示的地方 ⇒ 通知就這樣消失了。
+    #
+    #    2026-08-11 起 renderer 改在 `get_header()` **之前**就把通知渲染成字串收下來
+    #    （先搶先贏），再交給 template 印，落差消失。
+    #
+    #    ⚠️ shortcode 路徑不適用（宿主頁面的 get_header 早就跑完），
+    #      template 對「沒收到預收通知」的情況保留原本的 `wc_print_notices()`。
 
-    Example: 原生表單加購成功後畫面沒有成功提示
+    Example: 原生表單加購成功後顯示成功提示
       When 訪客以原生表單完成一次加購
       Then 商品應已加入購物車
-      And 頁面不應出現任何加購成功的文字
+      And 頁面應顯示加入購物車成功的訊息
+
+    Example: 沒有任何通知時不顯示空的訊息容器
+      When 訪客直接開啟賣場頁而未進行加購
+      Then 頁面不應出現訊息容器
 
   Rule: 已知落差（版型）- 以頁面建構器排版的賣場內容不會被渲染
     # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-28「Elementor 版型不生效」這個已知落差，依定義沒有對應實作可測

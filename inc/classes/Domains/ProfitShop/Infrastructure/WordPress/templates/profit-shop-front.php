@@ -165,7 +165,29 @@ $templates  = __DIR__;
 	* `wc_print_notices()` 印完會清空 notices，所以就算佈景主題在別處也印了一份，
 	* 也不會重複顯示，只是先後順序不同。
 	*/
-	if ( \function_exists( 'wc_print_notices' ) && \function_exists( 'WC' ) && null !== \WC()->session ) :
+
+	/*
+	* 🔴 `$ps_notices_html`：由 renderer 在 `get_header()` **之前**就渲染好的通知。
+	*
+	* 獨立頁面路徑一定要用它，不能在這裡才呼叫 `wc_print_notices()`——
+	* 佈景主題 / 頁面建構器的頁首在 `get_header()` 期間就會呼叫過一次，
+	* 而 `wc_print_notices()` 印完會清空 session，等執行到這裡時通知**已經是空的**
+	* （實測 1 → 0，見 ProfitShopRenderer::capture_wc_notices() 的說明）。
+	*
+	* shortcode 路徑沒有這個變數（宿主頁面的 get_header 早就跑完，搶不到），
+	* 因此保留原本的 `wc_print_notices()` 當退路——行為與本改動之前完全相同。
+	*/
+	$ps_notices_html = isset( $ps_notices_html ) ? (string) $ps_notices_html : null;
+
+	if ( null !== $ps_notices_html ) :
+		if ( '' !== \trim( $ps_notices_html ) ) :
+			?>
+			<div class="woocommerce ps-shop-notices">
+			<?php echo $ps_notices_html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+			</div>
+			<?php
+		endif;
+	elseif ( \function_exists( 'wc_print_notices' ) && \function_exists( 'WC' ) && null !== \WC()->session ) :
 		?>
 		<div class="woocommerce ps-shop-notices">
 		<?php \wc_print_notices(); ?>

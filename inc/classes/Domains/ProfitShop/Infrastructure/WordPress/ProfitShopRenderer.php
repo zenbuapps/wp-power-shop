@@ -248,6 +248,28 @@ final class ProfitShopRenderer {
 			return;
 		}
 
+		/*
+		 * 🔴 WooCommerce 通知必須在 `get_header()` **之前**就收下來。
+		 *
+		 * 這是 TD-49（原生表單加購成功後沒有提示）的根因。實測（turbo.local，
+		 * Blocksy + Elementor + WP Rocket）在 renderer 兩個位置各夾一個探針：
+		 *
+		 *     get_header() 之前 → wc_notice_count() = 1   ✔ 通知確實產生了
+		 *     template 內      → wc_notice_count() = 0   ✘ 已經被吃掉
+		 *
+		 * `wc_print_notices()` 印完會**清空** session 內的通知，而佈景主題 / 頁面
+		 * 建構器的頁首（購物車面板、fragments 之類）在 `get_header()` 期間就呼叫過
+		 * 它一次；那次的輸出又落在一個不會顯示的地方 ⇒ 通知就這樣消失了，
+		 * 頁面上完全找不到，而且**沒有任何錯誤訊息**。
+		 *
+		 * 先搶先贏是唯一穩健的解：這裡先把它渲染成字串收起來，後面誰再呼叫
+		 * `wc_print_notices()` 都只會拿到空的，不會有重複顯示的問題。
+		 *
+		 * ⚠️ shortcode 路徑不適用（宿主頁面的 `get_header()` 早就跑完了），
+		 *    因此 template 對「沒收到這個變數」的情況仍保留原本的 `wc_print_notices()`。
+		 */
+		$ps_notices_html = $this->capture_wc_notices();
+
 		\get_header();
 
 		// 把 $shop 傳給 template；變數名故意取 $shop_for_template 以避免污染外層 scope。
@@ -255,6 +277,29 @@ final class ProfitShopRenderer {
 		require $this->resolve_template_path();
 
 		\get_footer();
+	}
+
+	/**
+	 * 把目前的 WooCommerce 通知渲染成 HTML 字串並清空 session
+	 *
+	 * 回傳空字串代表「沒有通知」或「WooCommerce 尚未就緒」，
+	 * template 兩種情況都是不印容器。
+	 *
+	 * @return string
+	 */
+	private function capture_wc_notices(): string {
+		if ( ! \function_exists( 'wc_print_notices' ) || ! \function_exists( 'WC' ) ) {
+			return '';
+		}
+
+		if ( null === \WC()->session || 0 === \wc_notice_count() ) {
+			return '';
+		}
+
+		\ob_start();
+		\wc_print_notices();
+
+		return (string) \ob_get_clean();
 	}
 
 	/**
