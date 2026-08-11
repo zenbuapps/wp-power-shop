@@ -400,3 +400,75 @@ describe('Rule: 已知落差（屬性名）- 含空白或特殊符號的自訂�
 		expect(currentVariationId()).toBe('201')
 	})
 })
+
+describe('Rule: 已知落差（可購買性）- 混合設定下可購買性可能反轉', () => {
+	/**
+	 * 🔒 現況鎖（characterization test）：**這條測的是取捨確實生效**
+	 *
+	 * 對應 specs/tech-debt.md TD-55。站長同時設了
+	 *   #1 {顏色=任意, 尺寸=任意}  有庫存   ← catch-all
+	 *   #2 {顏色=紅,   尺寸=任意}  已缺貨   ← 專門為「紅色」設的
+	 * 顧客選「紅 + 大」時，`findBestVariation()` 的計分法會選 **#2**
+	 * （具體屬性數 1 > 0），於是按鈕停用、顯示已售完。
+	 *
+	 * ⚠️ **這是正確語意，不是回歸**：#2 才是站長為「紅色」設定的那個變體，
+	 * 忠實反映它的庫存才對。舊的「第一個命中者勝」會挑到 #1，等於把缺貨的紅色
+	 * 偷偷用 catch-all 的庫存賣出去——出貨當下才會發現沒有貨。
+	 *
+	 * 站長若回報「某個顏色突然不能買了」，先查該顏色是否有專屬變體且缺貨。
+	 *
+	 * ⚠️ 轉紅代表挑選規則被改回「命中即回傳」——那是 CLAUDE.md Pitfall #31
+	 * 明文禁止的改動（實測舊法 12.4% 挑到非最佳解），**不要為了讓它綠而改回去**。
+	 */
+	it('🔒 catch-all 有庫存、具體變體缺貨時，選該具體值會停用加購', () => {
+		setupShop({
+			attributes: { color: ['red', 'blue'], size: ['l'] },
+			variations: [
+				// #1 全 Any + 有庫存
+				{
+					...v(300, { color: '', size: '' }),
+					stock: { stockStatus: 'instock' },
+				},
+				// #2 指定 red + 缺貨
+				{
+					...v(301, { color: 'red', size: '' }),
+					stock: { stockStatus: 'outofstock' },
+				},
+			],
+		})
+
+		chooseAttribute('color', 'red')
+		chooseAttribute('size', 'l')
+
+		expect(currentVariationId()).toBe('301')
+		expect(submitEnabled()).toBe(false)
+	})
+
+	/**
+	 * 對照組：選了**沒有專屬變體**的值時，落回 catch-all 且可以購買
+	 *
+	 * 少了這條，上面那條在「所有變體都被判缺貨」這種全壞的實作下也會綠。
+	 * 有了它才分辨得出「只有紅色不能買」與「整個商品都不能買」。
+	 */
+	it('選沒有專屬變體的值時落回 catch-all，仍可購買（對照組）', () => {
+		setupShop({
+			attributes: { color: ['red', 'blue'], size: ['l'] },
+			variations: [
+				{
+					...v(300, { color: '', size: '' }),
+					stock: { stockStatus: 'instock' },
+				},
+				{
+					...v(301, { color: 'red', size: '' }),
+					stock: { stockStatus: 'outofstock' },
+				},
+			],
+		})
+
+		chooseAttribute('color', 'blue')
+		chooseAttribute('size', 'l')
+
+		expect(currentVariationId()).toBe('300')
+		expect(submitEnabled()).toBe(true)
+	})
+})

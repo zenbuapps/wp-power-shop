@@ -46,8 +46,23 @@ export type TVariation = {
 	variation_id: number
 	attributes: Record<string, string>
 	display_price?: string
+	/**
+	 * ⚠️ 受測 JS **完全不讀這個欄位**（`grep is_purchasable inc/assets/js/profit-shop-front.js` 零命中）。
+	 * 保留是因為它確實存在於 PHP 印出的 payload 裡；真正決定加購按鈕啟用與否的是下面的 `stock`。
+	 */
 	is_purchasable?: boolean
 	max_qty?: number
+	/**
+	 * 庫存物件，對應 `ProfitShopFrontView::stock_presentation()` 的輸入形狀
+	 *
+	 * `stockStatus === 'outofstock'` 是 JS 停用加購按鈕的**唯一**依據
+	 * （`inc/assets/js/profit-shop-front.js` 的 `var inStock = ...`）。
+	 */
+	stock?: {
+		manageStock?: boolean
+		stockQuantity?: number | null
+		stockStatus?: string
+	}
 }
 
 export type TBuildOptions = {

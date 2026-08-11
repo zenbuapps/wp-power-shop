@@ -184,7 +184,8 @@ Feature: 賣場商品 Modal 的變體選擇與比對
       Then 屬性選擇應回到未選取狀態
 
   Rule: 已知落差（可購買性）- 混合設定下可購買性可能反轉
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-53「混合設定下可購買性可能反轉」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/js/selectProductVariation.test.ts::🔒 catch-all 有庫存、具體變體缺貨時，選該具體值會停用加購
+    # @covered-by: tests/js/selectProductVariation.test.ts::選沒有專屬變體的值時落回 catch-all，仍可購買（對照組）
 
     # ⚠️ specs/tech-debt.md TD-55：這是刻意的取捨，不是回歸。
     #   #1{任意,任意} 有庫存 與 #2{紅,任意} 缺貨 並存時，選「紅」會挑到 #2 而顯示缺貨。

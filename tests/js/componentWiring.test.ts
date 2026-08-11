@@ -59,6 +59,9 @@ const itemsEditor = read(
 	'js/src/pages/admin/ProfitShop/components/ItemsEditor.tsx'
 )
 const login = read('js/src/partner-portal/pages/Login.tsx')
+const variationEditor = read(
+	'js/src/pages/admin/ProfitShop/components/VariationOverrideEditor/index.tsx'
+)
 
 describe('商品選擇 Modal 的接線', () => {
 	it('🔴 複用商品列表頁的 ProductTableBody，而非自己刻一份篩選器', () => {
@@ -141,5 +144,39 @@ describe('Partner 登入頁的 slug 帶入', () => {
 		// 若一律鎖死，夥伴會看到一個空的、不能填的必填欄位，徹底登不進去。
 		// 這與 resolveAuth 對空 slug 視為 matched 是同一條降級紀律。
 		expect(login).not.toMatch(/name="slug"[\s\S]{0,200}<Input[^>]*\sdisabled(\s|\/|>)/)
+	})
+})
+
+describe('變體超過 100 個時的截斷揭露', () => {
+	/**
+	 * 🔒 現況鎖（characterization test）：對應 specs/tech-debt.md TD-16
+	 *
+	 * WooCommerce REST API 的單頁上限硬性是 100，**不是本專案的選擇**，
+	 * 因此變體超過 100 個的商品在此只設定得到前 100 個。
+	 *
+	 * 這個落差本身修不掉（要改就得自己做分頁載入），但**必須被揭露**——
+	 * 靜默截斷會讓站長以為第 101 個之後的變體「沒有覆寫價」是他自己沒設，
+	 * 而實際上是介面根本沒讓他設。
+	 *
+	 * ⚠️ 三個斷言各鎖一件事，缺任一個都留下一個安靜壞掉的方式：
+	 *   1. 上限值就是 wc-rest 的 100（改小會無故少顯示變體）
+	 *   2. 判斷用**實際筆數**而非 `total`（antd-toolkit 在缺 x-wp-total 時把 total
+	 *      fallback 成 1，拿它當條件會讓真的被截斷的情況完全不提示）
+	 *   3. 真的有渲染出提示，而不是只算了一個沒人用的布林值
+	 */
+	it('🔴 上限值與 wc-rest 的硬上限一致', () => {
+		const hooks = read('js/src/pages/admin/ProfitShop/hooks.ts')
+		expect(hooks).toMatch(/VARIATION_PAGE_LIMIT\s*=\s*100/)
+	})
+
+	it('🔴 截斷判斷用實際筆數，不用 total', () => {
+		expect(variationEditor).toMatch(
+			/isTruncated\s*=\s*variations\.length\s*>=\s*VARIATION_PAGE_LIMIT/
+		)
+	})
+
+	it('🔴 截斷時真的渲染出提示（不是算完就丟）', () => {
+		expect(variationEditor).toMatch(/isTruncated\s*\?\s*\(?\s*<Alert/)
+		expect(variationEditor).toMatch(/僅顯示前 \$\{VARIATION_PAGE_LIMIT\} 個變體/)
 	})
 })

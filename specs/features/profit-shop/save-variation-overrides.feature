@@ -233,7 +233,9 @@ Feature: 設定賣場商品的變體層價格與灌水購買人數
       Then 變體層灌水購買人數欄位的提示應說明該數值目前僅會儲存而尚未在前台顯示
 
   Rule: 已知落差（數量）- 變體超過 100 個時只顯示前 100 個
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-16「wc-rest per_page 硬上限 100」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 上限值與 wc-rest 的硬上限一致
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 截斷判斷用實際筆數，不用 total
+    # @covered-by: tests/js/componentWiring.test.ts::🔴 截斷時真的渲染出提示（不是算完就丟）
 
     # ⚠️ specs/tech-debt.md TD-16：WooCommerce REST API 的單頁上限是 100，
     #    不是本專案的選擇。已有 UI 揭露，不是靜默截斷。
