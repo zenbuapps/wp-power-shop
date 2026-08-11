@@ -48,3 +48,6 @@ release/*
 # 前台頁面的 HTML dump（驗證渲染結果時抓下來的快照，非產品程式碼）
 ps.html
 *.dump.html
+
+# wp-env 本機覆寫（含付費外掛的本機路徑，不可入版控）
+.wp-env.override.json

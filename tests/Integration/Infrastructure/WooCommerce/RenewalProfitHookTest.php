@@ -16,15 +16,26 @@
  * `_settlement_status='paid'` 與上一期的 `_settled_at` / `_settled_by`
  * ⇒ 站長會看到一筆「已撥款」的新分潤，**永遠不會撥款給夥伴**，且沒有任何錯誤訊息。
  *
- * ⚠️ **wp-env 沒有安裝 WooCommerce Subscriptions**（見 `.wp-env.json` 的 plugins 清單）。
- *    因此本檔採兩段式驗證，避免退化成 TD-64 那種「恆 skip 的假綠燈」：
+ * ═══ WooCommerce Subscriptions 現在真的裝在測試環境裡（2026-08-11 起）═══
  *
- *    1. **不需要 WCS 的部分（本檔絕大多數測試）**：手工造出一張「已經被 WCS 複製過
- *       meta」的續訂單（用 `OrderItemSettlementRepository::save()` 寫入與 `wcs_copy_order_item()`
- *       完全相同的 11 個 meta），再**直接呼叫** `carry_profit()`。凍結 / 動態 / 重算 /
- *       強制重置四類行為全部真的跑過。
- *    2. **需要 WCS 的部分（僅 1 條）**：真的走 `wcs_create_renewal_order()`，
- *       在 wp-env 會 `markTestSkipped`，**只有真實站台驗得到**——交付紀錄必須據實說明。
+ * 它是**付費外掛**，不能寫進 committed 的 `.wp-env.json`（CI 沒有那個檔案時
+ * `wp-env start` 會整個失敗）。因此改由**本機的 `.wp-env.override.json`** 掛入
+ * （已 gitignore），`tests/bootstrap.php` 只在檔案存在時載入。
+ *
+ * 要在自己的機器上啟用：把該外掛放到 `wp-content/plugins/woocommerce-subscriptions/`，
+ * 建立 `.wp-env.override.json` 把它加進 `plugins` 陣列，再 `wp-env start`。
+ * 沒裝的環境（例如 CI）相關測試會自行 skip，其餘完全不受影響。
+ *
+ * ⚠️ 本檔絕大多數測試**刻意不依賴 WCS**：手工造出一張「已經被 WCS 複製過 meta」的
+ *    續訂單（用 `OrderItemSettlementRepository::save()` 寫入與 `wcs_copy_order_item()`
+ *    完全相同的 meta），再直接呼叫 `carry_profit()`。這個設計保留，因為它讓凍結 /
+ *    動態 / 重算 / 強制重置四類行為在**任何環境**都跑得到。
+ *
+ * 🔴 **裝上真外掛之後才浮出來的問題**（正是替身測不到的那一類）：
+ *    `wcs_renewal_order_created` 上不是只有我們一個 callback——powerhouse 的
+ *    `Subscription\Core\LifeCycle::renewal_order_created()` 也掛在上面，而它的第二個
+ *    參數簽章是 `WC_Subscription|int`（**不吃 null**）。原本測試傳 null 會讓整條
+ *    filter 鏈以 TypeError 中斷。見 `subscription_arg()`。
  *
  * ⚠️ 行號以本機站台的 WooCommerce Subscriptions **6.1.0**（subscriptions-core）為準。
  *
@@ -452,14 +463,14 @@ final class RenewalProfitHookTest extends TestCase {
 	}
 
 	// ====================================================================
-	//  H. 真的走 WCS（wp-env 未安裝 ⇒ skip，見檔頭說明）
+	//  H. 真的走 WCS（需安裝 WooCommerce Subscriptions，見檔頭說明）
 	// ====================================================================
 
 	/**
 	 * 端到端：真的用 `wcs_create_renewal_order()` 建立續訂單
 	 *
-	 * ⚠️ wp-env 未安裝 WooCommerce Subscriptions，本測試在 CI / 容器內恆 skip，
-	 *    **只有真實站台驗得到**——交付紀錄不得因為它「沒紅燈」就宣稱已驗證。
+	 * ✅ 2026-08-11 起本測試**真的會跑**（WCS 6.1.0 已透過 `.wp-env.override.json` 掛入）。
+	 *    沒裝該外掛的環境仍會 skip——那種情況下**不得**因為它「沒紅燈」就宣稱已驗證。
 	 *
 	 * `markTestSkipped` 的條件刻意只看「函式存在與否」，不把任何行為斷言包進去，
 	 * 否則會退化成 TD-64 那種假綠燈。
@@ -468,11 +479,11 @@ final class RenewalProfitHookTest extends TestCase {
 	 */
 	public function test_real_wcs_renewal_order_resets_paid_status(): void {
 		if ( ! RenewalProfitHook::is_supported() || ! function_exists( 'wcs_create_subscription' ) ) {
-			$this->markTestSkipped( 'WooCommerce Subscriptions 未安裝（wp-env 的 plugins 清單不含它）' );
+			$this->markTestSkipped( 'WooCommerce Subscriptions 未安裝（見檔頭：以 .wp-env.override.json 掛入本機的付費外掛）' );
 		}
 
-		$subscription = \wcs_create_subscription( [ 'billing_period' => 'month', 'billing_interval' => 1 ] );
-		$this->assertNotWPError( $subscription );
+		$subscription = $this->make_subscription();
+		$this->assertInstanceOf( \WC_Subscription::class, $subscription );
 
 		$product = $this->createSimpleProduct( [ 'regular_price' => '200' ] );
 		$sub_item = new \WC_Order_Item_Product();
@@ -542,7 +553,7 @@ final class RenewalProfitHookTest extends TestCase {
 		\add_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20, 2 );
 
 		try {
-			$returned = \apply_filters( 'wcs_renewal_order_created', $order, null );
+			$returned = \apply_filters( 'wcs_renewal_order_created', $order, $this->subscription_arg() );
 		} finally {
 			\remove_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20 );
 		}
@@ -580,7 +591,7 @@ final class RenewalProfitHookTest extends TestCase {
 		\add_filter( 'wcs_renewal_order_created', $downstream, 30, 1 );
 
 		try {
-			\apply_filters( 'wcs_renewal_order_created', $order, null );
+			\apply_filters( 'wcs_renewal_order_created', $order, $this->subscription_arg() );
 		} finally {
 			\remove_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20 );
 			\remove_filter( 'wcs_renewal_order_created', $downstream, 30 );
@@ -674,7 +685,11 @@ final class RenewalProfitHookTest extends TestCase {
 		\add_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20, 2 );
 
 		try {
-			\apply_filters( 'wcs_renewal_order_created', \wc_get_order( $this->order_id_of( $item_id ) ), null );
+			\apply_filters(
+				'wcs_renewal_order_created',
+				\wc_get_order( $this->order_id_of( $item_id ) ),
+				$this->subscription_arg()
+			);
 		} finally {
 			\remove_filter( 'wcs_renewal_order_created', [ $hook, 'carry_profit' ], 20 );
 		}
@@ -707,6 +722,48 @@ final class RenewalProfitHookTest extends TestCase {
 	// ====================================================================
 	//  Helpers
 	// ====================================================================
+
+	/**
+	 * filter 的第二個參數：有裝 WCS 時給**真的訂閱物件**，沒裝時給 null
+	 *
+	 * 🔴 這不是可有可無的講究。`wcs_renewal_order_created` 上不是只有我們一個
+	 * callback——powerhouse 的 `Subscription\Core\LifeCycle::renewal_order_created()`
+	 * 也掛在同一個 filter，而它的簽章是 `WC_Subscription|int`（**不吃 null**）。
+	 *
+	 * 傳 null 會讓整條 filter 鏈以 TypeError 中斷。這個問題在 WCS 沒安裝時
+	 * **完全看不到**（powerhouse 那一段同樣不會註冊），是把真實外掛掛進測試環境
+	 * 之後才浮出來的——正是「用替身模擬第三方」測不到的那一類問題。
+	 *
+	 * @return \WC_Subscription|null
+	 */
+	private function subscription_arg() {
+		if ( ! function_exists( 'wcs_create_subscription' ) ) {
+			return null;
+		}
+
+		return $this->make_subscription();
+	}
+
+	/**
+	 * 建一張真的訂閱（需要 WCS）
+	 *
+	 * ⚠️ `customer_id` 不可省略：`wcs_create_subscription()` 會以
+	 * `WP_Error( 'Invalid subscription customer_id' )` 拒絕，而那個訊息
+	 * 看起來像是 hook 寫錯，實際上是 fixture 少給一個必填欄位。
+	 *
+	 * @return \WC_Subscription|null
+	 */
+	private function make_subscription() {
+		$subscription = \wcs_create_subscription(
+			[
+				'customer_id'      => self::factory()->user->create(),
+				'billing_period'   => 'month',
+				'billing_interval' => 1,
+			]
+		);
+
+		return \is_wp_error( $subscription ) ? null : $subscription;
+	}
 
 	/**
 	 * 建立一個 hook 實例（production 相依，但由測試自己持有）

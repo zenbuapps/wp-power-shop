@@ -71,6 +71,27 @@ function _power_shop_manually_load_plugin(): void {
 	$woo_path = WP_PLUGIN_DIR . '/woocommerce/woocommerce.php';
 	if ( file_exists( $woo_path ) ) {
 		require_once $woo_path;
+
+		/*
+		 * 2-b. 載入 WooCommerce Subscriptions（**選用**）
+		 *
+		 * 它是付費外掛，不能寫進 committed 的 `.wp-env.json`——CI 沒有那個檔案時
+		 * `wp-env start` 會整個失敗（壞掉的是全部測試，不是那幾條訂閱測試）。
+		 * 因此改由本機的 `.wp-env.override.json` 掛入（已 gitignore），
+		 * 本檔只在「檔案真的存在」時載入。
+		 *
+		 * 🔴 順序不可調換：WCS 依賴 WooCommerce 已載入，
+		 *    且必須早於 power-shop——`ProfitShop\Loader` 是用
+		 *    `RenewalProfitHook::is_supported()`（`function_exists`）決定要不要註冊
+		 *    續訂 hook 的，晚載入等於那段永遠不會掛上，而測試會以
+		 *    「filter 沒註冊」的形式紅燈，看起來像 hook 寫錯。
+		 *
+		 * 沒有這個外掛時，相關測試會自行 `markTestSkipped`，其餘完全不受影響。
+		 */
+		$wcs_path = WP_PLUGIN_DIR . '/woocommerce-subscriptions/woocommerce-subscriptions.php';
+		if ( file_exists( $wcs_path ) ) {
+			require_once $wcs_path;
+		}
 	} else {
 		echo "警告：WooCommerce 不存在於 {$woo_path}\n";
 	}
