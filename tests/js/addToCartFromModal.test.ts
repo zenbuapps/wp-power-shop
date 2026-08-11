@@ -367,3 +367,91 @@ describe('Rule: 已知落差（訊息）- 業務失敗的原因必須離開賣�
 		expect(navigated).toContain(productUrl)
 	})
 })
+
+describe('Rule: 已知落差（第三方）- 購物車已有訂閱商品時回應可能不是 JSON', () => {
+	/**
+	 * 🔒 現況鎖（characterization test）：對應 specs/tech-debt.md TD-42
+	 *
+	 * WooCommerce Subscriptions 的 `WC_Subscriptions_Cart_Validator` 在兩處掛
+	 * `woocommerce_add_to_cart_fragments` 上一個**不存在的方法**
+	 * （掛 `redirect_ajax_add_to_cart`，實際存在的是 `add_to_cart_ajax_redirect`
+	 * ——兩個詞組寫反了，且無 `__callStatic` 接得住）。
+	 * PHP 8 對此丟 `TypeError` ⇒ AJAX 加購的回應變成 500 / 非 JSON。
+	 * 後端側的證據見 `SubscriptionsFragmentsBugTest`。
+	 *
+	 * 觸發條件：購物車已有訂閱商品 + 未開放混合購買（預設）+ 加購一般商品。
+	 *
+	 * 🔴 **這種情況絕不可提示「請再試一次」**：那個壞掉的 filter 是在
+	 * `add_to_cart()` **成功之後**才被掛上的——商品其實已經在購物車裡，
+	 * 壞掉的只是後半段的呈現。慫恿重試就是慫恿重複付款。
+	 *
+	 * 因此正確的降級是**凍結按鈕 + 提示重新整理查看購物車**，
+	 * 也就是把它歸類為「狀態未知」而不是「失敗」。
+	 *
+	 * ⚠️ 這條**修不掉**（第三方外掛的 bug）。WCS 哪天修好時
+	 * `SubscriptionsFragmentsBugTest` 會先轉紅，本條仍應保留——
+	 * 「回應不是 JSON」是通用的防呆，不專屬於那一個外掛。
+	 */
+	it('🔴 回應不是 JSON 時凍結按鈕（狀態未知），不得解除忙碌讓人重按', async () => {
+		// 模擬 TypeError 之後的回應：HTTP 200 但 body 是 PHP 的錯誤輸出
+		const calls = setupSimpleShop(() =>
+			Promise.resolve(
+				new Response('<b>Fatal error</b>: Uncaught TypeError...', {
+					status: 200,
+					headers: { 'Content-Type': 'text/html' },
+				})
+			)
+		)
+
+		submitAddToCart()
+		await flush()
+
+		expect(calls).toHaveLength(1)
+
+		// 關鍵：按鈕**仍然**是忙碌 / 停用狀態，使用者按不下去
+		expect(submitBusy()).toBe(true)
+	})
+
+	it('🔴 狀態未知時顯示的是「無法確認」而非「請再試一次」', async () => {
+		setupSimpleShop(() =>
+			Promise.resolve(
+				new Response('not json', {
+					status: 200,
+					headers: { 'Content-Type': 'text/html' },
+				})
+			)
+		)
+
+		submitAddToCart()
+		await flush()
+
+		const err = document.querySelector('[data-ps-submit-error-label]')
+
+		expect(err?.textContent ?? '').toContain('無法確認')
+		// 「再試一次 / 重試」這類字眼會慫恿重複加購
+		expect(err?.textContent ?? '').not.toContain('再試')
+	})
+
+	it('🔴 狀態未知時不得自動重送（否則就是重複加購）', async () => {
+		const calls = setupSimpleShop(() =>
+			Promise.resolve(new Response('not json', { status: 200 }))
+		)
+
+		submitAddToCart()
+		await flush()
+		await flush()
+
+		expect(calls).toHaveLength(1)
+	})
+
+	it('HTTP 500 同樣歸類為狀態未知（伺服器可能已經收下了）', async () => {
+		setupSimpleShop(() =>
+			Promise.resolve(new Response('<b>Fatal error</b>', { status: 500 }))
+		)
+
+		submitAddToCart()
+		await flush()
+
+		expect(submitBusy()).toBe(true)
+	})
+})

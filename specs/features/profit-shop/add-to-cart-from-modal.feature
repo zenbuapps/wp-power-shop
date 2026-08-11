@@ -200,7 +200,22 @@ Feature: 從商品 Modal 非同步加入購物車
       And 賣場頁上不會顯示庫存不足的原文訊息
 
   Rule: 已知落差（第三方）- 購物車已有訂閱商品時非同步加購可能回傳非預期格式
-    # @covered-by: NOT-COVERED 本 Rule 描述的正是 TD-42「WooCommerce Subscriptions 在 fragments 掛不存在的靜態方法」這個已知落差，依定義沒有對應實作可測
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SubscriptionsFragmentsBugTest.php::test_hooked_callback_does_not_exist_but_the_swapped_name_does
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SubscriptionsFragmentsBugTest.php::test_source_really_hooks_the_missing_callback_twice
+    # @covered-by: tests/Integration/Infrastructure/WooCommerce/SubscriptionsFragmentsBugTest.php::test_applying_the_broken_filter_throws
+    # @covered-by: tests/js/addToCartFromModal.test.ts::🔴 回應不是 JSON 時凍結按鈕（狀態未知），不得解除忙碌讓人重按
+    # @covered-by: tests/js/addToCartFromModal.test.ts::🔴 狀態未知時顯示的是「無法確認」而非「請再試一次」
+    # @covered-by: tests/js/addToCartFromModal.test.ts::🔴 狀態未知時不得自動重送（否則就是重複加購）
+    # @covered-by: tests/js/addToCartFromModal.test.ts::HTTP 500 同樣歸類為狀態未知（伺服器可能已經收下了）
+
+    # ⚠️ 本 Rule 仍是「已知落差」——那個 bug 在 WooCommerce Subscriptions 裡，
+    #    power-shop 內修不掉。但**落差本身與我方的緩解都測得到**，
+    #    2026-08-11 起不再是 NOT-COVERED：
+    #      後端：現況鎖確認掛上去的 callback 不存在、且套用時真的丟 TypeError
+    #      前端：確認回應非 JSON 時凍結按鈕、不重送、文案是「無法確認」而非「再試一次」
+    #
+    #    🔴 WCS 哪天修好錯字，後端那三條會轉紅——屆時把本 Rule 改寫成正向規格，
+    #    但**前端那四條要保留**：「回應不是 JSON」是通用防呆，不專屬於那個外掛。
 
     # ⚠️ specs/tech-debt.md TD-42：第三方訂閱外掛在購物車片段事件上掛了一個
     #   不存在的方法，在特定情境會讓回應變成非 JSON。
