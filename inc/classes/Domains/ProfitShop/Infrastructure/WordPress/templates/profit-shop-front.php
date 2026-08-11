@@ -244,7 +244,19 @@ $templates  = __DIR__;
 	* 走 `the_content` filter 以支援 Gutenberg 區塊與 shortcode；輸出刻意不 escape，
 	* 這是 WP 對編輯器內容的標準處理，內容在儲存時已由 kses 過濾，且只有具 edit 權限者能寫入。
 	*/
-	$shop_content = (string) \get_post_field( 'post_content', $shop->id );
+
+	/*
+	* 🔴 `$ps_skip_post_content`：由呼叫端決定要不要印這一段。
+	*
+	* 走佈景主題範本時（`pageTemplate` 設定），範本自己已經用 `the_content()` 印過
+	* 同一篇 post_content 了，這裡再印一次會**整段重複**——而重複的是站長自己排版的
+	* 內容，一眼就看得出來壞掉。呼叫端因此傳 true 把這段關掉。
+	*
+	* 預設（未定義）為 false ⇒ 現行的獨立頁面與 shortcode 兩條路徑行為完全不變。
+	*/
+	$ps_skip_post_content = isset( $ps_skip_post_content ) && (bool) $ps_skip_post_content;
+
+	$shop_content = $ps_skip_post_content ? '' : (string) \get_post_field( 'post_content', $shop->id );
 	if ( '' !== \trim( $shop_content ) ) :
 		?>
 		<div class="ps-shop-content entry-content mb-8">

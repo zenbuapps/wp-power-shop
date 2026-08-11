@@ -231,3 +231,58 @@ describe('round-trip：讀出→送回不得改變既有設定', () => {
 		expect(merged.showStock).toBe(false)
 	})
 })
+
+describe('頁面範本（BasicTab 的 settings.pageTemplate）', () => {
+	/**
+	 * 🔴 `pageTemplate` 不是排程欄位，卻**必須**由同一個合併函式帶回去
+	 *
+	 * `settings` 底下所有進表單的欄位都經過 `mergeScheduleSettings()`。
+	 * 漏掉任何一個，站長改了那一欄按儲存會**完全沒有反應**——
+	 * 值在送出前就被丟掉了，後端收到的是舊值，畫面重新整理後又變回去，
+	 * 而且**沒有任何錯誤訊息**。
+	 */
+	it('🔴 選了範本必須被送出', () => {
+		const merged = mergeScheduleSettings(
+			{},
+			{ pageTemplate: 'templates/full-width.php' }
+		)
+
+		expect(merged.pageTemplate).toBe('templates/full-width.php')
+	})
+
+	it('🔴 清空範本要送空字串，不可略過不寫', () => {
+		// 略過的話 base 裡的舊值會留著 ⇒「範本清掉了、存檔後又跑回來」，
+		// 與排程時間清空要寫 0（而非刪 key）是同一條理由。
+		const merged = mergeScheduleSettings(
+			{ pageTemplate: 'templates/old.php' },
+			{ pageTemplate: undefined }
+		)
+
+		expect(merged.pageTemplate).toBe('')
+	})
+
+	it('🔴 讀回表單時保留既有範本', () => {
+		const values = toScheduleFormValues({
+			pageTemplate: 'templates/canvas.php',
+		})
+
+		expect(values.pageTemplate).toBe('templates/canvas.php')
+	})
+
+	it('沒設定過範本時讀回 undefined（讓 Select 顯示 placeholder）', () => {
+		// 讀成空字串會讓 antd Select 顯示一個空白選項而不是 placeholder，
+		// 站長分不出「沒設定」與「設了一個壞掉的範本」。
+		expect(toScheduleFormValues({}).pageTemplate).toBeUndefined()
+	})
+
+	it('🔴 合併範本時不得動到其他 settings 欄位', () => {
+		const merged = mergeScheduleSettings(
+			{ btnColor: '#ff0000', showStock: true, legacyUnknown: 'keep-me' },
+			{ pageTemplate: 'templates/full-width.php' }
+		)
+
+		expect(merged.btnColor).toBe('#ff0000')
+		expect(merged.showStock).toBe(true)
+		expect(merged.legacyUnknown).toBe('keep-me')
+	})
+})

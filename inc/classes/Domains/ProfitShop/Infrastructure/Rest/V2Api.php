@@ -187,6 +187,15 @@ final class V2Api extends ApiBase {
 				'method' => 'get',
 				'permission_callback' => null,
 			],
+
+			/*
+			 * 佈景主題的頁面 / 文章範本清單（賣場編輯頁的「頁面範本」下拉）
+			 */
+			[
+				'endpoint' => 'theme-templates',
+				'method' => 'get',
+				'permission_callback' => null,
+			],
 			[
 				'endpoint' => 'profit-shops/(?P<id>\d+)',
 				'method' => 'get',
@@ -496,6 +505,47 @@ final class V2Api extends ApiBase {
 
 			$output = $useCase->execute( $input );
 			return self::created( $output->to_array() );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /theme-templates
+	 *
+	 * 回傳佈景主題登記過的頁面 / 文章範本，供賣場編輯頁選擇。
+	 *
+	 * 清單是**白名單的唯一來源**：`ProfitShopRenderer::resolve_theme_template()`
+	 * 只接受出現在這份清單裡的檔名，站長（或竄改過的請求）因此指不到任意 PHP 檔。
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_theme_templates_callback( $request ): \WP_REST_Response {
+		unset( $request );
+
+		try {
+			$theme = \wp_get_theme();
+
+			// 頁面與文章範本合併：站長要的是「用哪一個版型包住賣場」，
+			// 那個版型是登記給 page 還是 post 對他來說沒有差別。
+			$templates = $theme->get_page_templates( null, 'page' ) + $theme->get_page_templates( null, 'post' );
+
+			$items = [];
+			foreach ( $templates as $file => $label ) {
+				$items[] = [
+					'value' => (string) $file,
+					'label' => (string) $label,
+				];
+			}
+
+			return self::ok(
+				[
+					'items' => $items,
+					'total' => count( $items ),
+				]
+			);
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}

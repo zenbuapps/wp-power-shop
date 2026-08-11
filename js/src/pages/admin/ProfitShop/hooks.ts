@@ -329,6 +329,39 @@ export type TShopVariationInfo = Omit<TProductVariation, 'attributes'> & {
 }
 
 /**
+ * 佈景主題的頁面 / 文章範本清單
+ *
+ * 供賣場編輯頁「頁面範本」下拉使用。清單由後端 `wp_get_theme()->get_page_templates()`
+ * 產出，同一份清單也是 `ProfitShopRenderer::resolve_theme_template()` 的白名單——
+ * 站長選不到、也送不出清單以外的檔名。
+ */
+export const useThemeTemplates = (enabled = true) => {
+	const apiUrl = useApiUrl('power-shop')
+
+	const query = useCustom<
+		TWrappedResponse<{ items: { value: string; label: string }[] }>
+	>({
+		url: `${apiUrl}/theme-templates`,
+		method: 'get',
+		dataProviderName: 'power-shop',
+		queryOptions: {
+			enabled,
+			refetchOnWindowFocus: false,
+
+			// 佈景主題範本清單在一次瀏覽期間不會變動，重複開合分頁時不必重抓
+			staleTime: Infinity,
+		},
+	})
+
+	const templates = useMemo(
+		() => query.data?.data?.data?.items ?? [],
+		[query.data]
+	)
+
+	return { templates, isLoading: enabled && query.isLoading }
+}
+
+/**
  * 取得單一商品的**全部**變體（走本外掛自訂 REST，非 wc-rest）
  *
  * ═══ 🔴 為什麼不用 `wc/v3/products/{id}/variations` ═══

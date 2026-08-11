@@ -89,6 +89,15 @@ export type TScheduleFormValues = {
 	beforeText?: string
 	afterDisplay?: TProfitShopDisplayPart[]
 	afterText?: string
+
+	/**
+	 * 佈景主題的頁面 / 文章範本檔名（BasicTab 的「頁面範本」）
+	 *
+	 * ⚠️ 它不是排程欄位，但**必須**列在這個型別裡：`settings` 底下所有進表單的欄位
+	 * 都由 `mergeScheduleSettings()` 統一合併回去，漏列的欄位會在送出時被靜默丟掉
+	 * （站長選了範本、按儲存、重新整理後發現又變回「使用內建版型」）。
+	 */
+	pageTemplate?: string | null
 }
 
 /** 後端可能回字串型別的毫秒時間戳（post meta / REST 往返會把大整數變字串） */
@@ -149,6 +158,7 @@ export const toScheduleFormValues = (
 		beforeText: 'string' === typeof raw.beforeText ? raw.beforeText : '',
 		afterDisplay: toDisplayParts(raw.afterDisplay),
 		afterText: 'string' === typeof raw.afterText ? raw.afterText : '',
+		pageTemplate: 'string' === typeof raw.pageTemplate ? raw.pageTemplate : undefined,
 	}
 }
 
@@ -178,6 +188,14 @@ export const mergeScheduleSettings = (
 	settings.beforeText = (form.beforeText ?? '').trim()
 	settings.afterDisplay = toDisplayParts(form.afterDisplay)
 	settings.afterText = (form.afterText ?? '').trim()
+
+	/*
+	 * 頁面範本：清空（Select 的 allowClear）要送空字串，**不可略過不寫**。
+	 * 略過的話 `base` 裡的舊值會留著——症狀是「範本清掉了、存檔後又跑回來」，
+	 * 與排程時間欄位寫 0 而非刪 key 是同一條理由。
+	 */
+	settings.pageTemplate =
+		'string' === typeof form.pageTemplate ? form.pageTemplate : ''
 
 	return settings
 }

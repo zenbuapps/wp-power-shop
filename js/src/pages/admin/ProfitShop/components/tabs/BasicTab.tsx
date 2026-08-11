@@ -1,8 +1,9 @@
-import { Form, Input, Radio } from 'antd'
+import { Form, Input, Radio, Select } from 'antd'
 import { useEnv } from 'antd-toolkit'
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 
 import { SlugInput } from '@/pages/admin/ProfitShop/components/SlugInput'
+import { useThemeTemplates } from '@/pages/admin/ProfitShop/hooks'
 import {
 	PROFIT_SHOP_MODE,
 	PROFIT_SHOP_URL_PREFIX,
@@ -36,6 +37,15 @@ const BasicTabComponent = ({ currentSlug }: TBasicTabProps) => {
 	 */
 	const mode = Form.useWatch<string | undefined>('mode')
 	const isShortcode = PROFIT_SHOP_MODE.SHORTCODE === mode
+
+	// 只有「獨立頁面」模式需要這份清單，Shortcode 模式不發查詢
+	const { templates, isLoading: isLoadingTemplates } = useThemeTemplates(
+		PROFIT_SHOP_MODE.SHORTCODE !== mode
+	)
+	const themeTemplateOptions = useMemo(
+		() => templates.map((t) => ({ value: t.value, label: t.label })),
+		[templates]
+	)
 
 	return (
 		<>
@@ -95,6 +105,25 @@ const BasicTabComponent = ({ currentSlug }: TBasicTabProps) => {
 					<Radio value={PROFIT_SHOP_MODE.SHORTCODE}>Shortcode</Radio>
 				</Radio.Group>
 			</Item>
+
+			{/*
+			 * 頁面範本只在「獨立頁面」模式下有意義：Shortcode 模式的賣場是被嵌進
+			 * 宿主頁面的，版型由那個頁面自己決定，這裡設什麼都不會生效。
+			 */}
+			{!isShortcode ? (
+				<Item
+					name={['settings', 'pageTemplate']}
+					label="頁面範本"
+					extra="選擇佈景主題的頁面 / 文章範本包住賣場內容；用頁面建構器（如 Elementor）排版時需選對應範本。留空則使用內建版型。"
+				>
+					<Select
+						allowClear
+						loading={isLoadingTemplates}
+						placeholder="使用內建版型"
+						options={themeTemplateOptions}
+					/>
+				</Item>
+			) : null}
 		</>
 	)
 }

@@ -224,13 +224,173 @@ final class ProfitShopRenderer {
 		// wp_footer 才印得到 script。樣式由 powerhouse 的 front.min.css 提供，本外掛無 CSS。
 		ProfitShopFrontView::enqueue();
 
+		/*
+		* 🔴 把全域 $post / 主查詢設定成這篇賣場，**必須在任何 `the_content` 之前**。
+		*
+		* 這是 TD-28（Elementor 版型不生效）的根因：頁面建構器掛在 `the_content` 上，
+		* 但它們一律用 `get_the_ID()` / `get_queried_object_id()` 去查「這篇是不是我排版的」——
+		* 例如 Elementor 的 `Frontend::apply_builder_in_content()` 會呼叫
+		* `Plugin::$instance->documents->get_doc_for_frontend( get_the_ID() )`。
+		*
+		* 而本 renderer 是自訂流程、不走 theme 的 single 樣板，主查詢從來沒有解析到這篇 post
+		* ⇒ `get_the_ID()` 回 false ⇒ 建構器直接放棄，`the_content` 只剩原始標記
+		* ⇒ 站長看到的是一堆沒被渲染的 shortcode / 註解，而**沒有任何錯誤訊息**。
+		*
+		* 補上這段之後，`the_content` 在「正確的 post 上下文」內執行，
+		* 建構器與其他吃 `the_content` 的外掛都能正常運作。
+		*/
+		$this->setup_shop_post_context( $shop );
+
+		$theme_template = $this->resolve_theme_template( $shop );
+
+		if ( '' !== $theme_template ) {
+			$this->render_via_theme_template( $shop, $front_settings, $theme_template );
+			return;
+		}
+
 		\get_header();
 
 		// 把 $shop 傳給 template；變數名故意取 $shop_for_template 以避免污染外層 scope。
 		$shop_for_template = $shop;
-		require __DIR__ . '/templates/profit-shop-front.php';
+		require $this->resolve_template_path();
 
 		\get_footer();
+	}
+
+	/**
+	 * 讓全域 post / 主查詢指向這篇賣場
+	 *
+	 * 只動「判斷這篇是誰」所需的最小欄位，不去偽造整個 loop 狀態——
+	 * 動太多會讓佈景主題誤以為在跑一般文章頁而印出上一篇 / 下一篇、留言區等等。
+	 *
+	 * @param ProfitShop $shop 賣場聚合根
+	 *
+	 * @return void
+	 */
+	private function setup_shop_post_context( ProfitShop $shop ): void {
+		$shop_post = \get_post( $shop->id );
+
+		if ( ! $shop_post instanceof \WP_Post ) {
+			return;
+		}
+
+		global $post, $wp_query;
+
+		$post = $shop_post; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+		\setup_postdata( $shop_post );
+
+		if ( $wp_query instanceof \WP_Query ) {
+			$wp_query->queried_object    = $shop_post;
+			$wp_query->queried_object_id = (int) $shop_post->ID;
+		}
+	}
+
+	/**
+	 * 解析賣場 template 的實體路徑（可被 hook 覆寫）
+	 *
+	 * 讓佈景主題或其他外掛整個換掉賣場的 PHP template，而不必改本外掛的程式碼。
+	 *
+	 * ⚠️ 覆寫的檔案會拿到 `$shop_for_template` 與 `$front_settings` 兩個變數，
+	 *    並且**必須**自行遵守販售期間的判斷（非販售期間不可印出可送出的加購表單）——
+	 *    `AddToCartHook` 的閘門雖然也擋販售期間，但把表單印出來仍會讓顧客按了才被拒。
+	 *
+	 * 回傳的路徑不存在時**退回內建 template**，不讓一個手誤的路徑把整個賣場頁打成白畫面。
+	 *
+	 * @return string 實體檔案路徑
+	 */
+	private function resolve_template_path(): string {
+		$default = __DIR__ . '/templates/profit-shop-front.php';
+
+		/**
+		 * 覆寫賣場前台的 PHP template
+		 *
+		 * @param string $template 預設 template 的絕對路徑
+		 */
+		$template = (string) \apply_filters( 'power_shop_profit_shop_template', $default );
+
+		return ( '' !== $template && \file_exists( $template ) ) ? $template : $default;
+	}
+
+	/**
+	 * 解析站長選擇的佈景主題範本（頁面 / 文章範本）
+	 *
+	 * 站長在賣場編輯頁選了範本時回傳其實體路徑，未選（或檔案不存在）一律回空字串
+	 * ⇒ 走既有的 `get_header()` + 內建 template 流程，**預設行為完全不變**。
+	 *
+	 * @param ProfitShop $shop 賣場聚合根
+	 *
+	 * @return string 範本實體路徑；未使用時為空字串
+	 */
+	private function resolve_theme_template( ProfitShop $shop ): string {
+		$settings = $shop->settings;
+		$slug     = isset( $settings['pageTemplate'] ) ? (string) $settings['pageTemplate'] : '';
+
+		if ( '' === $slug || 'default' === $slug ) {
+			return '';
+		}
+
+		// 只接受佈景主題**真的登記過**的範本檔名，避免站長（或竄改的請求）
+		// 指向任意路徑而讀到不該讀的 PHP 檔。
+		$allowed = \wp_get_theme()->get_page_templates( null, 'page' )
+		+ \wp_get_theme()->get_page_templates( null, 'post' );
+
+		if ( ! isset( $allowed[ $slug ] ) ) {
+			return '';
+		}
+
+		$path = \locate_template( $slug );
+
+		return \is_string( $path ) && '' !== $path ? $path : '';
+	}
+
+	/**
+	 * 以佈景主題範本渲染賣場
+	 *
+	 * 範本自己會呼叫 `get_header()` / `the_content()` / `get_footer()`，
+	 * 因此本方法**只負責兩件事**：把賣場內容接到 `the_content` 後面、載入範本。
+	 *
+	 * 🔴 賣場內容以 `the_content` **附加**而非取代：站長用頁面建構器排的版型
+	 *    要留在原地，商品 grid 接在它後面。取代掉等於把站長的排版丟掉，
+	 *    而那正是選擇範本的人最在意的東西。
+	 *
+	 * @param ProfitShop           $shop           賣場聚合根
+	 * @param array<string, mixed> $front_settings 前台顯示設定
+	 * @param string               $template       範本實體路徑
+	 *
+	 * @return void
+	 */
+	private function render_via_theme_template( ProfitShop $shop, array $front_settings, string $template ): void {
+		$shop_id = (int) $shop->id;
+
+		$append = function ( $content ) use ( $shop, $front_settings, $shop_id ) {
+			// 只接在**這篇賣場自己**的內容後面：範本可能還會對側邊欄、
+			// 相關文章等其他 post 跑 the_content，接錯地方會讓商品 grid 到處冒出來。
+			if ( (int) \get_the_ID() !== $shop_id ) {
+				return $content;
+			}
+
+			// 同一篇在某些範本會被跑兩次（例如摘要 + 內文），第二次不再附加。
+			static $done = false;
+			if ( $done ) {
+				return $content;
+			}
+			$done = true;
+
+			$shop_for_template = $shop;
+			// 範本已經印過 post_content，template 內那一段必須關掉，否則整段重複。
+			$ps_skip_post_content = true;
+
+			\ob_start();
+			require $this->resolve_template_path();
+
+			return $content . (string) \ob_get_clean();
+		};
+
+		\add_filter( 'the_content', $append, 20 );
+
+		require $template;
+
+		\remove_filter( 'the_content', $append, 20 );
 	}
 
 	/**
