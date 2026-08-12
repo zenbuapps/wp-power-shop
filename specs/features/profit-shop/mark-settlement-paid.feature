@@ -109,7 +109,23 @@ Feature: 站長標記分潤結算狀態
   Rule: 後置（逐筆）- 批次操作回傳逐筆結果而非全有全無
     # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_missing_records_are_reported_as_skipped
     # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_record_without_status_meta_is_skipped
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_empty_id_list_throws
+    # @covered-by: tests/Unit/Application/UseCase/Settlement/MarkSettlementsPaidUseCaseTest.php::test_all_invalid_ids_throws
     # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_mixed_batch_reports_both_updated_and_skipped
+    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitSettlementsEndpointTest.php::test_mark_paid_with_empty_list_returns_400
+
+    # ── 🔴 「逐筆回報」不適用於空清單，2026-08-12 改判 ─────────────
+    # 本 Rule 原本有一條 Example 斷言「空的識別清單回傳空結果而非錯誤」，
+    # 與實作**完全相反**：`MarkSettlementsPaidUseCase::execute( [], … )` 拋 DomainException，
+    # 端點回 400，兩條測試都鎖死這個行為。
+    #
+    # 改判為「保留 fail-fast 實作、改規格」的理由：
+    # 這是**金流操作**。批次撥款收到空清單，通常代表前端狀態有問題
+    #（例如選取集合被意外清空），靜默回「空結果、成功」會讓站長
+    # **以為已處理完畢**——那是這種操作最不該有的歧義。fail-fast 讓問題當場暴露。
+    #
+    # ⚠️ 這與本 Rule 主旨不衝突：「逐筆回報」處理的是「清單裡有好有壞」，
+    #    空清單則是「根本沒有東西可處理」，屬於呼叫端的輸入錯誤，兩者是不同層次。
 
     Example: 部分成功時同時回傳成功與失敗清單
       When 站長同時標記訂單品項 7001、7002 與 7003 為已撥款
@@ -123,10 +139,17 @@ Feature: 站長標記分潤結算狀態
       And 訂單品項 7002 的 _settlement_status 應為 "paid"
       And 訂單品項 7003 的 _settlement_status 應仍為 "paid"
 
-    Example: 空的識別清單回傳空結果而非錯誤
+    Example: 空的識別清單應被拒絕並回報錯誤
       When 站長以空的識別清單執行標記已撥款
-      Then 系統不應回傳錯誤
-      And 成功清單與失敗清單皆應為空
+      Then 系統應回傳錯誤
+        | status |
+        | 400    |
+      And 所有結算紀錄的狀態皆不應被改動
+
+    Example: 清單內全為非法識別時等同空清單一併拒絕
+      When 站長以全為非法值的識別清單執行標記已撥款
+      Then 系統應回傳錯誤
+      And 所有結算紀錄的狀態皆不應被改動
 
     Example: 失敗原因取自狀態機的既有訊息
       When 站長標記訂單品項 7004 為已撥款

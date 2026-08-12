@@ -66,7 +66,18 @@ Feature: 呈現分潤賣場前台
       Then 系統不應查詢賣場資料
 
   Rule: 後置（SEO）- 賣場頁必須注入自己的標題與正規網址且不重複
-    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_output_contains_no_seo_meta
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopRendererThemeTemplateTest.php::test_seo_meta_prints_shop_partner_and_site_names
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopRendererThemeTemplateTest.php::test_seo_meta_falls_back_when_the_partner_term_is_missing
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopRendererThemeTemplateTest.php::test_seo_meta_escapes_the_shop_title
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopRendererThemeTemplateTest.php::test_render_shop_removes_core_title_and_canonical_actions
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopRendererThemeTemplateTest.php::test_rendered_head_has_exactly_one_title_and_one_canonical
+
+    # ⚠️ 本 Rule 原先掛的是 ProfitShopShortcodeTest::test_output_contains_no_seo_meta，
+    #    而那條斷言的是**相反命題**（短碼路徑**不得**注入 title / canonical），
+    #    完全沒有涵蓋 renderer 這一側 ⇒ 拆掉 renderer 的兩行 remove_action
+    #    （會產生雙 title / 雙 canonical）不會讓任何測試轉紅。
+    #    該條測試的正確歸屬在 render-shop-via-shortcode.feature 的「後置（SEO）」Rule，
+    #    那邊本來就已經掛著它，因此這裡移除不會讓它變成孤兒。
 
     Example: 賣場頁的標題包含賣場名稱與夥伴名稱
       When 訪客開啟賣場 "夏季賣場" 的公開網址

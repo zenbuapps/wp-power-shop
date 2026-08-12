@@ -53,6 +53,7 @@ specs/
 │   ├── 2026-07-30-profit-shop-variation-override-plan.md
 │   ├── 2026-08-03-cart-regular-price-override-plan.md
 │   └── 2026-08-06-profit-settlement-chain-plan.md   # 分潤結算全鏈路 TDD 協調藍圖
+├── coverage-matrix.md       # Feature Rule ↔ 測試 覆蓋盤點矩陣（人工盤點快照，2026-08-12）
 └── tech-debt.md             # 已知問題與技術債登記表（跨領域、持續累積）
 ```
 
@@ -218,6 +219,19 @@ specs/
 | 資料表 | 9（見 [erm.dbml](entity/erm.dbml)） |
 
 ---
+
+## 測試覆蓋
+
+🔴 **這 50 個 `.feature` 不是可執行測試**——專案沒有安裝任何 BDD runner（無 Behat / Cucumber / Codeception，零 step definitions），全部帶 `@ignore`。它們是 AIBDD Phase 01 的**規格骨架**，行為契約寫在 Rule 標題與註解裡。「測試全綠」與「符合 feature 情境」是兩件事，中間隔著人工維持的 `@covered-by` 標記。
+
+兩份覆蓋文件問的**不是同一個問題**，不要混用：
+
+| 檔案 | 產生方式 | 問的問題 | 最新結論 |
+|------|----------|----------|----------|
+| [traceability.md](traceability.md) | 自動（`bin/check-traceability.php`） | 每條 Rule **有沒有標** `@covered-by`？ | 已標註 100%（⚠️ 檔案已過期，見下） |
+| [coverage-matrix.md](coverage-matrix.md) | 人工盤點（2026-08-12 快照） | 標的那個測試**真的涵蓋**這條 Rule 嗎？ | 256 條中僅 **129 條** covered；**13 條 `@covered-by` 標錯**，其中 2 條指向斷言相反命題的測試 |
+
+⚠️ `traceability.md` 目前報 Rule 總數 255、實際為 256（差異在 `login-partner`），根因是該 generated 檔案自 2026-08-07 起未重跑，**需重新產生**。詳見 coverage-matrix.md §8.2。
 
 ## 已知問題與技術債
 

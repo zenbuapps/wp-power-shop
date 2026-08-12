@@ -117,7 +117,30 @@ Feature: 套用賣場覆寫價到購物車並以簽章防竄改
 
   Rule: 後置（一致性）- 賣場卡片、單品頁與購物車三處價格必須相同
     # @covered-by: tests/Integration/Infrastructure/WooCommerce/SingleProductPriceHookTest.php::test_simple_product_price_is_overridden_on_single_product_page
-    # @covered-by: tests/Integration/Infrastructure/WooCommerce/CartPriceOverrideHookTest.php::test_shop_cart_item_does_not_pollute_other_product_instances
+
+    # ── 🔴 2026-08-12 移除一個錯標；本 Rule 目前是**部分覆蓋** ──────────
+    # 原本另外標了 `CartPriceOverrideHookTest::test_shop_cart_item_does_not_pollute_other_product_instances`，
+    # 但那條驗的是「**不污染**」（單品頁的價格 filter 不得影響購物車品項），
+    # 與本 Rule 的「三處**一致**」是不同命題——前者是隔離、後者是相等，已移除。
+    #
+    # ✅ 已覆蓋：三處**各自**都有測試——
+    #    單品頁（`SingleProductPriceHookTest`，上面保留的那條）、
+    #    購物車（`CartPriceOverrideHookTest` 的套價系列）、
+    #    賣場卡片（`ProfitShopFrontData` / 樣板的價格輸出測試）。
+    #
+    # ❌ 未覆蓋：**沒有任何一條測試在同一組 fixture 上交叉比對三者相等**。
+    #
+    # 🔴 這個缺口的形狀，正是 Phase 13 那個 bug 能潛伏數個 Phase 的原因：
+    #    當時購物車只呼叫 set_price()、沒有套 regular/sale，於是購物車顯示的
+    #    劃線原價是商品的**原始** regular_price，與單品頁分歧。
+    #    三處各自的測試**全部都是綠的**——因為每一條都只問「我這一處對不對」，
+    #    沒有人問「三處是不是同一個數字」。實收價正確、劃線價錯誤，零錯誤訊息。
+    #
+    # 要補什麼：一條同 fixture 的三方斷言測試——建立一個帶覆寫價的賣場與商品，
+    # 在**同一個測試方法內**依序取得賣場卡片輸出、帶賣場情境的單品頁價格、
+    # 以及加購後的購物車價格，斷言三者的實收價與原價**各自相等**。
+    # 這條測試的價值不在於任何單一處是否正確（那已經有人守了），
+    # 而在於它是唯一會因為「兩處分歧」而轉紅的測試。
 
     Example: 同一組覆寫價在三處呈現一致
       Given 賣場 "夏季賣場" 對商品 101 設定覆寫原價 "500" 與覆寫特價 "450"

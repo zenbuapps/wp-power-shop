@@ -133,7 +133,27 @@ Feature: 以短碼在任意頁面嵌入分潤賣場
       Then 系統不應在短碼位置之外產生任何輸出
 
   Rule: 後置（多重）- 同一頁可放多個不同賣場的短碼
-    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_do_shortcode_renders_shop_content
+    # @covered-by: tests/Integration/Infrastructure/WordPress/ProfitShopShortcodeTest.php::test_two_shops_on_one_page_do_not_leak_into_each_other
+
+    # ── 2026-08-12：移除一個錯標，並補上真正涵蓋本 Rule 的測試 ──────
+    # 原本標 `ProfitShopShortcodeTest::test_do_shortcode_renders_shop_content`，
+    # 但那條只 `do_shortcode` **一個**賣場、斷言商品名稱與容器存在。
+    # 本 Rule 的重點恰恰是**兩個以上**賣場並存時互不干擾，它一個字都沒測到。
+    #
+    # 這條之所以重要：前台 JS 的查找一律限定在最近的 `.ps-profit-shop-front` 祖先內，
+    # 「一頁多賣場」正是那個設計要解決的問題（早期以全域物件輸出的資料會互相覆蓋）。
+    # 這個保證若破了，症狀是點 A 賣場的卡片開出 B 賣場的 Modal、
+    # 加購表單帶錯賣場識別 ⇒ **分潤歸錯夥伴**，而且沒有任何錯誤訊息。
+    #
+    # 新測試在同一份 `do_shortcode` 輸出內放兩個賣場，並以
+    # `data-ps-shop` 切出各自的容器區段後，逐段斷言三件事：
+    # (1) 兩個容器各恰好一個、id 互不相同
+    # (2) 各容器內的卡片與 Modal 只屬於自己的賣場（互相 NotContains）
+    # (3) 各容器內加購表單的 `profit_shop_id` 是自己的賣場
+    #
+    # ⚠️ **多賣場在結構上只可能發生在短碼路徑**：獨立頁面路徑由網址的單一 slug
+    #    決定賣場、渲染完即結束，一個請求不可能輸出兩個賣場。
+    #    因此本 Rule 不需要、也無法有 renderer 版本的對應測試。
 
     Example: 一頁兩個賣場的短碼各自獨立運作
       Given 另有分潤賣場 "秋季賣場" 其 id 為 2000

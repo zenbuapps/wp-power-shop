@@ -72,18 +72,45 @@ Feature: 查詢分潤賣場詳情與列表
       Then 商品項目不應包含 name 欄位
       And 商品項目不應包含 sku 欄位
 
-  Rule: 後置（列表）- 賣場列表支援分頁
-    # @covered-by: tests/Unit/Application/UseCase/Shop/ListShopsTest.php::test_returns_all_shops_when_no_filter
-    # @covered-by: tests/Unit/Application/UseCase/Shop/ListShopsTest.php::test_filters_by_partner_term_id
-    # @covered-by: tests/Unit/Application/UseCase/Shop/ListShopsTest.php::test_returns_empty_array_when_no_shops
+  Rule: 已知落差（列表）- 賣場列表不分頁，一次回傳全部
+    # @covered-by: NOT-COVERED 本 Rule 描述的是「刻意不提供」的分頁能力，依定義沒有對應實作可測
 
-    Example: 查詢賣場列表
+    # ── 這條 Rule 曾經承諾分頁，2026-08-12 改判為不做 ──────────────
+    # 原本寫的是「後置（列表）- 賣場列表支援分頁」，並斷言「回應應包含賣場陣列與
+    # 總筆數」「per_page 超過 500 時收斂為 100」。**兩條都與實作相反**：
+    #   `V2Api::get_profit_shops_callback` 只讀 `partner_term_id`，
+    #   交給 `ListShops::execute( ?int $partner_term_id )` 後直接 `array_map` + `ok( $data )`
+    #   ⇒ 沒有 page / per_page 參數，回應的 data 是純陣列、沒有 total 欄位。
+    #
+    # 改判為「改規格、不補實作」的理由：
+    #   1. 站上目前只有 2 個賣場，補分頁是過度設計
+    #   2. `admin-list-ui.rule.md` §3.2 路線 B 本來就規定 profit-* 系列走
+    #      「後端一次回全部、前端 useMemo 做 client-side 過濾」——
+    #      實作與那條規則一致，**是規格寫錯了，不是實作漏做**
+    #
+    # ⚠️ 保留本 Rule 而非刪除：刪掉會讓「規格曾經承諾過分頁」這個事實消失，
+    #    日後有人重新提出時，沒有任何線索說明當初為什麼決定不做。
+    #
+    # ⚠️ 原本掛在這裡的三個 @covered-by（ListShopsTest 的
+    #    test_returns_all_shops_when_no_filter / test_filters_by_partner_term_id /
+    #    test_returns_empty_array_when_no_shops）**全部標錯**——那三條只測
+    #    「回傳全部」與「依 partner 過濾」，零分頁斷言，已一併移除。
+    #
+    # ⚠️ 也不要被 `V2Api` 內另一處的 `min( 100, $per_page )` 誤導：
+    #    那屬於結算列表 / 夥伴報表用的 FilterCriteria，與本端點無關。
+    #
+    # 日後若真要補分頁，須連同 `admin-list-ui.rule.md` §3.2 的路線選擇一起重新評估，
+    # 不能只改後端——前端的 client-side 過濾會與 server-side 分頁互相矛盾。
+
+    Example: 查詢賣場列表一次回傳全部賣場
       When 管理者 "Admin" 查詢賣場列表
-      Then 回應應包含賣場陣列與總筆數
+      Then 回應的 data 應為賣場的純陣列
+      And 回應不應包含總筆數欄位
 
-    Example: 列表分頁參數超過上限時收斂
+    Example: 列表端點不接受分頁參數
       When 管理者 "Admin" 以 per_page 為 500 查詢賣場列表
-      Then 實際生效的 per_page 應為 100
+      Then 該參數應被忽略
+      And 回應仍應包含全部賣場
 
   Rule: 前端（填表）- 編輯頁載入後不得被背景重取資料覆蓋
     # @covered-by: tests/js/editFormGuards.test.ts::🔴 同一筆 record 再次抵達時不得重填

@@ -20,7 +20,17 @@ Feature: 匯入舊版一頁商店為分潤賣場
       | 7002      | 舊版賣場B   |              | 是          |
 
   Rule: 權限（寫入）- 匯入需要 manage_options
-    # @covered-by: tests/Integration/Application/LegacyImporterTest.php::test_list_legacy_shops_returns_200
+    # @covered-by: tests/Integration/Application/LegacyImporterTest.php::test_import_requires_manage_options
+    # @covered-by: tests/Integration/Application/LegacyImporterTest.php::test_import_rejects_unauthenticated_request
+
+    # ⚠️ 本 Rule 原先掛的是 LegacyImporterTest::test_list_legacy_shops_returns_200，
+    #    而那條是以 administrator 呼叫 **GET 列表**並斷言 200——既不是 import 端點、
+    #    也沒有驗證任何拒絕行為 ⇒ 把 import 的 permission 從 manage_options 降成
+    #    manage_woocommerce，整個測試套件一條都不會紅。
+    #    那條測試沒有對應到本 feature 的任何 Rule，因此不再掛任何 @covered-by。
+    #
+    # 兩條新測試除了狀態碼，都一併斷言「powershop 數量前後不變」——只驗狀態碼
+    # 擋不住「回了 403、但賣場其實已經建好了」這種檢查排在寫入之後的壞法。
 
     Example: 僅具備 manage_woocommerce 者不得匯入
       Given 使用者僅具備 manage_woocommerce 能力
@@ -86,8 +96,18 @@ Feature: 匯入舊版一頁商店為分潤賣場
       Then 新賣場的 settings 應包含來源的顯示設定
 
   Rule: 後置（保留）- 匯入不刪除也不修改舊版資料
-    # @covered-by: tests/Unit/Application/UseCase/Migration/ListImportableLegacyShopsTest.php::test_lists_all_legacy_shops
-    # @covered-by: tests/Unit/Application/UseCase/Migration/ListImportableLegacyShopsTest.php::test_lists_legacy_with_settings_included
+    # @covered-by: tests/Integration/Application/LegacyImporterTest.php::test_import_does_not_delete_or_modify_the_legacy_shop
+
+    # ⚠️ 本 Rule 原先掛的兩條 ListImportableLegacyShopsTest 測的是**列表** UseCase，
+    #    全程沒有執行過任何一次匯入；而 ImportLegacyShopTest 內那句
+    #    `assertSame( 1, $this->shopRepo->count() )` 雖然註解寫著「不刪除舊版，只新增」，
+    #    數的卻是**新的 ProfitShop repo**、不是 legacy repo ⇒ 在 UseCase 內加一行
+    #    刪除 legacy 的程式碼，一條測試都不會紅。
+    #    那兩條列表測試沒有對應到本 feature 的任何 Rule，因此不再掛任何 @covered-by。
+    #
+    # 新測試同時比對「快照（id / title / slug / meta）」與「post 本體
+    # （status / title / name / content）」——只斷言「還在」擋不住
+    # 「沒刪掉、但把欄位改寫了」這種壞法。
 
     Example: 匯入後舊版賣場仍然存在且可用
       When 管理者 "Admin" 匯入舊版賣場 7001 並指定夥伴 5

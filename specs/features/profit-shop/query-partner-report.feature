@@ -51,6 +51,8 @@ Feature: 分潤夥伴查詢自己的分潤報表
     # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_kpi_ignores_partner_term_id_in_query_string
     # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_settlements_ignores_partner_term_id_in_query_string
     # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportEndToEndTest.php::test_settlements_list_is_non_empty_and_all_belong_to_self
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportsScopeTest.php::test_no_token_returns_401
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportsScopeTest.php::test_invalid_token_returns_401
 
     Scenario Outline: 以請求參數指定他人 partner_term_id 不得改變資料範圍
       When 夥伴 "夥伴A" 以自己的 token 查詢 <report> 並在 query string 帶入 partner_term_id 為 9
@@ -155,7 +157,15 @@ Feature: 分潤夥伴查詢自己的分潤報表
         | per_page |
 
   Rule: 前置（分頁）- 分頁參數必須有上限以防資源耗盡
+    # 收斂只做在 V2Api::build_filter_criteria_from_request()；FilterCriteria 與
+    # WpSettlementSummaryProvider 都沒有上限，因此下列測試同時斷言「回應回報的生效值」
+    # 與「真正送進 SQL 的 LIMIT / OFFSET」，缺一不可。
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/ListPartnerSettlementsUseCaseTest.php::test_happy_returns_paginated_list
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_default_pagination_is_page_1_and_per_page_20
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_in_range_pagination_passes_through_untouched
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_per_page_above_limit_is_capped_to_100
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_per_page_zero_is_raised_to_one
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_page_above_limit_is_capped_to_10000
 
     Scenario Outline: 分頁參數超過上限時收斂到上限值
       When 夥伴 "夥伴A" 以 page 為 <page> 且 per_page 為 <per_page> 查詢結算明細
@@ -174,7 +184,14 @@ Feature: 分潤夥伴查詢自己的分潤報表
       Then 實際生效的 per_page 應為 20
 
   Rule: 前置（期間）- 日期區間必須被正規化且有合理上限
+    # 收斂發生在 WpSettlementSummaryProvider::format_datetime()（[0, 253402300799]），
+    # 只作用在「進 SQL 的那個值」。
+    # ⚠️ 已知落差：KPI 回應的 period_start / period_end 走的是未收斂的原始時間戳
+    #    （summary_for_partner() 直接 gmdate() 原值），極大值會回 "292277026596-12-04"。
+    #    下列測試只鎖 SQL 這一側，不把回應側的現況當成規格釘死。
     # @covered-by: tests/Unit/Application/UseCase/Partner/Report/GetPartnerTrendUseCaseTest.php::test_passes_interval_to_provider
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_extreme_date_end_is_clamped_to_a_valid_mysql_datetime
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_negative_date_start_is_clamped_to_epoch
 
     Example: 超出合理範圍的時間戳被收斂
       When 夥伴 "夥伴A" 以極大的時間戳查詢報表
@@ -204,8 +221,12 @@ Feature: 分潤夥伴查詢自己的分潤報表
       Then 回應應與未啟用 HPOS 時相同
 
   Rule: 後置（格式）- 夥伴端點一律回傳裸 payload
-    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportsScopeTest.php::test_no_token_returns_401
-    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportsScopeTest.php::test_invalid_token_returns_401
+    # ⚠️ 這裡原本掛的兩條 401 測試（PartnerReportsScopeTest 的 no_token / invalid_token）
+    #    各自只有一行 assertSame( 401, ... )、與回應形狀無關，屬於「安全（範圍）」，
+    #    已移到該 Rule 之下。
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_kpi_response_is_a_bare_payload
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_trend_and_settlements_responses_are_bare_payloads
+    # @covered-by: tests/Integration/Infrastructure/Rest/PartnerReportContractTest.php::test_bare_payload_assertion_actually_rejects_a_wrapped_response
 
     Example: 報表回應不裹 code / message / data 外層
       When 夥伴 "夥伴A" 查詢 KPI 摘要

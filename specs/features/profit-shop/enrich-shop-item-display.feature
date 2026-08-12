@@ -72,7 +72,27 @@ Feature: 補齊賣場商品的顯示資訊
   Rule: 後置（降級）- 補齊查詢失敗不得阻擋賣場編輯
     # @covered-by: tests/js/shopItemDisplayState.test.ts::🔴 查詢失敗 → failed，不得與 missing 混為一談
     # @covered-by: tests/js/shopItemDisplayState.test.ts::isError 與 isLoading 同時為真時，仍以 pending 為準（查詢尚未結束）
-    # @covered-by: tests/Integration/Infrastructure/Rest/ProfitShopItemsRoundTripTest.php::test_put_nested_items_round_trips_through_get
+
+    # ── 2026-08-12 移除一個錯標；本 Rule 目前是**部分覆蓋** ──────────
+    # 原本另外標了 `ProfitShopItemsRoundTripTest::test_put_nested_items_round_trips_through_get`，
+    # 那是**後端 PUT → GET 的持久化 round-trip**，與「補齊查詢失敗時的降級」語意無關，已移除。
+    #
+    # ✅ 已覆蓋（上面兩條 vitest）：狀態判定本身——
+    #    `failed` 與 `missing` 不得混為一談、載入中不得先標成失敗。
+    #    這一半是本 Rule 最容易寫錯的地方，覆蓋良好。
+    #
+    # ❌ 未覆蓋：Example 的兩個斷言主體——
+    #    (1)「賣場商品 101 應以 `#101` 呈現」：`failed` 狀態下的 JSX 降級渲染
+    #    (2)「賣場表單的『儲存』應為可用狀態」：跨元件的表單可用性，需要 e2e
+    #
+    # 要補什麼：(1) 可用 vitest + testing-library 對該列的渲染輸出斷言；
+    # (2) 屬於跨元件狀態，較適合 e2e——在補齊查詢被攔成失敗的情況下，
+    #     斷言儲存按鈕仍可按且送出成功。
+    #
+    # ⚠️ 這條的實際風險比看起來高：`specs/tech-debt.md` TD-7 記載
+    #    Powerhouse 對 403 會跳全域 confirm 對話框**卡住整頁**，
+    #    與本 Rule 的承諾直接衝突，而成因不在本 repo 內。
+    #    補 e2e 時要把那個情境一起納入，否則會測出「我們這半沒問題」的假象。
 
     Example: 補齊查詢失敗時仍應可編輯與儲存賣場
       Given 已存在分潤賣場 "夏季賣場" 且其商品列表為
