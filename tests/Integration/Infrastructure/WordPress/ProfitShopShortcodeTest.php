@@ -1116,7 +1116,150 @@ final class ProfitShopShortcodeTest extends TestCase {
 		);
 	}
 
+	// ====================================================================
+	//  一頁多賣場：容器邊界必須把兩個賣場的內容完全隔開
+	// ====================================================================
+
+	/**
+	 * 🔴 同一份輸出內放兩個不同賣場的短碼，兩者不得互相污染
+	 *
+	 * ── 為什麼這條重要 ────────────────────────────────────────
+	 * 前台 JS 的查找一律限定在**最近的 `.ps-profit-shop-front` 祖先內**，
+	 * 「一頁多賣場」正是那個設計要解決的問題——早期以 `wp_localize_script`
+	 * 輸出的全域資料物件會互相覆蓋，第二個賣場的資料會蓋掉第一個。
+	 *
+	 * 這個保證若破了，症狀是點 A 賣場的卡片開出 B 賣場的商品 Modal、
+	 * 加購表單帶著 B 賣場的 `profit_shop_id` 送出 ⇒ **分潤歸錯夥伴**，
+	 * 而且畫面看起來完全正常、零錯誤訊息。錢會進到錯的人手上。
+	 *
+	 * ── 為什麼只測 shortcode 路徑 ─────────────────────────────
+	 * 多賣場**在結構上只可能發生在 shortcode 路徑**：獨立頁面路徑
+	 * （`ProfitShopRenderer`）由網址的單一 slug 決定賣場、渲染完即 `exit`，
+	 * 一個請求不可能輸出兩個賣場。因此這條不需要、也無法有 renderer 版本。
+	 *
+	 * ── 三個斷言主體 ─────────────────────────────────────────
+	 *   1. 兩個各自帶不同 `data-ps-shop` 的容器，各恰好一個
+	 *   2. 各容器內的卡片與 Modal 只屬於自己的賣場
+	 *   3. 各容器內加購表單的 `profit_shop_id` 是自己的賣場
+	 *
+	 * @test
+	 * @group edge
+	 * @group security
+	 */
+	public function test_two_shops_on_one_page_do_not_leak_into_each_other(): void {
+		$product_a = $this->createSimpleProduct(
+			[
+				'name'          => '多賣場商品 Alpha',
+				'regular_price' => '1000',
+			]
+		);
+		$product_b = $this->createSimpleProduct(
+			[
+				'name'          => '多賣場商品 Bravo',
+				'regular_price' => '2000',
+			]
+		);
+
+		$shop_a = $this->create_shop( [ $this->item_for( $product_a->get_id() ) ] );
+		$shop_b = $this->create_shop( [ $this->item_for( $product_b->get_id() ) ] );
+
+		$this->assertNotSame( $shop_a, $shop_b, '測試前置：兩個賣場必須是不同的 ID' );
+
+		// 真實情境：兩個短碼並存於同一份 post_content
+		$html = \do_shortcode(
+			'[' . ProfitShopShortcode::TAG . ' id="' . $shop_a . '"]'
+			. '[' . ProfitShopShortcode::TAG . ' id="' . $shop_b . '"]'
+		);
+
+		// 防空斷言：輸出為空時，下面所有 NotContains 都會假綠燈
+		$this->assertStringContainsString( '多賣場商品 Alpha', $html, '防空斷言：A 賣場應有輸出' );
+		$this->assertStringContainsString( '多賣場商品 Bravo', $html, '防空斷言：B 賣場應有輸出' );
+
+		// ── 斷言 1：兩個容器，各恰好一個 ──────────────────────
+		$this->assertSame(
+			2,
+			substr_count( $html, '<div class="ps-profit-shop-front' ),
+			'一頁兩個短碼應輸出兩個賣場容器'
+		);
+		$this->assertSame(
+			1,
+			substr_count( $html, 'data-ps-shop="' . $shop_a . '"' ),
+			'A 賣場的容器標記應恰好出現一次'
+		);
+		$this->assertSame(
+			1,
+			substr_count( $html, 'data-ps-shop="' . $shop_b . '"' ),
+			'B 賣場的容器標記應恰好出現一次'
+		);
+
+		// ── 斷言 2：各容器內的卡片與 Modal 只屬於自己 ──────────
+		$segment_a = $this->segment_for_shop( $html, $shop_a );
+		$segment_b = $this->segment_for_shop( $html, $shop_b );
+
+		$card_a  = 'data-ps-product-id="' . $product_a->get_id() . '"';
+		$card_b  = 'data-ps-product-id="' . $product_b->get_id() . '"';
+		$modal_a = 'data-ps-modal-for="' . $product_a->get_id() . '"';
+		$modal_b = 'data-ps-modal-for="' . $product_b->get_id() . '"';
+
+		$this->assertStringContainsString( $card_a, $segment_a, 'A 容器內應有 A 商品的卡片' );
+		$this->assertStringContainsString( $modal_a, $segment_a, 'A 容器內應有 A 商品的 Modal' );
+		$this->assertStringNotContainsString( $card_b, $segment_a, '🔴 A 容器內不得出現 B 賣場的商品卡片' );
+		$this->assertStringNotContainsString( $modal_b, $segment_a, '🔴 A 容器內不得出現 B 賣場的商品 Modal' );
+
+		$this->assertStringContainsString( $card_b, $segment_b, 'B 容器內應有 B 商品的卡片' );
+		$this->assertStringContainsString( $modal_b, $segment_b, 'B 容器內應有 B 商品的 Modal' );
+		$this->assertStringNotContainsString( $card_a, $segment_b, '🔴 B 容器內不得出現 A 賣場的商品卡片' );
+		$this->assertStringNotContainsString( $modal_a, $segment_b, '🔴 B 容器內不得出現 A 賣場的商品 Modal' );
+
+		// ── 斷言 3：加購表單的 profit_shop_id 是自己的賣場 ──────
+		$hidden_a = 'name="profit_shop_id" value="' . $shop_a . '"';
+		$hidden_b = 'name="profit_shop_id" value="' . $shop_b . '"';
+
+		$this->assertStringContainsString( $hidden_a, $segment_a, 'A 容器的加購表單應帶 A 賣場的 profit_shop_id' );
+		$this->assertStringNotContainsString(
+			$hidden_b,
+			$segment_a,
+			'🔴 A 容器的加購表單不得帶 B 賣場的 profit_shop_id——那會讓分潤歸錯夥伴'
+		);
+
+		$this->assertStringContainsString( $hidden_b, $segment_b, 'B 容器的加購表單應帶 B 賣場的 profit_shop_id' );
+		$this->assertStringNotContainsString(
+			$hidden_a,
+			$segment_b,
+			'🔴 B 容器的加購表單不得帶 A 賣場的 profit_shop_id——那會讓分潤歸錯夥伴'
+		);
+	}
+
 	// ========== Helpers ==========
+
+	/**
+	 * 從「一頁多賣場」的輸出中，切出指定賣場的容器區段
+	 *
+	 * 以 `data-ps-shop="{id}"` 為起點，切到下一個 `data-ps-shop=` 或字串結尾為止。
+	 * 這正是前台 JS 用「最近的 `.ps-profit-shop-front` 祖先」所界定的同一個範圍，
+	 * 因此對這個區段做 NotContains 斷言，等同於驗證 JS 查找不可能撈到別的賣場。
+	 *
+	 * @param string $html    完整輸出
+	 * @param int    $shop_id 賣場 ID
+	 *
+	 * @return string 該賣場的容器區段
+	 */
+	private function segment_for_shop( string $html, int $shop_id ): string {
+		$marker = 'data-ps-shop="' . $shop_id . '"';
+		$start  = strpos( $html, $marker );
+
+		$this->assertNotFalse( $start, "輸出中應能找到賣場 {$shop_id} 的容器標記" );
+
+		$next = strpos( $html, 'data-ps-shop="', (int) $start + strlen( $marker ) );
+
+		$segment = false === $next
+		? substr( $html, (int) $start )
+		: substr( $html, (int) $start, $next - (int) $start );
+
+		$this->assertNotSame( '', $segment, "賣場 {$shop_id} 的容器區段不應為空" );
+
+		return $segment;
+	}
 
 	/**
 	 * 呼叫受測 shortcode

@@ -4,11 +4,20 @@
  *
  * 對應規格：specs/features/profit-shop/render-shop-front.feature
  *          Rule: 前置（版型）- 獨立頁面可選擇佈景主題範本
+ *          Rule: 後置（SEO）- 賣場頁必須注入自己的標題與正規網址且不重複
  *
- * 對應實作（三塊在本檔之前是零覆蓋）：
+ * 對應實作（以下各塊在被加進本檔之前都是零覆蓋）：
  *   ProfitShopRenderer::resolve_theme_template()   ← 站長可寫入欄位的 fail-closed 守門
  *   ProfitShopRenderer::render_via_theme_template() ← 附加 / get_the_ID() / static $done 三道守門
  *   ProfitShopRenderer::resolve_template_path()     ← `power_shop_profit_shop_template` filter 與其 fallback
+ *   ProfitShopRenderer::print_seo_meta()            ← 自訂 <title> / canonical 的內容
+ *   ProfitShopRenderer::render_shop() 的兩行 remove_action ← 防雙 title / 雙 canonical
+ *
+ * ⚠️ 類別名稱寫的是 ThemeTemplate，但 SEO meta 那一組也住在這裡，這是刻意的：
+ *    `render_shop()` 唯一能在測試環境跑完而**不觸發 `get_header()`** 的路徑，
+ *    就是「站長選了佈景主題範本」那條 early return（見 `render_shop()` 的分支）。
+ *    因此 SEO 測試必須用本檔已經備好的那組範本 fixture；另開新檔等於把
+ *    fixture 建立、全域查詢備份、`invoke_private()` 整套複製一份。
  *
  * ═══ 為什麼走 Reflection 而不是端到端渲染（先讀這段再改本檔）═══
  *
@@ -28,6 +37,7 @@
  *   - 渲染結束後 `the_content` filter 必須被拆掉（不得污染後續請求）
  *   - `$ps_notices_html` / `$ps_skip_post_content` 兩個變數真的有傳進內建 template
  *   - `power_shop_profit_shop_template` filter 的覆寫與三種 fallback
+ *   - 自訂 `<title>` / canonical 的內容、跳脫與「只有一組」
  *
  * 涵蓋不到（誠實標註，不要誤以為這檔全包了）：
  *   - `maybe_render()` 的 slug / rate-limit / 404 分支（`exit`，語言層限制）
@@ -133,6 +143,30 @@ final class ProfitShopRendererThemeTemplateTest extends TestCase {
 	];
 
 	/**
+	 * 進入測試前 `wp_head` 上掛了哪些 callback（tear_down 要還原）
+	 *
+	 * `render_shop()` 對這個 hook 做三件**不可逆**的事：掛一個持有賣場狀態的匿名閉包、
+	 * 拆掉 core 的 `rel_canonical`、拆掉 core 的 `_wp_render_title_tag`。三件都沒有
+	 * 對應的還原程式碼（正式環境不需要——那個請求緊接著就 `exit` 了）。
+	 *
+	 * 匿名閉包無法用 `remove_action()` 指名拆除，因此改為整個 `WP_Hook` 物件備份還原。
+	 * `clone` 就夠：`callbacks` 是陣列（值語意），複本不會被後續的 add/remove 影響。
+	 *
+	 * @var \WP_Hook|null
+	 */
+	private ?\WP_Hook $wp_head_backup = null;
+
+	/**
+	 * 進入測試前 `wp_head` 已被觸發過幾次（tear_down 要還原）
+	 *
+	 * SEO 測試會實際跑一次 `wp_head()`，那會讓 `did_action( 'wp_head' )` 由 0 變 1；
+	 * 有些程式碼以它判斷「頁首是否已經輸出」，殘留會影響後續測試。
+	 *
+	 * @var int|null
+	 */
+	private ?int $wp_head_action_count = null;
+
+	/**
 	 * setUp：建立 fixture 檔案 + 登記範本 + 備份全域查詢狀態
 	 *
 	 * @return void
@@ -145,6 +179,10 @@ final class ProfitShopRendererThemeTemplateTest extends TestCase {
 			'the_query' => $GLOBALS['wp_the_query'] ?? null,
 			'post'      => $GLOBALS['post'] ?? null,
 		];
+
+		$wp_head_hook               = $GLOBALS['wp_filter']['wp_head'] ?? null;
+		$this->wp_head_backup       = $wp_head_hook instanceof \WP_Hook ? clone $wp_head_hook : null;
+		$this->wp_head_action_count = isset( $GLOBALS['wp_actions']['wp_head'] ) ? (int) $GLOBALS['wp_actions']['wp_head'] : null;
 
 		$theme_dir = \trailingslashit( \get_stylesheet_directory() );
 
@@ -184,6 +222,18 @@ final class ProfitShopRendererThemeTemplateTest extends TestCase {
 		$this->fixture_paths = [];
 
 		unset( $GLOBALS['ps_fixture_mode'], $GLOBALS['ps_fixture_foreign_post_id'] );
+
+		if ( $this->wp_head_backup instanceof \WP_Hook ) {
+			$GLOBALS['wp_filter']['wp_head'] = $this->wp_head_backup; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+			$this->wp_head_backup            = null;
+		}
+
+		if ( null === $this->wp_head_action_count ) {
+			unset( $GLOBALS['wp_actions']['wp_head'] );
+		} else {
+			$GLOBALS['wp_actions']['wp_head'] = $this->wp_head_action_count; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+		}
+		$this->wp_head_action_count = null;
 
 		$GLOBALS['wp_query']     = $this->globals_backup['query']; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
 		$GLOBALS['wp_the_query'] = $this->globals_backup['the_query']; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
@@ -631,6 +681,207 @@ final class ProfitShopRendererThemeTemplateTest extends TestCase {
 	}
 
 	// ====================================================================
+	//  print_seo_meta()：自訂 <title> / canonical 的內容
+	// ====================================================================
+
+	/**
+	 * 🔴 標題必須同時帶賣場名稱、夥伴名稱與站名，canonical 指向賣場公開網址
+	 *
+	 * 這一整組在本檔之前是零覆蓋——`render-shop-front.feature` 的「後置（SEO）」Rule
+	 * 掛的是 `ProfitShopShortcodeTest::test_output_contains_no_seo_meta`，
+	 * 而那條斷言的是**相反命題**（短碼路徑**不得**注入 title / canonical），
+	 * 完全沒有碰到 renderer 這一側。
+	 *
+	 * canonical 指向 `/profit-shop/{slug}/` 而不是 powershop CPT 自己的
+	 * `/powershop/{post-name}/`，這件事本身就是重點：後者是一條沒有任何程式碼
+	 * 連過去、打開只有 `post_content` 的半殘網址（見 `profit-shop.rule.md` §7），
+	 * 把它送給搜尋引擎當正規網址等於把賣場的索引導到空殼頁。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_seo_meta_prints_shop_partner_and_site_names(): void {
+		$partner_id = $this->create_partner_term( '夥伴A' );
+		$shop       = $this->make_shop_entity( [], $partner_id, '夏季賣場' );
+
+		$html = $this->capture_seo_meta( $shop );
+
+		$this->assertStringContainsString( '夏季賣場', $html, '標題應包含賣場名稱' );
+		$this->assertStringContainsString( '夥伴A', $html, '標題應包含分潤夥伴名稱' );
+		$this->assertStringContainsString(
+			(string) \get_bloginfo( 'name' ),
+			$html,
+			'標題應包含站名'
+		);
+
+		$this->assertSame( 1, \substr_count( $html, '<title' ), '應只印出一組 <title>' );
+		$this->assertSame( 1, \substr_count( $html, 'rel="canonical"' ), '應只印出一組 canonical' );
+
+		$this->assertStringContainsString(
+			\home_url( '/profit-shop/' . $shop->slug . '/' ),
+			$html,
+			'canonical 應指向賣場的公開網址 /profit-shop/{slug}/'
+		);
+		$this->assertStringNotContainsString(
+			'/powershop/',
+			$html,
+			'canonical 不得指向 powershop CPT 自己那條半殘網址'
+		);
+	}
+
+	/**
+	 * 夥伴 term 查不到時，標題退成「賣場名稱 - 站名」而不是印出空的夥伴名稱
+	 *
+	 * 夥伴被刪除是真實會發生的狀態（`PartnerTermRepository` 允許刪除夥伴），
+	 * 少了這條分支，標題會變成「夏季賣場｜ 的分潤賣場 - 站名」這種帶著孤兒
+	 * 全形分隔線的字串，而且直接進搜尋結果。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_seo_meta_falls_back_when_the_partner_term_is_missing(): void {
+		$shop = $this->make_shop_entity( [], 999999, '無夥伴賣場' );
+
+		$html = $this->capture_seo_meta( $shop );
+
+		$this->assertStringContainsString( '無夥伴賣場', $html );
+		$this->assertStringNotContainsString( '｜', $html, '夥伴不存在時不應留下孤兒的全形分隔線' );
+		$this->assertStringNotContainsString( '的分潤賣場', $html, '夥伴不存在時不應印出空的夥伴敘述' );
+		$this->assertSame( 1, \substr_count( $html, '<title' ) );
+		$this->assertSame( 1, \substr_count( $html, 'rel="canonical"' ) );
+	}
+
+	/**
+	 * 🔴 賣場名稱是站長自由輸入的欄位，印進 `<head>` 前必須跳脫
+	 *
+	 * 標題直接來自 `PUT /profit-shops/{id}` 的 `title`。沒跳脫的話，站長（或任何
+	 * 拿到後台寫入權的人）可以在每一個賣場頁的 `<head>` 內塞進可執行的標記，
+	 * 而畫面上完全看不出異常。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_seo_meta_escapes_the_shop_title(): void {
+		$shop = $this->make_shop_entity( [], 999999, '<script>alert(1)</script>惡意賣場' );
+
+		$html = $this->capture_seo_meta( $shop );
+
+		$this->assertStringNotContainsString( '<script', $html, '賣場名稱必須經過跳脫' );
+		$this->assertStringContainsString( '&lt;script&gt;', $html, '跳脫後的字面值應仍在標題內' );
+		$this->assertStringContainsString( '惡意賣場', $html, '防空斷言：標題其他部分應照常輸出' );
+	}
+
+	// ====================================================================
+	//  render_shop()：防雙 title / 雙 canonical 的兩行 remove_action
+	// ====================================================================
+
+	/**
+	 * 🔴 渲染賣場時必須拆掉 core 的 `rel_canonical` 與 `_wp_render_title_tag`
+	 *
+	 * 這兩行在本檔之前是零覆蓋：拿掉它們，賣場頁會同時出現兩組 `<title>`
+	 * 與兩條 canonical（其中一條還指向 powershop CPT 那條半殘網址），
+	 * 而頁面本身照常渲染、HTTP 200、零錯誤訊息。
+	 *
+	 * 🔴 **前置斷言不可省略**：若某天 core 不再預設掛這兩個 callback（或被
+	 *    其他外掛先拆掉了），「渲染後為 false」會在什麼都沒發生的情況下成立，
+	 *    整條測試變成假綠燈。先確認「渲染前確實掛著」才有意義。
+	 *
+	 * `add_theme_support( 'title-tag' )` 同理：`_wp_render_title_tag()` 開頭就
+	 * `if ( ! current_theme_supports( 'title-tag' ) ) return;`，沒開這個支援的話
+	 * 它就算留著也不會印任何東西——那會讓「拆掉它」這件事無從驗證。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_render_shop_removes_core_title_and_canonical_actions(): void {
+		$shop = $this->create_shop_with_product( $this->create_partner_term( '夥伴A' ) );
+
+		$this->with_title_tag_support(
+			function () use ( $shop ): void {
+				$this->assertNotFalse(
+					\has_action( 'wp_head', 'rel_canonical' ),
+					'測試前置失效：core 的 rel_canonical 應該預設掛在 wp_head 上'
+				);
+				$this->assertNotFalse(
+					\has_action( 'wp_head', '_wp_render_title_tag' ),
+					'測試前置失效：core 的 _wp_render_title_tag 應該預設掛在 wp_head 上'
+				);
+
+				$this->render_shop( $shop );
+
+				$this->assertFalse(
+					\has_action( 'wp_head', 'rel_canonical' ),
+					'core 的 rel_canonical 沒被拆掉 ⇒ 賣場頁會出現第二條 canonical'
+				);
+				$this->assertFalse(
+					\has_action( 'wp_head', '_wp_render_title_tag' ),
+					'core 的 _wp_render_title_tag 沒被拆掉 ⇒ 賣場頁會出現第二個 <title>'
+				);
+			}
+		);
+	}
+
+	/**
+	 * 🔴 端到端：實際跑一次 `wp_head()`，整份 head 只能有一組 title 與一組 canonical
+	 *
+	 * 上一條驗的是「core 的 callback 被拆掉了」，本條驗的是那件事的**實際後果**。
+	 * 兩條都要：只留上一條的話，萬一自訂注入哪天沒掛上去，會變成「零個 title」
+	 * 也照樣全綠。
+	 *
+	 * 🔴 **反事實探針是本條的關鍵**：先手動呼叫一次 `rel_canonical()` 並確認它
+	 *    在**當下這個查詢狀態**確實印得出東西（`setup_shop_post_context()` 之後
+	 *    `is_singular()` 為真、`get_queried_object_id()` 是賣場），才能證明
+	 *    「head 裡只有一條 canonical」是因為它被拆掉了，而不是因為它本來就
+	 *    在這個情境下不會輸出。少了這個探針，本條在 renderer 完全不做
+	 *    `remove_action` 的情況下也可能是綠的。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_rendered_head_has_exactly_one_title_and_one_canonical(): void {
+		$partner_id = $this->create_partner_term( '夥伴A' );
+		$shop       = $this->create_shop_with_product( $partner_id );
+
+		$this->with_title_tag_support(
+			function () use ( $shop ): void {
+				$this->render_shop( $shop );
+
+				// 反事實探針：core 的 canonical 在這個查詢狀態下**確實印得出東西**。
+				\ob_start();
+				\rel_canonical();
+				$core_canonical = (string) \ob_get_clean();
+
+				$this->assertStringContainsString(
+					'rel="canonical"',
+					$core_canonical,
+					'測試前置失效：core 的 rel_canonical 在當下查詢狀態印不出東西 ⇒ 下面「只有一條」的斷言無法證明任何事'
+				);
+
+				\ob_start();
+				\wp_head();
+				$head = (string) \ob_get_clean();
+
+				$this->assertSame(
+					1,
+					\substr_count( $head, '<title' ),
+					'整份 head 應恰有一組 <title>'
+				);
+				$this->assertSame(
+					1,
+					\substr_count( $head, 'rel="canonical"' ),
+					'整份 head 應恰有一條 canonical'
+				);
+				$this->assertStringContainsString(
+					\home_url( '/profit-shop/' . $shop->slug . '/' ),
+					$head,
+					'唯一那條 canonical 應是賣場的公開網址'
+				);
+				$this->assertStringContainsString( '夥伴A', $head, '標題應包含分潤夥伴名稱' );
+			}
+		);
+	}
+
+	// ====================================================================
 	//  Helper
 	// ====================================================================
 
@@ -712,6 +963,101 @@ final class ProfitShopRendererThemeTemplateTest extends TestCase {
 	}
 
 	/**
+	 * 擷取 `print_seo_meta()` 的輸出
+	 *
+	 * 這個 method 只讀 `$shop` 的 title / slug / partner_term_id，不碰 DB 也不碰查詢狀態，
+	 * 因此可以直接對一個純記憶體的 `ProfitShop` 呼叫。
+	 *
+	 * @param ProfitShop $shop 賣場聚合根
+	 *
+	 * @return string
+	 */
+	private function capture_seo_meta( ProfitShop $shop ): string {
+		\ob_start();
+		$this->invoke_private( 'print_seo_meta', $shop );
+
+		return (string) \ob_get_clean();
+	}
+
+	/**
+	 * 跑一次完整的 `render_shop()`（走佈景主題範本那條 early return）
+	 *
+	 * 🔴 只有「站長選了佈景主題範本」這條分支能在測試環境跑完 `render_shop()`
+	 *    而不觸發 `get_header()`——後者會把整個佈景主題 chrome 拉進輸出，
+	 *    而 wp-env 的測試環境根本沒有啟用中的佈景主題（`wp theme list` 全部 inactive），
+	 *    `get_header()` 會落到 `theme-compat` 那條 `_deprecated_file()` 路徑。
+	 *    `create_shop_with_product()` 建出來的賣場一律帶 `pageTemplate`，正好走這條。
+	 *
+	 * `go_to( '/' )` 的理由與 `render_theme_template()` 相同（見該 method 的 docblock）：
+	 * 讓 `$wp_query` 成為一個真正解析過的主查詢，否則 fixture 範本的 `the_post()`
+	 * 會炸在 `Undefined array key "fields"`。
+	 *
+	 * 輸出直接丟棄——本組測試看的是 hook 狀態與 `wp_head()` 的輸出，不是頁面本體。
+	 *
+	 * @param ProfitShop $shop 賣場聚合根（必須是 publish，避免 `nocache_headers()` 送 header）
+	 *
+	 * @return void
+	 */
+	private function render_shop( ProfitShop $shop ): void {
+		$GLOBALS['ps_fixture_mode']            = 'loop';
+		$GLOBALS['ps_fixture_foreign_post_id'] = 0;
+
+		$this->go_to( '/' );
+
+		\ob_start();
+		$this->invoke_private( 'render_shop', $shop );
+		\ob_get_clean();
+	}
+
+	/**
+	 * 在「佈景主題支援 title-tag」的前提下執行一段測試，結束後還原
+	 *
+	 * `_wp_render_title_tag()` 第一行就是 `if ( ! current_theme_supports( 'title-tag' ) ) return;`，
+	 * 沒有這個支援時它留著也不會印東西 ⇒ 「renderer 有沒有把它拆掉」變成無從驗證。
+	 *
+	 * 還原時看的是**進入前的原始狀態**，而不是無條件 `remove_theme_support()`——
+	 * 測試環境哪天換成一個本來就支援 title-tag 的佈景主題時，無條件移除會把
+	 * 那個支援吃掉並污染後續測試。
+	 *
+	 * @param callable $body 要執行的測試主體
+	 *
+	 * @return void
+	 */
+	private function with_title_tag_support( callable $body ): void {
+		$had_support = \current_theme_supports( 'title-tag' );
+
+		if ( ! $had_support ) {
+			\add_theme_support( 'title-tag' );
+		}
+
+		try {
+			$body();
+		} finally {
+			if ( ! $had_support ) {
+				\remove_theme_support( 'title-tag' );
+			}
+		}
+	}
+
+	/**
+	 * 建立一個分潤夥伴 term
+	 *
+	 * `print_seo_meta()` 是用 `get_term( $id, 'profit_partner' )` 取名稱的，
+	 * 所以 term 必須真的落在那個 taxonomy 底下。
+	 *
+	 * @param string $name 夥伴名稱
+	 *
+	 * @return int term_id
+	 */
+	private function create_partner_term( string $name ): int {
+		$term = \wp_insert_term( $name, 'profit_partner' );
+
+		$this->assertIsArray( $term, '測試前置：分潤夥伴 term 應建立成功' );
+
+		return (int) $term['term_id'];
+	}
+
+	/**
 	 * 數 `the_content` priority 20 上掛了幾個 callback
 	 *
 	 * @return int
@@ -729,22 +1075,27 @@ final class ProfitShopRendererThemeTemplateTest extends TestCase {
 	}
 
 	/**
-	 * 建一個只存在於記憶體的賣場（`resolve_theme_template()` 只讀 settings）
+	 * 建一個只存在於記憶體的賣場
 	 *
-	 * @param array<string, mixed> $settings 賣場設定
+	 * `resolve_theme_template()` 只讀 settings；`print_seo_meta()` 只讀
+	 * title / slug / partner_term_id——兩者都不需要這個賣場真的寫進 DB。
+	 *
+	 * @param array<string, mixed> $settings        賣場設定
+	 * @param int                  $partner_term_id 分潤夥伴 term ID（預設值刻意留 1，維持既有呼叫端行為不變）
+	 * @param string               $title           賣場名稱
 	 *
 	 * @return ProfitShop
 	 */
-	private function make_shop_entity( array $settings ): ProfitShop {
+	private function make_shop_entity( array $settings, int $partner_term_id = 1, string $title = '範本測試賣場' ): ProfitShop {
 		++self::$slug_seq;
 
 		return new ProfitShop(
 			id: 0,
-			title: '範本測試賣場',
+			title: $title,
 			slug: 'renderer-theme-template-' . self::$slug_seq,
 			status: 'publish',
 			mode: ShopMode::PAGE,
-			partner_term_id: 1,
+			partner_term_id: $partner_term_id,
 			rate: new ProfitRate( 10 ),
 			items: [],
 			settings: $settings
@@ -754,9 +1105,11 @@ final class ProfitShopRendererThemeTemplateTest extends TestCase {
 	/**
 	 * 建立一個真的存在於 DB、含一項商品與可識別 post_content 的賣場
 	 *
+	 * @param int $partner_term_id 分潤夥伴 term ID（預設值刻意留 1，維持既有呼叫端行為不變）
+	 *
 	 * @return ProfitShop
 	 */
-	private function create_shop_with_product(): ProfitShop {
+	private function create_shop_with_product( int $partner_term_id = 1 ): ProfitShop {
 		$product = $this->createSimpleProduct(
 			[
 				'name'          => '範本測試商品',
@@ -774,7 +1127,7 @@ final class ProfitShopRendererThemeTemplateTest extends TestCase {
 				slug: 'renderer-theme-template-shop-' . self::$slug_seq,
 				status: 'publish',
 				mode: ShopMode::PAGE,
-				partner_term_id: 1,
+				partner_term_id: $partner_term_id,
 				rate: new ProfitRate( 10 ),
 				items: [
 					new OverrideItem(
