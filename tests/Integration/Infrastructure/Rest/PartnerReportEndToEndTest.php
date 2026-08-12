@@ -331,17 +331,57 @@ final class PartnerReportEndToEndTest extends TestCase {
 	private function assert_no_canary( array $body, string $label ): void {
 		$json = (string) \wp_json_encode( $body );
 
+		// 金額用字串比對是**刻意且正確**的：CANARY_AMOUNT 依檔頭設計是一個全站唯一、
+		// 不可能巧合出現的數字，因此「這串字元出現在回應裡」等價於「B 的資料外洩了」。
 		$this->assertStringNotContainsString(
 			self::CANARY_AMOUNT,
 			$json,
 			"{$label} 的回應含有夥伴 B 的專屬金額 " . self::CANARY_AMOUNT . '（跨夥伴資料外洩）'
 		);
 
-		$this->assertStringNotContainsString(
-			(string) $this->partner_b_id,
-			(string) \wp_json_encode( $body['items'] ?? [] ),
-			"{$label} 的明細含有夥伴 B 的 term id"
+		// 🔴 但 term id **不可以**照抄上面那種寫法——它沒有 canary 的性質。
+		// partner_b_id 是 auto_increment 的普通小數字，對整個 JSON 做子字串比對時，
+		// 任何「碰巧含有這串數字」的其他欄位都會誤命中：term id 237 會被
+		// `"order_item_id":23773`（前綴）、`"order_id":2370`、金額 `"1237.00"` 全部打中。
+		// 實測 2026-08-12：order_item_id 漲到 23773 時這條無中生有地紅了，
+		// 而回應內每一筆的 partner_term_id 其實都是 A（236）。
+		// ⇒ 改為結構化比對：只看 `partner_term_id` 這個欄位的**值**。
+		$this->assertSame(
+			[],
+			$this->collect_partner_term_ids( $body['items'] ?? [], $this->partner_b_id ),
+			"{$label} 的明細含有夥伴 B（term id {$this->partner_b_id}）的紀錄"
 		);
+	}
+
+	/**
+	 * 遞迴走訪任意巢狀結構，收集所有「值等於 $needle 的 partner_term_id 欄位」
+	 *
+	 * 走整棵樹而不是只掃第一層，是為了維持原本「掃描整個 response、涵蓋逐筆斷言
+	 * 沒檢查到的角落」那道縱深防線——換成結構化比對之後仍然涵蓋巢狀欄位。
+	 *
+	 * @param mixed $data   任意結構（陣列 / 純量）
+	 * @param int   $needle 不該出現的 partner term id
+	 * @return array<int, string> 命中的路徑清單；空陣列代表乾淨
+	 */
+	private function collect_partner_term_ids( $data, int $needle, string $path = 'items' ): array {
+		if ( ! \is_array( $data ) ) {
+			return [];
+		}
+
+		$hits = [];
+
+		foreach ( $data as $key => $value ) {
+			$child = "{$path}.{$key}";
+
+			if ( 'partner_term_id' === $key && (int) $value === $needle ) {
+				$hits[] = $child;
+				continue;
+			}
+
+			$hits = \array_merge( $hits, $this->collect_partner_term_ids( $value, $needle, $child ) );
+		}
+
+		return $hits;
 	}
 
 	/**
