@@ -70,7 +70,19 @@ pnpm release:major
 
 29. **Don't** 把 Tailwind 的 `text-*`（或任何會設 `line-height` 的 utility）掛在 daisyUI 元件本身，尤其是**行為依賴 `line-height` 精確等於 `1em`** 的元件（`pc-countdown` 是已知案例）。powerhouse 的 Tailwind 是 `important: '#tw'`，utility 的 specificity 是 **(1,1,0)**；而 daisyUI 有一批**根部錨定**的宣告（例如 `:root .pc-countdown{line-height:1em}`）因為 `scope-daisyui` 的 `ROOT_ANCHORED` 守門而**刻意不被 scope**，維持 **(0,2,0)**——ID 欄位勝出，**Tailwind utility 反過來蓋掉 daisyUI**。這與 Pitfall #26 是同一套機制的**反方向**：#26 講 scope 讓 daisyUI 贏過佈景主題，本條講 scope 讓 utility 贏過 daisyUI 自己的必要宣告。⚠️ **daisyUI 官方範例會誤導你**：官方站寫的是 `class="countdown font-mono text-5xl"`（字級與元件同一個元素），在那邊 `.text-5xl` 只有 (0,1,0)、輸給 `:root .countdown`，所以能動；照抄到本專案就壞。`pc-countdown` 的實際症狀是「上下兩個數字各露一半」的錯位（`::before` 以 `top: calc(var(--value) * -1em)` 捲動，每行高度卻是 line-height，兩者不等就每格累積偏移），**沒有任何錯誤訊息**。修法：把 `font-*` / `text-*` 移到**外層 wrapper**，讓 daisyUI 的規則直接命中元件本身——**直接命中的宣告永遠優先於繼承值**，與 specificity 或 CSS 順序無關，因此是決定性的修法（不要改用 `leading-none` 之類的 utility 對打，那是同分靠順序決勝、powerhouse 調整輸出順序就會再壞一次；何況 `leading-none` 在 `front.min.css` 根本沒產出）。實作與完整推導見 `ProfitShopFrontView::countdown_unit()` 的 docblock。
 
-30. **Don't** 用 `curl` 抓賣場前台頁面來驗證改動——站台裝了 **WP Rocket**，未登入的 GET 會拿到快取版本，實測抓到的是 Phase 14 之前的 inline style 版 HTML（TD-32）。要看真實渲染結果，網址加一個 cache-buster query（`?nocache=xxx`）即可，或直接用 `agent-browser` 以登入身分開啟。⚠️ **站台網域現況**（2026-08-06 確認）：**前台網址是 `turbo.local`**（本機 hosts 內 `127.0.0.1 turbo.local`）；`local-turbo.powerhouse.tw` 是 WordPress 的 **siteurl**，只有 wp-admin 會重導過去，本機 hosts **沒有**這個網域的條目——直接對 `local-turbo.powerhouse.tw` 下 `curl` 會得到 HTTP 000，看起來像站台掛了，其實只是網域沒解析。CLAUDE.md 多處歷史驗證紀錄（Pitfall 本條、Phase 14/15/16 的驗證章節）仍記載舊網域 `local-turbo.powerhouse.tw` 當前台入口，那些是撰寫當下站台配置下的真實記錄、不是錯誤，但**現在**要對前台下指令一律用 `turbo.local`。
+30. **Don't** 用 `curl` 抓賣場前台頁面來驗證改動——站台裝了 **WP Rocket**，未登入的 GET 會拿到快取版本，實測抓到的是 Phase 14 之前的 inline style 版 HTML（TD-32）。要看真實渲染結果，網址加一個 cache-buster query（`?nocache=xxx`）即可，或直接用 `agent-browser` 以登入身分開啟（**這半段仍然成立**）。
+
+    ⚠️ **站台網域現況（2026-08-11 實測，與本條先前記載相反）：前台一律用 `https://local-turbo.powerhouse.tw`。**
+
+    | 入口 | 實測 |
+    |---|---|
+    | `http://turbo.local/` | **301 → `https://local-turbo.powerhouse.tw/`**（`X-Redirect-By: WordPress` canonical redirect） |
+    | `https://local-turbo.powerhouse.tw/` | ✅ **200** |
+    | `turbo.local` + 偽造 `Host:` header | 404（nginx server_name 不匹配） |
+
+    hosts 仍只有 `127.0.0.1 turbo.local`，但 `local-turbo.powerhouse.tw` 走**公網 DNS → Cloudflare**（`cloudflared.exe` 在跑），而 wp_options 的 `siteurl` / `home` 都是 `https://local-turbo.powerhouse.tw` ⇒ 任何 `turbo.local` 的前台請求都被 WordPress 重導走。⚠️ 本條 2026-08-06 曾記載「前台是 `turbo.local`、`local-turbo.powerhouse.tw` 解析不到」，那是撰寫當下配置的真實記錄；**這個網域關係已經反轉過一次，日後可能再變——動手前先自己打一次確認，不要直接照抄本文件的網址。**
+
+    ⚠️ **`curl` 在這台 host 加 `-s` / `-w` / `-k` 會假性失敗**：回 `code=000`、exit **43**（`CURLE_BAD_FUNCTION_ARGUMENT`）、0.26 秒就死，看起來像站台掛了。實際是 curl 8.8.0 的 **Schannel** backend 在 TLS renegotiation 時的問題（`-v` 下可見 `schannel: renegotiating SSL/TLS connection` 之後才 200）。可用寫法是 **plain curl + `-o` + `--max-time`**。
 
 31. **Don't** 動賣場前台的變體比對（`inc/assets/js/profit-shop-front.js` 的 `matchVariation()` / `findBestVariation()` / `isAllAttributesChosen()`）之前沒讀過 `profit-shop.rule.md` §12.8「變體比對」——這段決定「送哪一個 `variation_id` 進購物車」，而 **Phase 9 的變體層價格覆寫以 variation_id 為鍵**，挑錯變體不是顯示瑕疵，是**收錯錢**，而且**三道閘門沒有任何一道會發現拿錯變體**（`SingleProductPriceHook` / `CartPriceOverrideHook` 只會忠實按錯的那個變體算），全程零錯誤訊息。三條最容易被「順手簡化」掉的紀律：(1) **變體屬性值為空字串 = 「任意 (Any)」= wildcard**（`wc_get_product_variation_attributes()` 先把父商品全部變體屬性 seed 成 `''` 再覆蓋），當成「必須等於空字串」比對會讓該商品**沒有任何輸入組合能匹配**、按鈕永遠停用；(2) **「選滿」與「值比對」是兩件獨立的事**（對應官方 `add-to-cart-variation.js` 的 `chosenCount` 與 `isMatch()` 兩處），Any 屬性一樣要求使用者選出具體值，混寫成一個判斷式只是把 bug 從「按鈕永遠停用」換成「按了換頁還報錯」，且「選滿」刻意以 **DOM**（distinct `data-ps-attr-name`）為來源、**不可**改從變體 JSON 鍵集反推（兩道防線不能押在同一個假設上）；(3) 🔴 **挑選規則是「具體屬性數最多者勝」**（`findBestVariation()` 單趟掃完全部候選、取 score 最高者，score = `attributes` 中值非空字串的屬性個數），**不是**「第一個命中者勝」。**不要**為了「對齊官方 `.shift()`」「簡化程式碼」或「省一次掃描」改回命中即 `return`（不論單趟或分級多趟）——官方沒有分潤價格覆寫這一層，挑錯在官方只是顯示差異、在本專案等於**少收錢**；而全 Any 商品在任何寫法下表面上都會動，手測極易誤判「沒差」，真正壞掉的是「catch-all + 具體覆寫」這種 WooCommerce 最常見的 Any 用法，且只在特定陣列順序（`menu_order ASC, ID ASC`）下才壞。⚠️ **曾經的兩趟法（`findVariation(false) || findVariation(true)`）已作廢**：它只分「全具體」與「其餘」兩級，只要參與競爭的兩個變體**都不是全具體**就退回陣列順序決勝（**兩個屬性即可觸發**，不是舊文件寫的三個以上），實測 3 屬性隨機樣本 12.4% 挑到非最佳解，計分法為 0。**效能不是理由**——計分法不能提早 return，多數情境其實比兩趟法**慢**（真實規模差距 < 0.01 ms，最壞人造情境 2.1 ms，都遠低於一幀），選它的理由是正確率。平局（互不支配，如 `{red,''}` vs `{'',large}`）取陣列第一個，那是唯一沒有客觀正解的情況。另有兩條守門不可刪：`keys.length > 0` 是防 vacuous truth（`attributes` 為 `{}` 的空殼變體會以 score 0 混進候選），**不是**已選滿檢查；`picked === null` 是第二道 fail-closed。⚠️ 含 Any 屬性的商品加購**會換頁、沒有 toast**，那是 `hasAnyAttribute()` 的**正確**降級（`WC_AJAX::add_to_cart()` 全文不讀 `$_POST['attribute_*']`，一律自己用 `get_variation_attributes()` 反查，Any 屬性拿回空字串後被 WC 判為缺少必填屬性），不是回歸，不要把它拿掉。已知取捨與尚未修的缺口見 `specs/tech-debt.md` TD-49 / TD-50 / TD-51 / TD-53 / TD-54。
 
@@ -85,6 +97,25 @@ pnpm release:major
 37. **Don't** 以為 PHPUnit 9 的方法級 `@group` 是疊加在類別級 `@group` 之上——**方法級 `@group` 會直接取代類別級**，用於篩選的實際依據只看方法自己的 docblock。`phpunit.xml.dist` 的 `<include>` 只收 `smoke` / `happy` / `error` / `edge` / `security` 五個 group（`wordpress.rule.md` §11.5），若某個 `test_*` 方法的 docblock 只標了不在這五個之內的 group（例如 `@group hpos_compatible`），即使**同一個檔案的類別 docblock 標了 `@group security`**，該方法一樣會被**靜默跳過**——不報錯、不顯示在 skipped 清單裡，唯一的線索是「`--testdox` 列出的執行筆數」比「檔案裡 `grep -c 'public function test_'` 的方法數」少。本專案的真實案例：`WpSettlementSummaryProviderRealAggregationTest` 有兩條驗證 HPOS（High-Performance Order Storage）相容分支的測試，只標了方法級 `@group hpos_compatible`，執行數因此從應有的 27 卡在 25——**HPOS 分支從未被自動化驗證過**，直到補上 `@group happy`（與其他測試共用的 include 白名單其一）才真正跑到 27。**規則**：每個 `test_*` 方法的 docblock 都要**各自**帶上五個 include group 之一，不能只在類別層級標一次就以為全部方法都會被收。
 38. **Don't** 用 CAS（Compare-And-Swap，條件式 `$wpdb->update()`）繞過 `wc_update_order_item_meta()` 之後，就以為只清一個快取群組就夠——**它其實同時繞過了兩個快取清除**，兩個都要手動補：(1) `wp_cache_delete( $order_item_id, 'order_item_meta' )`——⚠️ **快取群組名是 `order_item_meta`，不是資料表名 `order_itemmeta`**；容易混淆是因為 WordPress metadata API 用 `{$meta_type}_meta` 當群組名（`wp-includes/meta.php:145`），而 WooCommerce order item 的 `$meta_type` 是 `order_item`（`class-wc-order-item-data-store.php:93`），組出來剛好是 `order_item_meta`——寫成資料表後綴 `order_itemmeta` 會是**靜默的 no-op**（`wp_cache_delete()` 對不存在的群組不會回報任何錯誤），症狀是「CAS 寫入成功，但同一個 request 後續透過 WC 物件層（例如 `wc_get_order_item_meta()`）讀到的仍是舊值」。(2) `WC_Cache_Helper::invalidate_cache_group( 'object_' . $order_item_id )`（`wc-order-item-functions.php:107`）——這是 `wc_update_order_item_meta()` 自己內部也會清的第二個群組，繞過官方函式就等於連這個也要自己補回來。
 39. **Don't** 在交付文件或 docblock 裡直接沿用「專案文件記載的」測試方法數字，當成驗收依據——**文件數字會過時，且過時的方式不會有任何警告**。本專案的真實案例：CLAUDE.md 記載「Phase 13：`CartPriceOverrideHookTest` 14 → 27 method」，這份文件在後續多輪安全強化（TD-62 / TD-66 / TD-67 等）中一路被引用為「該測試檔目前有 27 個方法」，但實測 `grep -c "public function test_"` 當下已經是 **50**——文件記載的 27 是 Phase 13 完工當時的快照，往後每一輪新增測試都沒有回頭更新這句話。**規則**：任何要在文件、docblock 或交付紀錄裡引用「某測試檔有幾個方法」「baseline 是多少」這類數字時，一律用 `grep -c "public function test_"` 或實際重跑一次現查，不要直接抄文件上的數字；即使抄的來源就是 CLAUDE.md 本身也一樣。
+
+40. **Don't** 用 `\wp_get_theme()->get_page_templates()` 當白名單、卻用 `\locate_template()` 去載入——**兩者的定義域不同**，交集之外的項目就是「**選得到、載不了、靜默 fallback**」：
+
+    | 函式 | 定義域 |
+    |---|---|
+    | `\wp_get_theme()->get_page_templates()` | **會套** `theme_page_templates` / `theme_{$post_type}_templates` filter ⇒ 回傳「所有**註冊**的範本名」，**包含外掛（Elementor）注入的虛擬項目** |
+    | `\locate_template()` | **只找** stylesheet_path / template_path / `wp-includes/theme-compat` 三個目錄 ⇒ **找不到 plugin 目錄下的檔案** |
+
+    實測（blocksy + Elementor）：下拉列出的 3 個選項，`locate_template()` **全部**回空字串——站長選了範本，畫面跟沒選一樣，**零錯誤訊息**。修法：白名單收斂成「`locate_template()` 找得到的才列」，收進 `ThemeTemplateWhitelist` 當**單一真相來源**（列得出來的與載得起來的必須是同一組）。
+
+41. **Don't** 在自訂渲染流程裡只設全域 `$post` 就以為 loop 狀態齊了——佈景主題範本的契約是「跑**主查詢**的 loop」，少設 `$wp_query->posts` / `post_count` / `current_post`，`WP_Query::the_post()` 就會把全域 `$post` **依序覆寫成主查詢的文章**。本專案實測：賣場的 rewrite 規則（`RewriteRules.php:89`）只塞 `profit_shop_slug`，**主查詢從來不是那篇賣場**——`$wp_query->posts = [738, 1]`、`post_count = 2`、`is_singular = false`。探針（掛 `the_content` prio 19）：
+
+    ```
+    PSPROBE_BEFORE get_the_ID=1932 globalpost=1932 wpq_post=738 current_post=-1 post_count=2 is_singular=false posts_ids=738,1
+    PSPROBE_IN     get_the_ID=738  globalpost=738  current_post=0
+    PSPROBE_IN     get_the_ID=1    globalpost=1    current_post=1
+    ```
+
+    後果：`render_via_theme_template()` 的 `get_the_ID() !== $shop_id` 閘門**兩次都成立** ⇒ 商品 grid 一次都沒附加 ⇒ **賣場網址改印兩篇不相干文章，HTTP 200、零錯誤訊息**。三組對照（唯一變因是範本內有沒有 loop，數字依序是前台 HTML 內 `.ps-profit-shop-front` / `data-ps-product-id` / `data-ps-modal-for` 的出現次數）：baseline `1/7/6`、**有 loop `0/0/0`**、無 loop `1/7/6`。⇒ `setup_shop_post_context()` 這類自訂渲染流程必須把主查詢**整組**改寫成那一篇（`posts` / `post_count` / `current_post` + `queried_object`），不能只設全域 `$post`。
 
 ## Profit Shop Domain（v1 開發中）
 
@@ -530,11 +561,27 @@ Phase 10 的前台購物車是「寫入走 admin-ajax（`FrontAjax`）、讀取�
 
 A/B/C 三組對照同時證明：`$_POST['profit_shop_id']` 確實被 `AddToCartHook`（priority 5）讀到、三道閘門對偽造 shop_id 有效、`CartPriceOverrideHook`（priority 999）驗章後 `set_price` 正確、`CartItemMetaDisplay` 分潤標記正常。**退回原生表單後不需要任何 `$_POST` 橋接**這個推論在真實環境成立。
 
-⚠ 驗證過程踩到兩個**與本次改動無關**的環境陷阱，記錄下來避免重踩：(1) 站台裝了 **WP Rocket**，`/cart/` 頁與賣場頁的 GET 都會拿到快取版本，直接用 HTTP client 讀 `/cart/` 會看到「購物車是空的」的假象——要查真實購物車狀態必須走 `POST /?wc-ajax=get_refreshed_fragments`（見 TD-32）；(2) 系統 PATH 上的 `php` 不是 Local by Flywheel 的 PHP，`require wp-load.php` 會 Database Error，CLI 診斷腳本必須用 Local 自己的 PHP。⚠️ **2026-08-06 補充（Phase 17 驗證時再次踩到）：換對 PHP 仍不夠**——即使改用 Local 自己的 PHP 執行，`require wp-load.php` **仍會** `Error establishing a database connection`，因為 Local 的 MySQL 走非標準 port，一般 CLI 環境變數取不到那個環境。要直接對 DB 做診斷，改用 Local 內建的 mysql client 直連（範例路徑，實測可用；port 需用 `Get-NetTCPConnection` 查當下 `mysqld` 進程取得，非固定值）：
-    ```
-    C:\Users\User\AppData\Roaming\Local\lightning-services\mysql-8.4.0\bin\win64\bin\mysql.exe -h 127.0.0.1 -P 10085 -u root -proot local
-    ```
-    另有一個連帶陷阱：若堅持用 PHP CLI 走 `wp-load.php`，PHP 版本必須與站台 `php.ini` 完全相符（實測用 8.2.29 對一個 `php.ini` 是 8.3.23 的站台，模組 API 不匹配、擴充整批載入失敗）——「Local 自己的 PHP」不是指任何一個 Local 安裝的 PHP，是指**該站台當下綁定的那一個版本**。
+⚠ 驗證過程踩到兩個**與本次改動無關**的環境陷阱，記錄下來避免重踩：(1) 站台裝了 **WP Rocket**，`/cart/` 頁與賣場頁的 GET 都會拿到快取版本，直接用 HTTP client 讀 `/cart/` 會看到「購物車是空的」的假象——要查真實購物車狀態必須走 `POST /?wc-ajax=get_refreshed_fragments`（見 TD-32）；(2) 系統 PATH 上的 `php` 不是 Local by Flywheel 的 PHP，`require wp-load.php` 會 Database Error，CLI 診斷腳本必須用 Local 自己的 PHP。
+
+⚠️ **2026-08-06 曾記載「換對 PHP 仍連不上 DB、只能改用 mysql client 直連」——2026-08-11 已找到根因並破解，`wp-cli` 完全可用。** 根因是 `wp-config.php` 的 `DB_HOST` 是 `'localhost'`（**不帶 port**），CLI 因此去試 3306；而 Local 的 `conf/php/` 底下只有 `.hbs` 樣板、**不是真的 php.ini**。用 `-n`（忽略 php.ini）+ 顯式載入 extension + `mysqli.default_port` 就通：
+
+```bash
+PHPDIR="/c/Users/User/AppData/Roaming/Local/lightning-services/php-8.2.27+1/bin/win64"
+"$PHPDIR/php.exe" -n \
+  -d extension_dir="C:/Users/User/AppData/Roaming/Local/lightning-services/php-8.2.27+1/bin/win64/ext" \
+  -d extension=mysqli -d extension=mbstring -d extension=openssl -d extension=curl \
+  -d mysqli.default_port=10085 -d mysqli.default_host=127.0.0.1 \
+  "C:/Users/User/AppData/Roaming/Composer/vendor/wp-cli/wp-cli/php/boot-fs.php" \
+  --path="C:/Users/User/LocalSites/turbo/app/public" eval 'CODE'
+```
+
+兩個值都要**現查、非固定**：**PHP 版本必須與站台相符**（讀回應 header `X-Powered-By: PHP/8.2.27` ⇒ 用 `php-8.2.27+1`；版本不符會模組 API 不匹配、擴充整批載入失敗——「Local 自己的 PHP」指的是**該站台當下綁定的那一個版本**，不是任何一個 Local 安裝的 PHP）、**port 查當下的 `mysqld` 進程**（`Get-NetTCPConnection`）。
+
+要直接下 SQL 時，Local 內建的 mysql client 仍然可用：
+```
+C:\Users\User\AppData\Roaming\Local\lightning-services\mysql-8.4.0\bin\win64\bin\mysql.exe -h 127.0.0.1 -P 10085 -u root -proot local
+```
+⚠️ 它 stderr 那句 `Using a password on the command line interface can be insecure` **不可用 `| grep -v "Using a password"` 過濾**——中文欄位會讓 `grep` 判定輸出為 binary 而**吞掉整段結果**。用 `2>/dev/null`。
 
 ### Phase 13（購物車顯示賣場覆寫後的原價 / 特價）已完工
 
