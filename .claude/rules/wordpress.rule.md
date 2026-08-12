@@ -419,14 +419,27 @@ WordPress 6.9 的 `wp-includes/abilities-api.php` 已內建 `wp_register_ability
 
 ⚠ 用 `./tests/e2e/node_modules/.bin/wp-env`，**不要**用 `npx wp-env`（會抓到已棄用的 shim）。`wp-env` 自身參數（`run` / `--env-cwd`）與容器內要執行的指令之間要用 `--` 分隔。
 
-### 11.4 CI 目前只跑 `integration` testsuite，`unit` testsuite 從未執行
+### 11.4 CI 跑 PHPUnit 全部 suite + vitest；**e2e 仍未納入**
+
+> ⚠️ 本節在 2026-08-12 前寫的是「CI 只跑 integration、`unit` testsuite 從未執行」——那段**已經不成立**（TD-4 已修）。這裡留下這句話是因為專案有多處引用過舊版敘述，看到那個說法時請以本節為準。
 
 ```bash
 grep -rn "testsuite" .github/workflows/*.yml
-# pipe.yml:681 / :722 / :762 三處全是 --testsuite integration
+# 只剩 3 行說明用註解，實際指令已無任何 --testsuite 指定
 ```
 
-任何只寫在 `tests/Unit/**` 的新測試，**CI 不會執行**，只能靠本機 / wp-env 容器手動跑（見 11.3）驗證。新增 Unit 測試時不要誤以為 CI 綠燈 = 該測試有跑。此項已登記為技術債，見 `specs/tech-debt.md`。
+CI 的三個測試 cycle 現在各跑兩件事：
+
+| 跑什麼 | 指令 | 涵蓋 |
+|---|---|---|
+| PHPUnit | **不指定 `--testsuite`** ⇒ `phpunit.xml.dist` 宣告的全部 suite | `tests/Unit/**` + `tests/Integration/**`（實測 1017 筆） |
+| vitest | `pnpm test:js` | `tests/js/**`（實測 255 筆 / 17 檔） |
+
+兩者的 exit code 以 OR 合併，**vitest 失敗一樣會觸發既有的 Claude 自動修復迴圈**，不是二等公民。
+
+🔴 **不要把 PHPUnit 改回 `--testsuite integration`，也不要寫成 `--testsuite unit,integration`**。列舉 suite 名稱會讓日後新增的第三個 suite 再次被**靜默漏跑**——而「靜默漏跑」正是 TD-4 這個缺口本身（從 Phase 7 潛伏到 2026-08-12）。不指定才會自動納入。
+
+⚠️ **e2e 仍然完全不在 CI**：`tests/e2e/` 有 25 個 spec / 170 tests（實測 `npx playwright test --list`），但全 workflow **零** `playwright test` 呼叫（`pipe.yml` 只有 `npx playwright install`）。其中包含 BUG-A 三層鎖的最外層（`profit-shop-items.spec.ts` 的扁平契約回歸鎖），該層失效不會有任何訊號。見 `specs/tech-debt.md` TD-89。
 
 ### 11.5 `@group` 陷阱：每個 `test_*` method 都要各自標 group，class-level 標籤不夠
 
@@ -437,3 +450,28 @@ grep -rn "testsuite" .github/workflows/*.yml
 **規則**：每個 `test_*` method 的 docblock 都要**各自**帶上 `smoke` / `happy` / `error` / `edge` / `security` 其中至少一個 group，不能只靠 class-level 標籤。
 
 **驗證方式**：跑 `--filter XxxTest --testdox` 列出的筆數，必須等於該檔案內 `test_` 開頭的方法數——數字對不上就代表有 method 被漏標、靜默跳過了。
+
+### 11.6 🔴 同一時間只能有一個 PHPUnit process：多 agent 協作的排程紀律
+
+`specs/tech-debt.md` **TD-71** 記載了「兩個 process 同時跑會污染 DB」這個現象與判讀紀律。本節補的是**排程層面**——TD-71 沒有涵蓋的那個角度：**這種衝突最常見的來源不是巧合，是 orchestrator 自己安排出來的**。
+
+2026-08-12 實測，同一份程式碼、同一組測試：
+
+| 情境 | 結果 |
+|---|---|
+| 與另一個 agent 併行跑 | `Tests: 1036, Errors: 3, Failures: 11, Skipped: 1` |
+| 獨占跑 | `Tests: 1036, Assertions: 3757, Skipped: 1`（**0F 0E**） |
+
+唯一差異是有沒有第二個 process。當時 `inc/` 的 `git diff` 完全空白（零 production 改動）。
+
+**成因**：orchestrator 一邊要跑全套驗收，一邊派 sub-agent 去「跑完整 integration suite 驗證新測試」——兩件事都對，湊在一起就撞。wp-env 只有一個 MySQL 容器，PHPUnit 沒有跨 process 隔離機制。
+
+🔴 **這個症狀特別惡毒**：它**完全長得像「某人剛改壞了 11 個東西」**。若不先做鑑別實驗就開始「修」，每一次修都會在正確的程式碼上留下傷口。
+
+**紀律（三條，缺一不可）**：
+
+1. **派出「會跑 PHPUnit」的 sub-agent 時，orchestrator 自己不要同時跑**——要驗收就先等它回報完成。反過來也一樣：自己在跑全套時，不要派會跑測試的任務出去。
+2. **拿到異常紅燈時，第一個動作是鑑別、不是修**。最快的鑑別實驗是**把失敗的測試檔單獨跑**：單獨綠 ⇒ 是污染或 order-dependent，不是回歸（另見 TD-36 / TD-70：那兩條在**單一 process** 內就會發生，判讀時要與 TD-71 分開）。
+3. **看到 `Record has changed since last read in table 'wp_options'` 就直接當成併發訊號**。它出現在 `clean_transients` 的 `DELETE FROM wp_options WHERE option_name LIKE '_transient_%'` 上，是 MySQL 層的併發衝突，與被測程式碼無關。
+
+⚠️ 連帶：多 agent 並行時連「總共有幾個測試」都不是穩定值（另一個 agent 可能正在新增測試檔），`grep -c` 與實跑對不上不必然是 `@group` 漏標——先確認沒有人在寫檔。見 TD-93。
