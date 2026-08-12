@@ -21,6 +21,25 @@ components:
       in: header
       name: X-WP-Nonce
       description: WordPress REST API Nonce，搭配 Cookie 認證使用。
+    PartnerToken:
+      type: apiKey
+      in: header
+      name: X-Partner-Token
+      description: |
+        Partner token（spec §4.5 / §6.3）。優先級鏈（高 → 低）：
+          1. `X-Partner-Token: {token}`
+          2. `Authorization: Bearer {token}`
+          3. Cookie `profit_partner_token`
+        三選一即可，三條路徑全部由同一個 partner_token_permission callback 解析。
+        驗證後 partner_term_id 鎖死於 caller，永不從 query string 讀。
+    PartnerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: PartnerToken
+    PartnerCookie:
+      type: apiKey
+      in: cookie
+      name: profit_partner_token
 
   schemas:
 
@@ -751,6 +770,991 @@ components:
             status:
               type: integer
               description: HTTP 狀態碼
+
+    # ────────────────────────────
+    # Profit Shop schemas
+    # ────────────────────────────
+
+    ProfitShopExceptionError:
+      type: object
+      description: |
+        Profit Shop Domain Exception 對映後的錯誤回應（由 ExceptionMapper 產出）。
+
+        對映表（spec §7.1 / §7.2 / §7.3）：
+          - 404 not_found: ProfitShopNotFound / PartnerNotFound / ProductNotFound
+          - 404 product_not_in_shop: ProductNotInShop
+          - 400 validation_failed: InvalidPriceOverride / InvalidProfitRate / InvalidPartnerSlug / InvalidVariation / InvalidShopMode + fallback DomainException
+          - 401 unauthorized: InvalidCredentials
+          - 403 forbidden: Forbidden
+          - 409 slug_conflict: SlugConflictException（含 conflicts 陣列）
+          - 409 partner_in_use: PartnerStillInUseException
+          - 409 product_already_in_shop: ProductAlreadyInShop
+          - 422 invalid_state_transition: InvalidStatusTransition
+          - 422 weak_password: WeakPassword（含 data.reasons[]，Phase 6-A1）
+          - 422 legacy_unimportable: LegacyShopNotImportable（含 reason）
+          - 429 rate_limited: TooManyAttempts / RateLimitExceeded（含 retry_after + Retry-After header）
+          - 500 internal_error: PersistenceFailure / 其它 Throwable（含 error_id；生產環境 message 遮蔽）
+      properties:
+        code:
+          type: string
+          enum:
+            - not_found
+            - product_not_in_shop
+            - validation_failed
+            - unauthorized
+            - forbidden
+            - slug_conflict
+            - partner_in_use
+            - product_already_in_shop
+            - invalid_state_transition
+            - weak_password
+            - legacy_unimportable
+            - rate_limited
+            - internal_error
+        message:
+          type: string
+        conflicts:
+          type: array
+          description: code=slug_conflict 時附加，描述每筆衝突來源
+          items:
+            $ref: '#/components/schemas/SlugConflict'
+        reason:
+          type: string
+          description: code=legacy_unimportable 時附加（reviewer L-1 / Phase 3-B observation）
+        retry_after:
+          type: integer
+          description: code=rate_limited 時附加，秒數（同步 Retry-After header）
+        error_id:
+          type: string
+          description: code=internal_error 時附加，格式 PS-{ts}-{rand}
+        data:
+          type: object
+          description: |
+            code=weak_password 時附加（Phase 6-A1）。
+            `data.reasons` 為違反的密碼複雜度規則代碼陣列（如 `['too_short', 'missing_letter', 'missing_digit']`），
+            前端據以做 i18n 並引導使用者修正（與 SlugConflictException 攜帶 conflicts 同模式）。
+          properties:
+            reasons:
+              type: array
+              items:
+                type: string
+                enum:
+                  - too_short
+                  - missing_letter
+                  - missing_digit
+      required:
+        - code
+        - message
+
+    SlugConflict:
+      type: object
+      description: |
+        Slug 衝突來源（spec §6.11）。BUG-1 修補後 conflict_kind 使用 enum 鎖死，
+        且補上「既有 powershop CPT slug」與「既有 profit_partner term slug」兩類。
+      properties:
+        conflict_kind:
+          type: string
+          description: 衝突類型 machine code（與 SlugConflictDetector / CreatePartner 共用枚舉）
+          enum:
+            - wp_reserved      # WordPress 保留字
+            - wc_page          # WooCommerce 核心 page slug
+            - cpt              # 其他已註冊 CPT 的 rewrite slug（不含自家 powershop）
+            - page             # 既有 page post_name
+            - rewrite          # 自訂 rewrite rule prefix
+            - powershop        # 既有 powershop CPT slug（BUG-1 補洞，spec §6.11 第 6 類）
+            - profit_partner   # 既有 profit_partner term slug（BUG-1 補洞 + CreatePartner 統一）
+        conflicting_slug:
+          type: string
+        conflicting_id:
+          type: integer
+          nullable: true
+        conflicting_label:
+          type: string
+          description: 人類可讀的衝突資源名稱
+      required:
+        - conflict_kind
+        - conflicting_slug
+        - conflicting_label
+
+    PriceOverride:
+      type: object
+      description: |
+        單一價格覆寫（對應 Domain\ValueObject\PriceOverride）。
+        三個欄位皆為 nullable string，null 表示「不覆寫該欄位、沿用商品原價」。
+        非 null 值必須為合法非負十進位字串；
+        若 sale_price 與 regular_price 皆非 null，sale_price 必須 <= regular_price
+        （違反時 ExceptionMapper 回 400 validation_failed）。
+      properties:
+        regular_price:
+          type: string
+          nullable: true
+          description: 原價覆寫
+        sale_price:
+          type: string
+          nullable: true
+          description: 特價覆寫
+        signup_fee:
+          type: string
+          nullable: true
+          description: 訂閱型商品註冊費覆寫
+      required:
+        - regular_price
+        - sale_price
+        - signup_fee
+
+    OverrideItemInput:
+      type: object
+      description: |
+        賣場商品覆寫項目（input 形式）。
+
+        ⚠️ BUG-A 修補（2026-07-29）：本 schema 原先定義為扁平的
+        `{ product_id, variation_id, price_override: integer, inflated_count }`，
+        與後端 Domain\Entity\OverrideItem::to_array() 的巢狀形狀不符。
+        ProfitShopHydrator::build_override_item() 只讀 `override` / `variations`，
+        導致前端送出的 `price_override` / `variation_id` 於儲存時被靜默丟棄。
+        現已對齊 Domain 形狀，扁平欄位不再使用。
+      properties:
+        product_id:
+          type: integer
+        inflated_count:
+          type: integer
+          default: 0
+          description: 浮報數量（fake count，不影響庫存）
+        override:
+          allOf:
+            - $ref: '#/components/schemas/PriceOverride'
+          description: 商品自身的價格覆寫
+        variations:
+          type: object
+          description: |
+            variation_id => { override, inflated_count } 對照表。
+            key 為 variation ID 字串。
+            variation 必須屬於同筆的 product_id，否則 ItemValidator 拋 InvalidVariation。
+
+            Phase 9（2026-07-30）起 value 物件新增 `inflated_count`，讓可變商品能逐變體
+            設定灌水購買人數；賣場編輯頁的「賣場商品」表格可展開 variable /
+            variable-subscription 商品逐一編輯。
+            向後相容：Phase 9 之前寫入的資料無此鍵，
+            CptProfitShopRepository::build_override_item() 以 `?? 0` 接住，不需 migration。
+          additionalProperties:
+            type: object
+            properties:
+              override:
+                $ref: '#/components/schemas/PriceOverride'
+              inflated_count:
+                type: integer
+                default: 0
+                minimum: 0
+                description: |
+                  該變體的灌水購買人數（fake count，不影響庫存）。
+                  缺鍵視為 0；負數由 InflatedCount VO sanitize 為 0。
+                  ⚠️ 目前賣場前台只渲染父商品卡片，變體層 inflated_count
+                  尚無前台顯示位置（見 specs/tech-debt.md TD-15）。
+      required:
+        - product_id
+
+    OverrideItemOutput:
+      allOf:
+        - $ref: '#/components/schemas/OverrideItemInput'
+        - type: object
+          description: |
+            ⚠️ 不含 sku / name / image。
+            商品名稱與 SKU 屬「商品當下狀態」而非賣場設定，
+            夾帶會造成商品改名後賣場顯示舊名的 stale 問題，
+            且違反 Domain 純度（Application 層為 UI 便利去 enrich WC 資料）。
+            前端改以 wc-rest `GET /wc/v3/products?include=…` 批次補齊，
+            見 specs/features/profit-shop/enrich-shop-item-display.feature。
+
+    ProfitShopInput:
+      type: object
+      description: |
+        分潤賣場 Admin 寫入 DTO（建立 / 更新）。
+        對應 PHP class `J7\PowerShop\Domains\ProfitShop\Application\DTO\ProfitShopInput`。
+      properties:
+        id:
+          type: integer
+          nullable: true
+          description: 建立時為 null
+        title:
+          type: string
+        slug:
+          type: string
+          description: 將經 SlugConflictDetector 5 類衝突檢查（spec §6.11）
+        status:
+          type: string
+          enum:
+            - publish
+            - draft
+            - trash
+          default: draft
+        mode:
+          type: string
+          enum:
+            - page
+            - shortcode
+          default: page
+        partner_term_id:
+          type: integer
+          description: 對應 profit_partner term ID
+        rate:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 分潤比例（%）
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverrideItemInput'
+        settings:
+          type: object
+          additionalProperties: true
+      required:
+        - title
+        - slug
+        - partner_term_id
+        - rate
+
+    ProfitShopOutput:
+      type: object
+      description: 分潤賣場讀取 DTO
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        slug:
+          type: string
+        status:
+          type: string
+          enum:
+            - publish
+            - draft
+            - trash
+        mode:
+          type: string
+          enum:
+            - page
+            - shortcode
+        partner_term_id:
+          type: integer
+        rate:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverrideItemOutput'
+        settings:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          description: Y-m-d H:i:s
+        updated_at:
+          type: string
+          description: Y-m-d H:i:s
+      required:
+        - id
+        - title
+        - slug
+        - status
+        - mode
+        - partner_term_id
+        - rate
+        - items
+        - settings
+        - created_at
+        - updated_at
+
+    PartnerInput:
+      type: object
+      description: |
+        Partner 寫入 DTO（建立 / 更新）。
+        **@internal**：含明文密碼，僅出現於 request；**禁止**回傳於 response（
+        PartnerInput::to_array() 不可序列化到 REST response，對外請使用 PartnerOutput）。
+      properties:
+        id:
+          type: integer
+          nullable: true
+          description: 建立時為 null
+        name:
+          type: string
+        slug:
+          type: string
+          description: Partner slug（唯一）
+        contact_email:
+          type: string
+          format: email
+          nullable: true
+        password:
+          type: string
+          format: password
+          nullable: true
+          description: 明文密碼（null 代表不變更）；server 端會以 wp_hash_password 雜湊後存 termmeta
+        image_id:
+          type: integer
+          nullable: true
+          description: |
+            夥伴圖片 attachment ID，存於 termmeta `_partner_image_id`。
+            `null` / `0` / 負數一律正規化為 null，並**刪除**既有 termmeta（= 移除夥伴圖片）。
+            **只接受 image_id**，不接受 image_url——URL 是唯讀衍生欄位（見 PartnerOutput.image_url）。
+      required:
+        - name
+        - slug
+
+    PartnerOutput:
+      type: object
+      description: |
+        Partner 讀取 DTO。
+
+        ⚠️ **含明文密碼欄位（`password`），僅供 admin-only endpoint 使用。**
+        絕不可用於任何 partner-facing endpoint（`GET /partner-auth/me` 刻意自行列舉欄位輸出）。
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        contact_email:
+          type: string
+          format: email
+          nullable: true
+        created_at:
+          type: string
+          description: Y-m-d H:i:s
+        image_id:
+          type: integer
+          nullable: true
+          description: 夥伴圖片 attachment ID；未設定時為 null
+        image_url:
+          type: string
+          format: uri
+          nullable: true
+          description: |
+            夥伴圖片 URL（`thumbnail` size），由 image_id 於讀取時即時解析的**唯讀衍生欄位**。
+            attachment 已被刪除時為 null 但 image_id 仍保留（孤兒 ID 不自動清除），
+            因此「image_id 非 null 但 image_url 為 null」是合法狀態，UI 需退回預設頭像。
+        report_url:
+          type: string
+          format: uri
+          nullable: true
+          description: |
+            夥伴報表頁完整網址（`/profit-report/{partner-slug}/`），
+            由 slug 加上 report 前綴（`RewriteRules::get_report_slug()`）
+            於讀取時即時組出的**唯讀衍生欄位**，不持久化、PartnerInput 也不接受它。
+            前綴為固定常數（站長無法修改），但前端仍**不可**自行拼接網址：
+            組成規則的真相來源只有 PHP 端，複製一份到前端會在日後前綴變動時
+            安靜地連到 404。一律使用本欄位。
+        password:
+          type: string
+          nullable: true
+          description: |
+            夥伴報表登入密碼的**明文**，供站長在後台查看 / 複製後轉交夥伴（admin-only）。
+
+            後端除了不可逆的 `wp_hash_password` 雜湊（登入驗證的唯一依據）之外，
+            另存一份明文於 `_partner_password_plain` termmeta。這是站長明確要求的取捨：
+            「複製密碼」在只存雜湊的前提下技術上不可能。
+
+            `null` 代表該夥伴建立於此功能上線之前（DB 只有雜湊、無明文可還原），
+            這是合法狀態；重設一次密碼後即補上。UI 需據實顯示「無法顯示」而非空白，
+            否則站長會誤以為密碼是空的。
+      required:
+        - id
+        - name
+        - slug
+        - created_at
+
+    # SettingsDto 已整組移除（連同 GET/PUT/POST /power-shop/profit-settings 三個 endpoint）。
+    # 它剩下的兩個欄位都是「有消費點，但不該讓站長改」：
+    #   - report_slug：一改就讓所有已發給 partner 的報表網址失效
+    #   - rewrite_slug：控制的 /{slug}/{post-name}/ 沒有任何程式碼連過去，
+    #     打開只有佈景主題 single + post_content（商品 grid 只在 ProfitShopRenderer
+    #     走 profit_shop_slug query var 時才渲染）
+    # 兩者現為 CptRegistrar::DEFAULT_REWRITE_SLUG / RewriteRules::DEFAULT_REPORT_SLUG 固定常數。
+    # wp_options 殘留的 power_shop_profit_settings 成孤兒、無人讀寫，不需要 migration。
+
+    LegacyShopRef:
+      type: object
+      description: 可遷入的 legacy 一頁商店參照（profit-migration/legacy-shops 列表項）
+      properties:
+        legacy_id:
+          type: integer
+        title:
+          type: string
+        slug:
+          type: string
+        importable:
+          type: boolean
+          description: false 時 reason 會說明原因
+
+    PartnerLoginInput:
+      type: object
+      description: Partner 登入請求（spec §6.3 / §7）
+      properties:
+        slug:
+          type: string
+        password:
+          type: string
+          format: password
+      required:
+        - slug
+        - password
+
+    PartnerLoginOutput:
+      type: object
+      description: |
+        Partner 登入回應。
+        **不裹** `{code, data}`（spec §4.4，partner endpoint 慣例差異）。
+        `expires_at` 為 unix timestamp 字串化（前端 parseInt 即得秒數）。
+      properties:
+        token:
+          type: string
+          description: Partner token；後續 request 透過 X-Partner-Token / Bearer / Cookie 任一帶入
+        expires_at:
+          type: string
+          description: unix timestamp 字串化（如 "1746623200"）
+        partner_id:
+          type: integer
+        partner_name:
+          type: string
+      required:
+        - token
+        - expires_at
+        - partner_id
+        - partner_name
+
+    PartnerMeOutput:
+      type: object
+      description: Partner /me 端點回應（裸 payload，不裹 code/data）
+      properties:
+        partner_id:
+          type: integer
+        partner_name:
+          type: string
+        partner_slug:
+          type: string
+        contact_email:
+          type: string
+          format: email
+          nullable: true
+      required:
+        - partner_id
+        - partner_name
+        - partner_slug
+
+    KpiOutput:
+      type: object
+      description: |
+        Partner KPI 報表（spec §6 / §7）。
+        所有金額欄位採字串保存以保留小數精度。
+      properties:
+        total_sales:
+          type: string
+          description: 總銷售額（如 "12345.67"）
+        profit_pending:
+          type: string
+          description: 待結算分潤
+        profit_paid:
+          type: string
+          description: 已結算分潤
+        profit_refunded:
+          type: string
+          description: 已退款分潤
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+      required:
+        - total_sales
+        - profit_pending
+        - profit_paid
+        - profit_refunded
+        - period_start
+        - period_end
+
+    TrendPoint:
+      type: object
+      description: 趨勢報表單一時間點
+      properties:
+        date:
+          type: string
+          format: date
+        profit:
+          type: string
+          description: 該時間點分潤金額（字串保精度）
+        sales:
+          type: string
+          description: 該時間點銷售金額（字串保精度）
+
+    TrendOutput:
+      type: object
+      description: Partner 趨勢報表（裸 payload）
+      properties:
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrendPoint'
+      required:
+        - series
+
+    SettlementListItem:
+      type: object
+      description: Settlement 結算記錄單筆
+      properties:
+        order_id:
+          type: integer
+        order_item_id:
+          type: integer
+        product_id:
+          type: integer
+        shop_id:
+          type: integer
+        sale_amount:
+          type: string
+        profit_amount:
+          type: string
+        status:
+          type: string
+          enum:
+            - pending
+            - paid
+            - refunded
+        created_at:
+          type: string
+          format: date-time
+
+    SettlementListOutput:
+      type: object
+      description: Partner 結算列表（裸 payload，含分頁中介資料）
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SettlementListItem'
+        total:
+          type: integer
+        page:
+          type: integer
+          minimum: 1
+        per_page:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - per_page
+
+    SlugValidationOutput:
+      type: object
+      description: |
+        Slug 驗證結果（GET /profit-shops/validate-slug）。
+        available=true 時 conflicts 為空陣列；available=false 時列出所有衝突來源。
+      properties:
+        slug:
+          type: string
+        available:
+          type: boolean
+        conflicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SlugConflict'
+      required:
+        - slug
+        - available
+        - conflicts
+
+    RegeneratePasswordOutput:
+      type: object
+      description: |
+        重新產生 Partner 密碼回應（裸 payload）。
+        Response 強制 `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`，
+        防範密碼明文被 proxy / browser 快取。
+      properties:
+        partner_id:
+          type: integer
+        password:
+          type: string
+          description: 新密碼明文（12 字元 wp_generate_password；前端必須立即顯示後丟棄）
+      required:
+        - partner_id
+        - password
+
+    LogoutOutput:
+      type: object
+      description: 登出回應（裸 payload，idempotent）
+      properties:
+        logged_out:
+          type: boolean
+      required:
+        - logged_out
+
+    ChangePasswordRequest:
+      type: object
+      description: |
+        Partner 自助修密碼請求 body（Phase 6-A1）。
+
+        - `current_password`：當前明文密碼（**不過 sanitize_text_field**，保留字面值）
+        - `new_password`：新明文密碼（**不過 sanitize_text_field**；
+          後端用 `PartnerPassword` ValueObject 驗證複雜度，違反拋 WeakPassword → 422 weak_password）
+
+        partner_term_id 鎖死於 token，**不出現**在此 body（永不接受 query / body 注入）。
+      properties:
+        current_password:
+          type: string
+          description: 當前明文密碼
+          example: 'Old1234ABC'
+        new_password:
+          type: string
+          description: 新明文密碼（複雜度規則：mb_strlen UTF-8 ≥ 8 + ≥ 1 英文 + ≥ 1 數字）
+          example: 'NewSecret123'
+      required:
+        - current_password
+        - new_password
+
+    ChangePasswordResponse:
+      type: object
+      description: |
+        Partner 自助修密碼成功回應（裸 payload，Phase 6-A1）。
+
+        永不含密碼 / hash / token；可安全序列化 / 可進 client cache（即使本 endpoint 響應強制 no-store）。
+        前端可選擇用 `password_changed_at` 顯示「上次改密時間」；
+        後端用同值寫入 termmeta `_partner_password_changed_at`，作為
+        `PartnerTokenStore::verify` 比對「token 簽發時間 <= password_changed_at → 視為已撤銷」的依據
+        （reviewer M-1：嚴格大於才通過，閉合同秒 race window）。
+      properties:
+        success:
+          type: boolean
+          description: 是否成功（目前 happy path 永遠 true，保留欄位以便未來擴充 partial success）
+          example: true
+        password_changed_at:
+          type: integer
+          description: 變更後的 password_changed_at（unix timestamp）
+          example: 1715000000
+      required:
+        - success
+        - password_changed_at
+
+    # ──────────────────────────── Settlements（後台結算頁，spec §3.5 / §4.3）
+
+    SettlementFilterInput:
+      type: object
+      description: |
+        後台結算查詢的過濾條件（spec §4.3）。GET 端點走 query string，
+        POST /export 走 body。所有 ID 欄位會被轉成正整數並去重；
+        **不在白名單內的 status 一律回 400 validation_failed，不會被靜默丟棄**
+        （靜默丟棄會讓過濾條件退化成「不過濾」，站長會誤讀成篩選結果）。
+
+        單數與複數鍵名皆可（`partner_id` / `partner_ids` / `partner_term_id` /
+        `partner_term_ids`），同時出現時取聯集；字串值以逗號分隔。
+      properties:
+        partner_term_ids:
+          type: array
+          items:
+            type: integer
+          description: 分潤夥伴 term ID 過濾（空 = 不限）
+        shop_ids:
+          type: array
+          items:
+            type: integer
+          description: 賣場 ID 過濾（空 = 不限）
+        statuses:
+          type: array
+          items:
+            type: string
+            enum: [pending, paid, refunded, cancelled]
+          description: 結算狀態過濾（空 = 不限）
+        date_start:
+          type: integer
+          nullable: true
+          description: 訂單建立起始時間（unix timestamp，null = 不限）
+        date_end:
+          type: integer
+          nullable: true
+          description: 訂單建立結束時間（unix timestamp，null = 不限）
+        page:
+          type: integer
+          default: 1
+          maximum: 10000
+        per_page:
+          type: integer
+          default: 20
+          maximum: 100
+
+    AdminSettlementListItem:
+      type: object
+      description: 後台結算列表的單筆項目
+      properties:
+        order_item_id:
+          type: integer
+        order_id:
+          type: integer
+        product_name:
+          type: string
+          description: 下單當下凍結的商品名稱（order_item_name）
+        partner_term_id:
+          type: integer
+        partner_name:
+          type: string
+          description: |
+            分潤夥伴名稱。夥伴已被刪除時為 `[已停用夥伴]`——**該列不可消失**，
+            金額已凍結，那筆錢仍然要付給人。
+          example: 夥伴A
+        shop_id:
+          type: integer
+        shop_name:
+          type: string
+          description: 分潤賣場名稱。賣場已被刪除時為 `[已刪除賣場]`（同上，該列不可消失）。
+          example: 夏季賣場
+        actual_price:
+          type: string
+          description: 成交金額（十進位字串，保留精度）
+          example: '500.00'
+        profit_amount:
+          type: string
+          description: 應分潤金額（十進位字串，保留精度）
+          example: '100.00'
+        rate:
+          type: integer
+          description: 分潤比例（0-100，凍結值）
+        status:
+          type: string
+          enum: [pending, paid, refunded, cancelled]
+        needs_manual_rate:
+          type: boolean
+          description: |
+            🔴 分潤比例為 0，需站長人工設定。結帳當下賣場已被刪除時，寫入 hook 會刻意
+            寫下完整歸屬 meta 但 `rate = 0` / `amount = '0.00'`（而不是不寫），
+            好讓這筆錢仍看得見、可人工補救。**這種紀錄絕不可被過濾掉**——
+            過濾等於讓一筆該付的錢從系統中消失。前端應標紅提示「賣場已刪除，需人工設定比例」。
+        settled_at:
+          type: integer
+          nullable: true
+          description: 撥款時間（unix timestamp；未撥款為 null）
+        order_date:
+          type: string
+          description: 訂單建立時間（GMT，`Y-m-d H:i:s`）
+      required:
+        - order_item_id
+        - order_id
+        - partner_name
+        - shop_name
+        - profit_amount
+        - status
+
+    AdminSettlementListOutput:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminSettlementListItem'
+        total:
+          type: integer
+          description: 符合條件的總筆數（**不是**當前頁筆數）
+        page:
+          type: integer
+        per_page:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - per_page
+
+    SettlementAdminSummaryOutput:
+      type: object
+      description: |
+        後台結算摘要卡（spec §3.5「待撥款金額（筆數） / 已撥款金額（筆數） / 退款金額」）。
+        **所有金額欄位都是十進位字串**（bcmath 產出）——這些數字會直接變成轉給夥伴的
+        金額，轉成 float 累加會出現分位誤差。摘要忽略 page / per_page，永遠涵蓋整個篩選結果。
+      properties:
+        pending_amount:
+          type: string
+          example: '1500.00'
+        pending_count:
+          type: integer
+        paid_amount:
+          type: string
+        paid_count:
+          type: integer
+        refunded_amount:
+          type: string
+        refunded_count:
+          type: integer
+        cancelled_amount:
+          type: string
+        cancelled_count:
+          type: integer
+        total_sales:
+          type: string
+          description: 成交金額合計（actual_price 加總）
+        total_count:
+          type: integer
+
+    SettlementBatchRequest:
+      type: object
+      description: mark-paid / mark-cancelled / reverse-paid 共用的請求 body
+      properties:
+        order_item_ids:
+          type: array
+          items:
+            type: integer
+          minItems: 1
+          maxItems: 500
+          description: |
+            要處理的 order_item_id 清單。空清單或超過 500 筆一律 400 validation_failed
+            （後者是 DoS 防護）。重複的 ID 只會被處理一次。
+      required:
+        - order_item_ids
+
+    SettlementBatchOutput:
+      type: object
+      description: |
+        批次操作結果。**被跳過的項目一定會出現在 `skipped` 並附原因**——
+        兩位管理員同時撥款時，第二個人必須看到「這些已經是 paid、本次未重複計入」，
+        否則他會以為自己那次沒生效而真的再去轉一次帳（spec §5.5）。
+      properties:
+        updated_ids:
+          type: array
+          items:
+            type: integer
+          description: 實際完成狀態轉換的 order_item_id
+        updated_count:
+          type: integer
+        skipped:
+          type: object
+          additionalProperties:
+            type: string
+          description: 'order_item_id => 被跳過的原因（JSON 化後鍵為字串）'
+          example:
+            '456': '目前狀態為 paid，只有待撥款（pending）可標記為已撥款，本次未重複計入'
+        skipped_count:
+          type: integer
+        total_amount:
+          type: string
+          description: 本次異動的分潤金額合計（十進位字串）
+          example: '250.00'
+        audit_log_failed_partner_ids:
+          type: array
+          items:
+            type: integer
+          description: |
+            狀態已更新但 `_partner_settled_log` 稽核紀錄寫入失敗的 partner term ID。
+            這是**部分成功**而非失敗——不可與 `skipped` 混為一談，否則站長會以為
+            那些品項沒被撥款而重撥。
+      required:
+        - updated_ids
+        - skipped
+        - total_amount
+
+    SettlementExportOutput:
+      type: object
+      description: |
+        CSV 匯出結果（決策 D-5）。以 `{code, message, data}` 包 base64 字串而非直接串流
+        `text/csv`，理由有二：
+
+        1. 後台端點一律是這個外層形狀，前端讀取時依賴它（`useCustom` 要剝兩層）；
+           串流原始 CSV 會讓這條路徑變成唯一的例外。
+        2. 錯誤（權限不足、篩選條件非法）能以一般的 JSON 錯誤格式回應，而不是讓使用者
+           下載到一個內容其實是錯誤訊息的 .csv。
+
+        用 base64 而非原始字串：內容開頭有 UTF-8 BOM，中間有 CRLF 換行與引號跳脫，
+        這些位元組在 JSON 編解碼與各層 proxy 的字元集轉換中都可能被改動，
+        而 BOM 少一個位元組 Excel 就會以系統預設編碼開啟，中文欄位整片亂碼。
+
+        前端解碼：先 atob 再轉 Uint8Array，最後包成 Blob（type 取 mime_type）觸發下載。
+
+        每一格都經過試算表公式注入中和（spec §6.9）：開頭為 `=` `+` `-` `@`
+        （含前置空白、定位字元或歸位字元之後才出現者）一律前綴單引號。
+        🔴 商品名稱、分潤夥伴、分潤賣場三欄都是使用者可輸入的字串，三個都要跳脫——
+        只跳脫商品名稱的話，攻擊者改用賣場名稱即可。
+
+        CSV 欄位固定 9 欄，順序與標題由 export-settlements-csv.feature 逐字鎖定：
+        訂單編號／訂單品項編號／商品名稱／分潤夥伴／分潤賣場／實際單價／應分潤金額／結算狀態／訂單日期
+      properties:
+        filename:
+          type: string
+          description: 含日期，避免多次匯出互相覆蓋
+          example: profit-settlements-20260806-113000.csv
+        mime_type:
+          type: string
+          example: text/csv; charset=utf-8
+        content_base64:
+          type: string
+          description: CSV 全文的 base64。解碼後開頭含 UTF-8 BOM。
+        row_count:
+          type: integer
+          description: 資料列數（不含表頭）
+      required:
+        - filename
+        - mime_type
+        - content_base64
+        - row_count
+
+    SettlementOrderIdsOutput:
+      type: object
+      description: |
+        符合分潤條件的 order_id 清單（決策 D-6）。
+
+        WooCommerce REST 的 `orders` 端點**無法依 order item meta 篩選**，
+        分潤歸屬寫在 line item 上、不在訂單本體。因此「只看某個賣場的訂單」得分兩步：
+        先向本端點拿 order_id 陣列，再當成 `wc-rest` 的 `include` filter 送出。
+      properties:
+        order_ids:
+          type: array
+          items:
+            type: integer
+          description: 訂單 ID（新到舊）
+        total:
+          type: integer
+          description: 符合條件的訂單總數（**未受 limit 影響**，用來算出 truncated）
+        limit:
+          type: integer
+          description: 本次套用的上限（最大 200）
+        truncated:
+          type: boolean
+          description: |
+            🔴 是否因超過上限而被截斷。為 true 時前端**必須**提示「結果過多，請縮小篩選範圍」——
+            靜默截斷會讓站長看到一份不完整的訂單列表卻毫無徵兆，
+            直接得出「這個賣場只有這幾張訂單」的錯誤結論。
+      required:
+        - order_ids
+        - total
+        - limit
+        - truncated
+
+  parameters:
+    PartnerToken:
+      name: X-Partner-Token
+      in: header
+      description: |
+        Partner token（spec §4.5 / §6.3）。
+        三條讀取路徑優先級鏈（高 → 低）：
+          1. `X-Partner-Token`
+          2. `Authorization: Bearer {token}`
+          3. Cookie `profit_partner_token`（瀏覽器自動帶）
+        三選一即可。SPA 推薦走 X-Partner-Token（與 X-WP-Nonce 對稱）。
+      required: false
+      schema:
+        type: string
+    AuthBearer:
+      name: Authorization
+      in: header
+      description: '`Bearer {token}`（partner_token 三條路徑之一）'
+      required: false
+      schema:
+        type: string
+    PartnerCookie:
+      name: Cookie
+      in: header
+      description: |
+        `profit_partner_token={token}`；Set-Cookie 屬性：
+        HttpOnly + Secure + SameSite=Lax + Path=/wp-json/power-shop/ + Max-Age=3600。
+      required: false
+      schema:
+        type: string
 
 paths:
 
@@ -1993,3 +2997,1735 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  # ════════════════════════════════════════════════════════════════
+  # Profit Shop（spec §4.1 / §4.2 / §4.4 / §4.5 / §4.7 / §4.8）
+  #
+  # 共用慣例：
+  #   - namespace: power-shop
+  #   - Admin endpoint：response 包裝 `{code: 'success', data: ...}`，使用 WPNonce
+  #   - Partner endpoint（partner-auth/* + partner-reports/*）：
+  #     **裸 payload**，不裹 `{code, data}`（spec §4.4）；
+  #     使用 PartnerToken / PartnerBearer / PartnerCookie 三條路徑之一。
+  #   - 錯誤回應一律走 ExceptionMapper（13 種對映 → ProfitShopExceptionError schema）。
+  #   - partner-reports/* 的 partner_term_id **永不從 query string 讀取**，
+  #     由 token 鎖死於 caller（防範 cross-partner 越權）。
+  # ════════════════════════════════════════════════════════════════
+
+  # ────────────────────────────
+  # Profit Shop — Shops（§4.1）
+  # ────────────────────────────
+
+  /power-shop/profit-shops:
+    get:
+      tags:
+        - ProfitShop
+      summary: 查詢分潤賣場列表（Admin）
+      operationId: listProfitShops
+      security:
+        - WPNonce: []
+      parameters:
+        - name: partner_term_id
+          in: query
+          description: 篩選特定 partner 的賣場（可選）
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 賣場列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProfitShopOutput'
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '500':
+          description: 伺服器錯誤
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+    post:
+      tags:
+        - ProfitShop
+      summary: 建立分潤賣場
+      operationId: createProfitShop
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfitShopInput'
+      responses:
+        '201':
+          description: 建立成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ProfitShopOutput'
+        '400':
+          description: validation_failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '404':
+          description: not_found（partner_term_id 不存在）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '409':
+          description: slug_conflict（含 conflicts 陣列）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '500':
+          description: 伺服器錯誤
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-shops/validate-slug:
+    get:
+      tags:
+        - ProfitShop
+      summary: 驗證 slug 是否可用（Phase 3-E）
+      description: |
+        驗證指定 slug 是否可用，回傳 `available` 與所有衝突來源。
+        檢查 5 類衝突（spec §6.11）：WordPress 保留字、站台核心 page slug、
+        既有 powershop CPT slug、既有 profit_partner term slug、商品 / 分類 slug。
+      operationId: validateProfitShopSlug
+      security:
+        - WPNonce: []
+      parameters:
+        - name: slug
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 驗證結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/SlugValidationOutput'
+        '400':
+          description: validation_failed（slug 為空 / 格式錯誤）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-shops/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: 賣場 ID
+        schema:
+          type: integer
+
+    get:
+      tags:
+        - ProfitShop
+      summary: 取得單一分潤賣場
+      operationId: getProfitShop
+      security:
+        - WPNonce: []
+      responses:
+        '200':
+          description: 賣場詳情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ProfitShopOutput'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+    put:
+      tags:
+        - ProfitShop
+      summary: 更新分潤賣場
+      operationId: updateProfitShop
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfitShopInput'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ProfitShopOutput'
+        '400':
+          description: validation_failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '409':
+          description: slug_conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '422':
+          description: invalid_state_transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+    delete:
+      tags:
+        - ProfitShop
+      summary: 刪除分潤賣場（軟刪除 trash）
+      operationId: deleteProfitShop
+      security:
+        - WPNonce: []
+      responses:
+        '200':
+          description: 刪除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      deleted:
+                        type: boolean
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-shops/{id}/publish:
+    post:
+      tags:
+        - ProfitShop
+      summary: 上架分潤賣場
+      operationId: publishProfitShop
+      security:
+        - WPNonce: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 上架成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ProfitShopOutput'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '422':
+          description: invalid_state_transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-shops/{id}/unpublish:
+    post:
+      tags:
+        - ProfitShop
+      summary: 下架分潤賣場
+      operationId: unpublishProfitShop
+      security:
+        - WPNonce: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 下架成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ProfitShopOutput'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '422':
+          description: invalid_state_transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-shops/{id}/duplicate:
+    post:
+      tags:
+        - ProfitShop
+      summary: 複製分潤賣場
+      operationId: duplicateProfitShop
+      security:
+        - WPNonce: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '201':
+          description: 複製成功（回傳新賣場）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ProfitShopOutput'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  # ────────────────────────────
+  # Profit Shop — Partners（§4.2）
+  # ────────────────────────────
+
+  /power-shop/profit-partners:
+    get:
+      tags:
+        - ProfitShop
+      summary: 查詢 Partner 列表
+      operationId: listProfitPartners
+      security:
+        - WPNonce: []
+      responses:
+        '200':
+          description: Partner 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PartnerOutput'
+
+    post:
+      tags:
+        - ProfitShop
+      summary: 建立 Partner（admin_only，涉密碼）
+      description: |
+        Permission: `manage_options`（admin_only_permission）。
+        Body 欄位 `password` 不會經過 `sanitize_text_field`（避免 strip tags / collapse 空白破壞密碼字面值），
+        會以 `wp_hash_password` 雜湊後存於 termmeta。
+      operationId: createProfitPartner
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartnerInput'
+      responses:
+        '201':
+          description: 建立成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/PartnerOutput'
+        '400':
+          description: validation_failed（slug 格式錯誤等）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '409':
+          description: slug_conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-partners/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Partner term ID
+        schema:
+          type: integer
+
+    get:
+      tags:
+        - ProfitShop
+      summary: 取得單一 Partner
+      operationId: getProfitPartner
+      security:
+        - WPNonce: []
+      responses:
+        '200':
+          description: Partner 詳情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/PartnerOutput'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+    put:
+      tags:
+        - ProfitShop
+      summary: 更新 Partner（admin_only，涉密碼）
+      operationId: updateProfitPartner
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartnerInput'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/PartnerOutput'
+        '400':
+          description: validation_failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '409':
+          description: slug_conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+    delete:
+      tags:
+        - ProfitShop
+      summary: 刪除 Partner（admin_only；is_in_use 預檢）
+      description: |
+        Permission: `manage_options`。
+        如該 Partner 仍被現存賣場引用，回 409 `partner_in_use`。
+      operationId: deleteProfitPartner
+      security:
+        - WPNonce: []
+      responses:
+        '200':
+          description: 刪除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      deleted:
+                        type: boolean
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '409':
+          description: partner_in_use
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-partners/{id}/regenerate-password:
+    post:
+      tags:
+        - ProfitShop
+      summary: 重新產生 Partner 密碼（admin_only）
+      description: |
+        Permission: `manage_options` + 額外 `X-WP-Nonce` 驗證（reviewer follow-up T-4.1，防 CSRF）。
+        產生 12 字元 `wp_generate_password`，雜湊存 termmeta，回傳明文（前端必須立即顯示後丟棄）。
+
+        Response header **強制**：
+          - `Cache-Control: no-store, no-cache, must-revalidate`
+          - `Pragma: no-cache`
+
+        副作用：bump partner 的 `password_changed_at`，所有先前已發出的 token 將失效（Phase 3-D Batch 2）。
+      operationId: regenerateProfitPartnerPassword
+      security:
+        - WPNonce: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 新密碼（裸 payload，與 partner endpoint 慣例一致）
+          headers:
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+                example: 'no-store, no-cache, must-revalidate'
+            Pragma:
+              required: true
+              schema:
+                type: string
+                example: 'no-cache'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegeneratePasswordOutput'
+        '403':
+          description: 無權限 / nonce 失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-partners/{id}/set-password:
+    post:
+      tags:
+        - ProfitShop
+      summary: 站長指定 Partner 密碼（admin_only）
+      description: |
+        Permission: `manage_options` + 額外 `X-WP-Nonce` 驗證（防 CSRF，與 regenerate-password 同一條紀律）。
+
+        與 `regenerate-password` **並存**，用途不同：
+          - `regenerate-password`：夥伴忘記密碼 / 疑似外洩，一鍵重設成系統產生的強密碼
+          - 本端點：站長要主動把一組自己知道的密碼交給夥伴
+
+        密碼強度由 `PartnerPassword` VO 驗證（≥ 8 codepoint + ≥ 1 英文 + ≥ 1 數字），
+        不合格回 422 `weak_password` + `data.reasons[]`。
+
+        ⚠️ body 的 `password` **不過** `sanitize_text_field`（走 `read_json_body_for_partner()`
+        的 `PARTNER_RAW_FIELDS`）——否則密碼裡的 `<` / `>` / 連續空白會被靜默改寫，
+        症狀是「站長設的密碼夥伴登不進去」且毫無錯誤訊息。
+
+        ⚠️ Response **不回傳密碼明文**（這是與 regenerate-password 的關鍵差異）：
+        站長自己輸入的密碼他本來就知道，回傳只會多一個洩漏面。
+
+        Response header **強制**：
+          - `Cache-Control: no-store, no-cache, must-revalidate`
+          - `Pragma: no-cache`
+
+        副作用：bump partner 的 `password_changed_at`，該夥伴所有先前已發出的 token 立即失效。
+      operationId: setProfitPartnerPassword
+      security:
+        - WPNonce: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - password
+              properties:
+                password:
+                  type: string
+                  minLength: 8
+                  description: 站長指定的明文密碼（≥ 8 codepoint + ≥ 1 英文 + ≥ 1 數字）
+      responses:
+        '200':
+          description: 設定成功（裸 payload，**不含**密碼）
+          headers:
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+                example: 'no-store, no-cache, must-revalidate'
+            Pragma:
+              required: true
+              schema:
+                type: string
+                example: 'no-cache'
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - partner_id
+                  - password_changed_at
+                properties:
+                  partner_id:
+                    type: integer
+                  password_changed_at:
+                    type: integer
+                    description: 密碼變更時間（unix timestamp）；舊 token 撤銷的依據
+        '403':
+          description: 無權限 / nonce 失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '422':
+          description: weak_password（含 data.reasons[]）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  # ────────────────────────────
+  # Profit Shop — Migration（§4.7）
+  # ────────────────────────────
+
+  /power-shop/profit-migration/legacy-shops:
+    get:
+      tags:
+        - ProfitShop
+      summary: 列出可遷入的 legacy 一頁商店（admin_only）
+      operationId: listImportableLegacyShops
+      security:
+        - WPNonce: []
+      responses:
+        '200':
+          description: legacy shops 清單
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LegacyShopRef'
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-migration/import:
+    post:
+      tags:
+        - ProfitShop
+      summary: 匯入 legacy 一頁商店（admin_only，強制 partner_term_id）
+      operationId: importLegacyShop
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - legacy_id
+                - partner_term_id
+              properties:
+                legacy_id:
+                  type: integer
+                partner_term_id:
+                  type: integer
+                  description: 必填；匯入的 ProfitShop 必須掛在某個 partner 下
+      responses:
+        '201':
+          description: 匯入成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ProfitShopOutput'
+        '400':
+          description: validation_failed（缺 legacy_id / partner_term_id）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 無權限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '404':
+          description: not_found（legacy 或 partner 不存在）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '422':
+          description: legacy_unimportable（含 reason）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  # ────────────────────────────
+  # Profit Shop — Partner Auth（§4.4，public + partner_token）
+  #
+  # 重要慣例（與 admin endpoint 不同）：
+  #   - Response **不裹** `{code, data}`，body 直接是 payload
+  #   - 認證走 partner_token（X-Partner-Token / Bearer / Cookie 三條路徑）
+  #   - login 設置 Cookie：HttpOnly + Secure + SameSite=Lax + Path=/wp-json/power-shop/ + Max-Age=3600
+  # ────────────────────────────
+
+  /power-shop/partner-auth/login:
+    post:
+      tags:
+        - ProfitShopPartnerAuth
+      summary: Partner 登入（public）
+      description: |
+        Permission: public。
+        Body 欄位 `password` 不經 `sanitize_text_field`（保留密碼字面值），
+        以 `wp_check_password` 比對 termmeta 雜湊。
+
+        **Rate limit**：per-slug + per-IP，5 次失敗鎖 15 分鐘（reviewer M-2 / L-3）。
+        達上限回 429 `rate_limited` + `Retry-After` header。
+
+        **Set-Cookie**：
+          - 名稱 `profit_partner_token`
+          - 屬性 `HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=3600`
+
+        失敗回應對未知 slug **不** record_failure（避免 timing oracle 暴露 slug 存在性）。
+      operationId: partnerLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartnerLoginInput'
+      responses:
+        '200':
+          description: 登入成功（裸 payload，附 Set-Cookie）
+          headers:
+            Set-Cookie:
+              required: true
+              schema:
+                type: string
+                example: 'profit_partner_token=abc...; HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=3600'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartnerLoginOutput'
+        '400':
+          description: validation_failed（slug / password 為空）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: unauthorized（InvalidCredentials；統一回應，不分 slug 不存在 vs 密碼錯誤）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '429':
+          description: rate_limited（含 retry_after + Retry-After header）
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/partner-auth/logout:
+    post:
+      tags:
+        - ProfitShopPartnerAuth
+      summary: Partner 登出（public，idempotent）
+      description: |
+        Permission: public（即使無 token 也回 200，行為 idempotent）。
+        若有 token 會 revoke transient + 寫 Set-Cookie `Max-Age=0` 清 Cookie。
+      operationId: partnerLogout
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PartnerToken'
+        - $ref: '#/components/parameters/AuthBearer'
+        - $ref: '#/components/parameters/PartnerCookie'
+      responses:
+        '200':
+          description: 已登出（裸 payload）
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: 'profit_partner_token=; HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=0'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutOutput'
+
+  /power-shop/partner-auth/me:
+    get:
+      tags:
+        - ProfitShopPartnerAuth
+      summary: 取得當前 Partner 資訊（partner_token）
+      operationId: partnerMe
+      security:
+        - PartnerToken: []
+        - PartnerBearer: []
+        - PartnerCookie: []
+      responses:
+        '200':
+          description: Partner 公開資訊（裸 payload）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartnerMeOutput'
+        '401':
+          description: unauthorized（token 缺失 / 已過期 / 已 revoke）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/partner-auth/change-password:
+    post:
+      tags:
+        - ProfitShopPartnerAuth
+      summary: Partner 自助修密碼（partner_token，Phase 6-A1）
+      description: |
+        Permission: `partner_token`（cookie / X-Partner-Token / Bearer 三選一）。
+        對應規格 §6.3。
+
+        **partner_term_id 鎖死於 token**：permission_callback 從 token 解出後寫入
+        `_partner_term_id`，**永不**從 body / query 取（防 cross-partner 越權）。
+        V2Api callback 對 `_partner_term_id <= 0` 立即拋（reviewer L-4 fail-fast，
+        防 permission 流程缺陷被繞過時污染 `pwchange:0` rate-limit 維度）。
+
+        **Body 不過 sanitize_text_field**（避免 strip tags / collapse 空白破壞密碼字面值）。
+
+        **流程**（嚴格順序）：
+          1. assert_not_blocked（pseudo-slug `pwchange:{partner_term_id}` + IP 雙維度，
+             與 partner login slug 維度**隔離**：登入失敗鎖不影響改密、改密失敗鎖不影響登入）
+          2. find_by_id → null 拋 PartnerNotFound（不 record_failure，避免 unknown id 噪音）
+          3. verify_password（current_password）→ false：record_failure → InvalidCredentials
+          4. new PartnerPassword(new_password)：弱密碼拋 WeakPassword（rate-limit 不動，
+             避免使用者按錯 5 次格式就被鎖）
+          5. PartnerRepository::save（內部 update `_partner_password_changed_at` termmeta）
+          6. reset 雙維度 rate-limit
+          7. audit log（不含明文密碼 / hash / token）
+          8. 回 `{success: true, password_changed_at: int}`
+
+        **Success 副作用**：
+          - `Set-Cookie profit_partner_token=; Max-Age=0`：強制 partner 重新登入
+            （path 與 set 時一致才能清除）
+          - `Cache-Control: no-store, no-cache, must-revalidate` + `Pragma: no-cache`：
+            防 proxy / browser 快取響應內容
+          - 舊 token 在 `PartnerTokenStore::verify` 比對 `issued_at <= password_changed_at`
+            立即失效（Phase 6-A1 reviewer M-1 同秒撤銷契約）
+
+        **密碼複雜度規則**（PartnerPassword ValueObject，spec §6.3）：
+          - `too_short`：mb_strlen UTF-8 < 8
+          - `missing_letter`：不含 `[a-zA-Z]`
+          - `missing_digit`：不含 `[0-9]`
+          - 違反時 422 weak_password 攜帶 `data.reasons[]`（cumulative）
+
+        **安全紀律**（不可違反）：
+          - response 永不洩漏密碼明文 / hash / token
+          - audit log 不含明文密碼
+          - admin nonce 不能走此 endpoint（permission 非 WPNonce）
+      operationId: partnerChangePassword
+      security:
+        - PartnerToken: []
+        - PartnerBearer: []
+        - PartnerCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: 改密成功（裸 payload，附 Set-Cookie 清空 + Cache-Control no-store）
+          headers:
+            Set-Cookie:
+              required: true
+              schema:
+                type: string
+                example: 'profit_partner_token=; HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=0'
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+                example: 'no-store, no-cache, must-revalidate'
+            Pragma:
+              required: true
+              schema:
+                type: string
+                example: 'no-cache'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangePasswordResponse'
+        '400':
+          description: validation_failed（欄位缺失 / `_partner_term_id <= 0` fail-fast）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: unauthorized（current_password 錯，已 record_failure 雙維度）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '422':
+          description: weak_password（new_password 不符複雜度，含 data.reasons[]，未 record_failure）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '429':
+          description: rate_limited（pseudo-slug 或 IP 達 5 次失敗，含 Retry-After header）
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  # ────────────────────────────
+  # Profit Shop — Partner Reports（§4.5，partner_token only）
+  #
+  # 安全 invariant：
+  #   - partner_term_id 鎖死於 token，permission_callback 寫入 `_partner_term_id`
+  #   - **永不**從 query string 讀 partner_term_id（防 cross-partner 越權）
+  #   - WP_REST_Request::set_param 會覆寫所有 buckets 中的同名 key，
+  #     即使 attacker 帶 `?_partner_term_id=999` 也會被覆寫為 token 解出的真值
+  # ────────────────────────────
+
+  /power-shop/partner-reports/kpi:
+    get:
+      tags:
+        - ProfitShopPartnerReports
+      summary: Partner KPI 報表
+      description: |
+        partner_term_id 由 token 鎖死，**禁止**作為 query parameter 出現。
+      operationId: getPartnerKpi
+      security:
+        - PartnerToken: []
+        - PartnerBearer: []
+        - PartnerCookie: []
+      parameters:
+        - name: date_start
+          in: query
+          schema:
+            type: integer
+            description: unix timestamp 起點
+        - name: date_end
+          in: query
+          schema:
+            type: integer
+            description: unix timestamp 終點
+        - name: shop_ids
+          in: query
+          description: 逗號分隔賣場 ID（可選；屬於同一 partner 的 shop）
+          schema:
+            type: string
+        - name: statuses
+          in: query
+          description: 逗號分隔狀態（pending / paid / refunded）
+          schema:
+            type: string
+      responses:
+        '200':
+          description: KPI（裸 payload）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KpiOutput'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/partner-reports/trend:
+    get:
+      tags:
+        - ProfitShopPartnerReports
+      summary: Partner 趨勢報表
+      description: |
+        partner_term_id 由 token 鎖死，**禁止**作為 query parameter。
+      operationId: getPartnerTrend
+      security:
+        - PartnerToken: []
+        - PartnerBearer: []
+        - PartnerCookie: []
+      parameters:
+        - name: interval
+          in: query
+          schema:
+            type: string
+            enum:
+              - day
+              - week
+              - month
+            default: day
+        - name: date_start
+          in: query
+          schema:
+            type: integer
+        - name: date_end
+          in: query
+          schema:
+            type: integer
+        - name: shop_ids
+          in: query
+          schema:
+            type: string
+        - name: statuses
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 趨勢序列（裸 payload）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrendOutput'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/partner-reports/settlements:
+    get:
+      tags:
+        - ProfitShopPartnerReports
+      summary: Partner 結算列表
+      description: |
+        partner_term_id 由 token 鎖死，**禁止**作為 query parameter。
+        page 上限 cap=10000（reviewer LOW-T5-2，防 OFFSET 巨大查詢拖庫）。
+      operationId: listPartnerSettlements
+      security:
+        - PartnerToken: []
+        - PartnerBearer: []
+        - PartnerCookie: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: date_start
+          in: query
+          schema:
+            type: integer
+        - name: date_end
+          in: query
+          schema:
+            type: integer
+        - name: shop_ids
+          in: query
+          schema:
+            type: string
+        - name: statuses
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 結算列表 + 分頁中介資料（裸 payload）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementListOutput'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  # ────────────────────────────
+  # Settlements（後台結算頁，spec §3.5 / §4.3 / §5.5）
+  #
+  # 🔴 Permission：七個端點**一律** manage_options，連唯讀的列表 / 摘要也是。
+  #   規格 query-settlements.feature 與 export-settlements-csv.feature 都明文斷言
+  #   「僅具商店管理權限」→ 403。結算頁緊鄰「標記已撥款」這個不可逆的金流動作，
+  #   讓 shop_manager 看得到金額卻按不了按鈕只會讓人繞路（截圖、口頭轉述），
+  #   整頁同一個邊界才一致。⚠️ 這比 spec §6.1 的 manage_woocommerce 嚴格；
+  #   兩份文件不一致時以 feature 為準（較新且是可執行的驗收條件）。
+  #   三個 mutation 另外要求 X-WP-Nonce：capability 擋「你是誰」、
+  #   nonce 擋「這請求是不是你自己發的」，兩者防的不是同一件事。
+  #
+  # 回應一律是 admin endpoint 的 {code, message, data} 包裝（**不是** partner 端點的裸 payload）。
+  # ────────────────────────────
+
+  /power-shop/profit-settlements:
+    get:
+      tags:
+        - Settlement
+      summary: 後台結算列表（跨 partner）
+      description: |
+        依 partner / 賣場 / 狀態 / 日期區間過濾的結算明細（spec §3.5）。
+        已取消 / 失敗 / trash / auto-draft 訂單的 line item 一律排除，
+        避免無效訂單污染撥款金額。
+
+        `total` 是符合條件的**總筆數**（另一次 count 查詢），不是當前頁筆數。
+      operationId: listProfitSettlements
+      security:
+        - WPNonce: []
+      parameters:
+        - name: partner_id
+          in: query
+          description: 分潤夥伴 term ID（可複數或逗號分隔；亦接受 partner_ids / partner_term_id[s]）
+          schema:
+            type: string
+        - name: shop_id
+          in: query
+          description: 賣場 ID（可複數或逗號分隔；亦接受 shop_ids）
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: 結算狀態（可複數或逗號分隔；亦接受 statuses）
+          schema:
+            type: string
+            enum: [pending, paid, refunded, cancelled]
+        - name: date_start
+          in: query
+          description: 訂單建立起始時間（unix timestamp）
+          schema:
+            type: integer
+        - name: date_end
+          in: query
+          description: 訂單建立結束時間（unix timestamp）
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: 結算列表 + 分頁中介資料
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/AdminSettlementListOutput'
+        '400':
+          description: |
+            validation_failed。最常見成因：`status` 帶了白名單以外的值。
+            **刻意不靜默忽略**——忽略會讓過濾條件退化成「不過濾」，
+            站長看到全部品項卻以為自己在看篩選子集。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options；僅具 manage_woocommerce 者一律 403）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/order-ids:
+    get:
+      tags:
+        - Settlement
+      summary: 取得符合分潤條件的訂單 ID 清單
+      description: |
+        決策 D-6。WooCommerce REST 的 `orders` 端點無法依 order item meta 篩選，
+        前端得先向本端點取回 order_id 陣列，再當成 `wc-rest` 的 `include` filter 送出。
+
+        ⚠️ `include` 走 query string、過長會被伺服器截斷或拒絕，因此硬性 cap 在 200。
+        回應的 `truncated` 為 true 時前端**必須**提示站長縮小範圍。
+      operationId: listProfitSettlementOrderIds
+      security:
+        - WPNonce: []
+      parameters:
+        - name: shop_id
+          in: query
+          description: 賣場 ID（可複數或逗號分隔）
+          schema:
+            type: string
+        - name: partner_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, paid, refunded, cancelled]
+        - name: date_start
+          in: query
+          schema:
+            type: integer
+        - name: date_end
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: 上限（只能小於等於 200；超過一律 clamp）
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 200
+      responses:
+        '200':
+          description: 訂單 ID 清單
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementOrderIdsOutput'
+        '400':
+          description: validation_failed（status 不在白名單）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/summary:
+    get:
+      tags:
+        - Settlement
+      summary: 後台結算摘要卡
+      description: |
+        待撥款 / 已撥款 / 退款的金額與筆數（spec §3.5）。
+        與列表端點吃**完全相同**的過濾條件——兩者若不同步，摘要卡金額會與表格
+        對不起來，而站長是照卡片金額去轉帳的。摘要忽略 page / per_page。
+      operationId: getProfitSettlementSummary
+      security:
+        - WPNonce: []
+      parameters:
+        - name: partner_id
+          in: query
+          schema:
+            type: string
+        - name: shop_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, paid, refunded, cancelled]
+        - name: date_start
+          in: query
+          schema:
+            type: integer
+        - name: date_end
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 摘要卡數據
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementAdminSummaryOutput'
+        '400':
+          description: validation_failed（status 不在白名單）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options；僅具 manage_woocommerce 者一律 403）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/mark-paid:
+    post:
+      tags:
+        - Settlement
+      summary: 批次標記已撥款（pending → paid）
+      description: |
+        spec §5.5。**只有 `pending` 會被轉換**，其餘一律進 `skipped` 並附原因。
+
+        🔴 併發防護走**條件式 UPDATE（compare-and-set）**，不是 read-check-write：
+        `UPDATE ... SET meta_value='paid' WHERE meta_key='_settlement_status' AND meta_value='pending'`，
+        以 affected rows 判定誰搶到。兩位管理員同時按下撥款時，資料庫的 row lock
+        保證只有一個請求拿到 1；先讀出狀態再檢查再寫入的做法**會讓兩邊都通過檢查、
+        都寫入，站長真的轉兩次帳**。
+
+        沒搶到的請求不會寫 `_settled_at` / `_settled_by`（那是「誰在何時撥的款」的
+        稽核證據），且回應會明確列出「本次未重複計入」的 id——靜默略過會讓第二位
+        管理員以為自己那次沒生效而真的再轉一次帳。
+
+        成功的品項會依 partner 分組寫入 termmeta `_partner_settled_log`
+        （type=`settle`，spec §7.5），每個 partner 只會看到自己的金額。
+
+        **需要 `X-WP-Nonce`**（CSRF 防禦）。
+      operationId: markProfitSettlementsPaid
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementBatchRequest'
+      responses:
+        '200':
+          description: |
+            批次結果。注意：即使 `updated_ids` 為空也是 200——
+            「全部都已處理過」是正常狀態，不是錯誤。
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementBatchOutput'
+        '400':
+          description: validation_failed（清單為空 / 超過 500 筆 / 無法辨識操作者身分）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options）或缺少有效的 X-WP-Nonce
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/mark-cancelled:
+    post:
+      tags:
+        - Settlement
+      summary: 批次標記取消（pending → cancelled）
+      description: |
+        用於「訂單成立但不該計入分潤」（測試單 / 內部單 / 夥伴自己下的單）。
+
+        與 mark-paid 的兩個關鍵差異：
+          1. **不寫** `_settled_at` / `_settled_by`——取消不是撥款，污染那兩欄會讓
+             任何以 `_settled_at` 統計實際撥款的報表算進根本沒撥出去的品項。
+          2. **`paid` 不可轉 cancelled**（錢已撥出，改成「取消」等於帳面上抹掉一筆
+             真實支出）。要沖回請用 `reverse-paid`。
+
+        稽核紀錄 type=`cancel`。**需要 `X-WP-Nonce`**。
+      operationId: markProfitSettlementsCancelled
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementBatchRequest'
+      responses:
+        '200':
+          description: 批次結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementBatchOutput'
+        '400':
+          description: validation_failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options）或缺少有效的 X-WP-Nonce
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/reverse-paid:
+    post:
+      tags:
+        - Settlement
+      summary: 批次人工沖回（paid → refunded）
+      description: |
+        錢已撥給夥伴之後才發生退款 / 爭議時，在系統裡留下「這筆已撥款被沖回」的紀錄，
+        供下次撥款扣抵（spec §4.3 / §5.3 / §7.9）。
+
+        **只允許 `paid` → `refunded`**。Domain 狀態機同時接受 `pending → refunded`，
+        但那在「人工沖回」語意下是錯的：一筆根本還沒撥出去的款會產生
+        `refund_after_paid` 稽核紀錄，站長下次撥款照此扣抵 → **少付夥伴一次**，
+        而該筆也不會再出現在待撥款清單。因此本端點有一道獨立的
+        `status === paid` 前置檢查，不符者一律進 `skipped`。
+        pending 要作廢請改用 `mark-cancelled`。
+
+        稽核紀錄 type=`refund_after_paid`（spec §7.5 指定）。**需要 `X-WP-Nonce`**。
+      operationId: reverseProfitSettlementsPaid
+      security:
+        - WPNonce: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementBatchRequest'
+      responses:
+        '200':
+          description: 批次結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementBatchOutput'
+        '400':
+          description: validation_failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足（需 manage_options）或缺少有效的 X-WP-Nonce
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/profit-settlements/export:
+    post:
+      tags:
+        - Settlement
+      summary: 匯出結算明細 CSV
+      description: |
+        匯出**整個篩選結果**（不只當前頁）——只給螢幕上那 20 筆對帳沒有意義，
+        因此本端點忽略傳入的 `page`，自行從第 1 頁逐塊抓到 5000 列上限。
+
+        過濾條件走 body（partner / shop 多選會讓 query string 過長）；
+        `page` 以外的條件與列表端點完全一致。
+
+        回應仍是 `{code, data}` 包裝、`data.content` 是 CSV 全文，
+        由前端 `new Blob([content], { type: mime_type })` 觸發下載——
+        直接回 `text/csv` 會讓 admin 端點多一種例外形狀，前端得為單一端點另開通道。
+
+        安全：每一格都做試算表公式注入中和（spec §6.9）；回應帶
+        `Cache-Control: no-store`（內容含全站分潤金額）。
+      operationId: exportProfitSettlements
+      security:
+        - WPNonce: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementFilterInput'
+      responses:
+        '200':
+          description: |
+            CSV 內容（base64）。匯出範圍等同當下的篩選條件——所見即所得。
+            規格明訂「系統一次產出整份檔案，不提供背景排程或分批下載」，
+            因此**沒有業務層的筆數上限**（內部逐塊查詢只是為了避免單次 SQL 拉回巨量結果）。
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store, no-cache, must-revalidate
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: success
+                  data:
+                    $ref: '#/components/schemas/SettlementExportOutput'
+        '400':
+          description: validation_failed（status 不在白名單）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '401':
+          description: 未登入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+        '403':
+          description: 權限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'

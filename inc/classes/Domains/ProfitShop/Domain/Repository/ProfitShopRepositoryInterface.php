@@ -1,0 +1,79 @@
+<?php
+/**
+ * 分潤賣場 Repository 介面
+ */
+
+declare(strict_types=1);
+
+namespace J7\PowerShop\Domains\ProfitShop\Domain\Repository;
+
+use J7\PowerShop\Domains\ProfitShop\Domain\Entity\ProfitShop;
+
+/**
+ * 分潤賣場聚合根的持久化抽象。
+ *
+ * Infrastructure 層提供具體實作（CptProfitShopRepository）。
+ * 對應規格：specs/2026-05-06-profit-shop-design.md §1.5、§2.2。
+ */
+interface ProfitShopRepositoryInterface {
+
+	/**
+	 * 依 ID 取得賣場
+	 *
+	 * @param int $id 賣場 ID
+	 *
+	 * @return ProfitShop|null 找不到時回傳 null
+	 */
+	public function find( int $id ): ?ProfitShop;
+
+	/**
+	 * 依 slug 取得賣場
+	 *
+	 * 對應 Phase 4-C1 前台 /profit-shop/{slug}/ 路由解析需求。
+	 *
+	 * @param string $slug 賣場 post_name（slug）
+	 *
+	 * @return ProfitShop|null 找不到、非 powershop CPT、或已 trashed 時回傳 null
+	 */
+	public function find_by_slug( string $slug ): ?ProfitShop;
+
+	/**
+	 * 儲存賣場（新增或更新）
+	 *
+	 * @param ProfitShop $shop 賣場聚合根
+	 *
+	 * @return int 賣場 ID
+	 */
+	public function save( ProfitShop $shop ): int;
+
+	/**
+	 * 刪除賣場（trash）
+	 *
+	 * @param int $id 賣場 ID
+	 *
+	 * @return void
+	 */
+	public function delete( int $id ): void;
+
+	/**
+	 * 找出某 partner 旗下的所有賣場
+	 *
+	 * @param int $term_id Partner term ID
+	 *
+	 * @return ProfitShop[]
+	 */
+	public function find_by_partner( int $term_id ): array;
+
+	/**
+	 * 列出全部賣場（含 publish 與 draft，排除 trash）
+	 *
+	 * 對應 spec §4.1 GET /profit-shops 列表端點。
+	 *
+	 * ⚠️ 警告：此方法無分頁，會載入所有賣場並對每筆做 O(n) meta hydrate（N+1 query）。
+	 *          適用於資料量 < 200 的後台 admin list。超過此規模請改用後續 phase 將要新增的
+	 *          paginate( int $page, int $per_page, FilterCriteria $criteria )。
+	 *
+	 * @return ProfitShop[]
+	 */
+	public function all(): array;
+}

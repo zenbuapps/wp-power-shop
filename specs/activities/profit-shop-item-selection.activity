@@ -1,0 +1,51 @@
+[ACTIVITY] 分潤賣場商品選擇流程
+
+[ACTOR] 店舖管理者: 具有 WordPress manage_woocommerce 能力的後台使用者
+
+[CONTEXT] 賣場編輯頁 #/profit-shop/edit/{id}。
+站台商品數可達 10 萬筆，單一下拉 selector 無法有效篩選，
+故改為「按鈕開啟 Modal → 完整篩選器 + 分頁列表 → 勾選加入」。
+
+1. 店舖管理者 進入賣場編輯頁面
+  -> features/profit-shop/query-shop-detail.feature @query
+  1a. [NOTE] 賣場走 power-shop dataProvider（useCustom），回傳 items 僅含
+      product_id / inflated_count / override / variations，不含商品名稱與 SKU
+
+2. 系統 補齊賣場商品的顯示資訊
+  -> features/profit-shop/enrich-shop-item-display.feature @query
+  2a. [DECISION] 商品是否仍存在
+    2a-A. 商品存在:
+      （顯示名稱 / SKU / 縮圖 / 商品類型）
+    2a-B. 商品已刪除:
+      （顯示 #id 並標記「商品已失效」，允許管理者移除該項目）
+  2a. [MERGE]
+
+3. 店舖管理者 檢視賣場商品列表
+  3a. [DECISION] 管理者的操作意圖
+    3a-A. 需要加入商品:
+      4. 店舖管理者 點擊「選擇商品」按鈕開啟商品選擇 Modal
+      5. 店舖管理者 在 Modal 內使用完整篩選器縮小候選範圍
+        -> features/product/query-product-list.feature @query
+        5a. [NOTE] Modal 內商品列表走 wc-rest dataProvider（useTable），
+            server-side 篩選 + 分頁，與賣場本體的 power-shop dataProvider 互不干涉
+      6. 店舖管理者 跨分頁勾選商品
+        6a. [DECISION] 商品是否已在賣場中
+          6a-A. 已在賣場中:
+            （顯示「已加入」標記且不可勾選）
+          6a-B. 尚未加入:
+            （可勾選，計入本次待加入集合）
+        6a. [MERGE]
+      7. 店舖管理者 點擊 Modal 的「加入賣場」確認按鈕
+        -> features/profit-shop/select-shop-products.feature @command
+        7a. [NOTE] 此步驟只變更前端 form 的 items 欄位，尚未寫入後端
+      -> 3
+    3a-B. 需要調整既有商品的價格覆寫或浮報數:
+      8. 店舖管理者 在賣場商品列表直接編輯欄位
+      -> 3
+    3a-C. 需要移除商品:
+      9. 店舖管理者 點擊該列的「移除」
+      -> 3
+    3a-D. 完成編輯:
+      10. 店舖管理者 點擊頁面「儲存」
+        -> features/profit-shop/save-shop-item-overrides.feature @command
+  3a. [MERGE]

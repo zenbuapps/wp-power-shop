@@ -49,7 +49,7 @@
 - 如果仍不夠清晰 → 繼續追問（不限問題數量，1 個也可以），同樣使用 <details> 折疊格式與 [情境問題]/[工程問題] 分類，在留言底部附上建議答案摘要（格式同情況 A 步驟 5），**以及操作提示（格式同情況 A 步驟 6）**
 - 如果已足夠清晰 → 生成規格文件：
   1. 生成規格文件到 ./specs 目錄（使用 /aibdd.discovery、/aibdd.form.feature-spec 等 skill）
-  2. Commit specs 到當前分支
+  2. Commit specs 到當前分支（commit message 必須使用繁體中文）
   3. 使用 `gh issue comment {{ISSUE_NUM}} --body "..."` 回報規格生成進度
   4. 結束本次 run（後續 workflow step 會自動啟動 tdd-coordinator）
 

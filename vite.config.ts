@@ -23,8 +23,23 @@ export default defineConfig({
 		// liveReload(__dirname + '/**/*.php'), // Optional, if you want to reload page on php changed
 
 		v4wp({
-			input: 'js/src/main.tsx', // Optional, defaults to 'src/main.js'.
-			outDir: 'js/dist', // Optional, defaults to 'dist'.
+			// Multi-entry：admin SPA 與 partner self-service portal 共用同一個 build pipeline。
+			// 使用 array 形式可保持 manifest key 為原始 entry path（既有 PHP enqueue 不需改動）。
+			//
+			// ⚠ 第三個 entry（js/src/profit-shop-front/main.tsx）已於 Phase 14 移除：
+			// 賣場前台改為 PHP + daisyUI + 手寫 vanilla JS
+			// （inc/assets/js/profit-shop-front.js，不進 build pipeline）。
+			//
+			// ⚠ 本專案**不再產出任何自己的 CSS**：Tailwind / daisyUI 一律由 powerhouse
+			// 的 admin.min.css / front.min.css 提供（其 tailwind.config.cjs 的 content
+			// 已含 `../power-*/js/src/**` 與 `../power-*/inc/**`）。因此本專案已移除
+			// tailwind.config.cjs / postcss.config.cjs——改動 class 之後要到 powerhouse
+			// 重跑 `pnpm build-css:admin` / `build-css:front` 才會產出。
+			input: [
+				'js/src/main.tsx',
+				'js/src/partner-portal/main.tsx',
+			],
+			outDir: 'js/dist',
 		}),
 	],
 

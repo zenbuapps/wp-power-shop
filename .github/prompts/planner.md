@@ -17,4 +17,4 @@ Clarifier 已完成需求釐清，規格文件位於 ./specs 目錄。
 - 只做規劃，不要實作程式碼
 - 計畫要具體到可以直接交給 tdd-coordinator 執行
 - 考慮現有程式碼的模式和慣例
-- 所有規劃結果 commit 到當前分支
+- 所有規劃結果 commit 到當前分支（commit message 必須使用繁體中文）

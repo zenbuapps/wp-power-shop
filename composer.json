@@ -22,6 +22,13 @@
       "J7\\PowerShop\\": "inc/classes/"
     }
   },
+  "autoload-dev": {
+    "psr-4": {
+      "Tests\\Integration\\": "tests/Integration/",
+      "Tests\\Unit\\": "tests/Unit/",
+      "Tests\\Support\\": "tests/Support/"
+    }
+  },
   "config": {
     "allow-plugins": {
       "dealerdirect/phpcodesniffer-composer-installer": true,
@@ -41,11 +48,21 @@
     "php-stubs/woocommerce-stubs": "@stable",
     "php-stubs/wordpress-stubs": "@stable",
     "phpstan/extension-installer": "@stable",
-    "arts/elementor-stubs": "^3.35"
+    "arts/elementor-stubs": "^3.35",
+    "phpunit/phpunit": "^9.0",
+    "yoast/phpunit-polyfills": "^1.1",
+    "wp-phpunit/wp-phpunit": "^6.4",
+    "mockery/mockery": "^1.6"
   },
   "scripts": {
     "lint": "phpcs",
+    "test": "vendor/bin/phpunit --colors=always --testdox",
+    "test:both-order-storage": "bash bin/test-both-order-storage.sh",
     "test:php": "php tests/php/issue-76-unit.php",
     "test:php:e2e": "wp eval-file tests/php/issue-76-e2e.php"
+  },
+  "scripts-descriptions": {
+    "test:both-order-storage": "對 legacy posts 與 HPOS 各跑一輪 integration testsuite。結算相關的雙路徑 SQL 有兩條互斥測試，跑一輪永遠只覆蓋一半（見 TD-88）。",
+    "test:php": "issue/76 的獨立驗證腳本（不走 phpunit，直接以 php / wp eval-file 執行），與上面的 test 系列各自獨立。"
   }
 }

@@ -9,12 +9,12 @@ inputs:
     description: 'Max conversation turns'
     default: '120'
   agent:
-    description: 'Agent name (e.g. wp-workflows:clarifier)'
+    description: 'Agent name (e.g. zenbu-powers:clarifier)'
     required: false
     default: ''
   model:
     description: 'Claude model to use'
-    default: 'claude-opus-4-6'
+    default: 'opus'
   claude_code_oauth_token:
     description: 'Claude Code OAuth token'
     required: true
@@ -23,10 +23,10 @@ inputs:
     default: '.claude/settings.json'
   plugins:
     description: 'Plugin list'
-    default: 'wp-workflows@wp-workflows'
+    default: 'zenbu-powers@zenbu-powers'
   plugin_marketplaces:
     description: 'Plugin marketplace URLs'
-    default: 'https://github.com/j7-dev/wp-workflows.git'
+    default: 'https://github.com/zenbuapps/zenbu-powers.git'
 
 outputs:
   success:
@@ -36,6 +36,11 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # ── Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin) ──
+    - name: "Ensure ~/.local/bin exists (attempt 1)"
+      shell: bash
+      run: mkdir -p ~/.local/bin
+
     # ── Attempt 1/3 ──
     - name: "Attempt 1/3"
       id: attempt_1
@@ -62,6 +67,12 @@ runs:
       run: |
         echo "::warning::Attempt 1 failed, retrying in 30s..."
         sleep 30
+
+    # ── Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin) ──
+    - name: "Ensure ~/.local/bin exists (attempt 2)"
+      if: steps.attempt_1.outcome == 'failure'
+      shell: bash
+      run: mkdir -p ~/.local/bin
 
     # ── Attempt 2/3 ──
     - name: "Attempt 2/3"
@@ -90,6 +101,12 @@ runs:
       run: |
         echo "::warning::Attempt 2 failed, retrying in 60s..."
         sleep 60
+
+    # ── Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin) ──
+    - name: "Ensure ~/.local/bin exists (attempt 3)"
+      if: steps.attempt_1.outcome == 'failure' && steps.attempt_2.outcome == 'failure'
+      shell: bash
+      run: mkdir -p ~/.local/bin
 
     # ── Attempt 3/3 (final) ──
     - name: "Attempt 3/3 (final)"

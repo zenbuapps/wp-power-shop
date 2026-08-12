@@ -1,0 +1,137 @@
+[ACTIVITY] 顧客在分潤賣場購買商品
+
+[ACTOR] 顧客: 未登入的終端買家（不需要任何站台帳號）
+[ACTOR] 系統: WordPress + WooCommerce + 分潤賣場的 hook 鏈
+
+[CONTEXT] 賣場前台 /profit-shop/{slug}/（或以短碼嵌入的任意頁面）。
+畫面全部由 PHP 印出（商品卡片 + 每商品一個對話框），互動層是手寫 vanilla JS。
+本流程的重點不在 UI，而在「分潤歸屬何時成立、覆寫價何時生效」——
+歸屬不成立時顧客的加購**仍然會成功**，只是變成一般購買、夥伴拿不到分潤。
+
+1. 顧客 開啟賣場網址或內含短碼的頁面
+  -> features/profit-shop/render-shop-front.feature @query
+  -> features/profit-shop/render-shop-via-shortcode.feature @query
+  1a. [DECISION] 賣場的可存取性
+    1a-A. 賣場為 publish:
+      （對所有人可見）
+    1a-B. 賣場為 draft 且檢視者對該賣場有編輯權限:
+      （允許預覽）
+    1a-C. 其餘（不存在 / 已刪除 / 無預覽權限）:
+      （回應 404，流程結束）
+    1a-D. 同一來源在 60 秒內超過 30 次請求:
+      （回應 429，流程結束）
+  1a. [MERGE]
+
+2. 系統 依販售期間決定要印出哪些區塊
+  -> features/profit-shop/schedule-shop-availability.feature @command
+  2a. [DECISION] 賣場的販售狀態
+    2a-A. 販售中:
+      （印出商品卡片與商品對話框，按鈕可用）
+    2a-B. 尚未開賣 / 已結束販售:
+      （依三個獨立旗標印出倒數計時 / 自訂文字 / 停用的商品卡片；
+        ⚠ 任何組合都**不印**商品對話框——對話框內含真正的加購表單，
+        改掉停用屬性就能送出，而後端閘門是第二道防線而非唯一防線）
+      -> 流程結束
+  2a. [MERGE]
+
+3. 顧客 點擊商品卡片
+  3a. [DECISION] 瀏覽器能力與商品狀態
+    3a-A. 支援對話框且該商品有可購買規格:
+      4. 系統 開啟該商品的對話框
+    3a-B. 不支援對話框 / JavaScript 停用:
+      （不攔截，卡片本身印出的原生表單或連結就是完整的加購路徑）
+      -> 8
+    3a-C. 該商品沒有任何可購買規格:
+      （卡片為停用狀態且顯示「暫無可購買規格」，不綁點擊）
+      -> 3
+  3a. [MERGE]
+
+5. 顧客 在對話框內瀏覽商品資訊並選擇規格
+  5a. [DECISION] 商品類型
+    5a-A. 可變商品:
+      6. 顧客 逐一選擇屬性
+        -> features/profit-shop/select-product-variation.feature @query
+        6a. [NOTE] 挑選規則是「具體屬性數最多者勝」，不是「第一個命中者勝」——
+            變體層價格覆寫以變體 ID 為鍵，挑錯變體等於**收錯錢**，
+            而三道分潤閘門沒有任何一道會發現拿錯了變體
+        6a. [DECISION] 是否選滿且有匹配的變體
+          6a-A. 選滿且有匹配:
+            （更新價格 / 庫存 / 數量上限 / 表單的變體與屬性欄位，加購按鈕啟用）
+          6a-B. 尚未選滿:
+            （加購按鈕停用）
+            -> 6
+          6a-C. 選滿但無任何變體匹配:
+            （加購按鈕停用並提示該組合無法購買）
+            -> 6
+        6a. [MERGE]
+    5a-B. 一般商品:
+      （直接可加購）
+  5a. [MERGE]
+
+7. 顧客 調整數量後按下「加入購物車」
+  -> features/profit-shop/add-to-cart-from-modal.feature @command
+  7a. [DECISION] 是否走非同步加購
+    7a-A. 能力足夠且商品類型支援且選中的變體不含任意屬性:
+      （攔截表單，改以 WooCommerce 原生的非同步加購端點送出，不換頁）
+      7a-1. [NOTE] 送 form-urlencoded 是硬性要求——改送 JSON 會讓 PHP 不填 $_POST，
+            賣場識別讀不到、分潤靜默失效且沒有任何錯誤訊息
+    7a-B. 任一關卡不成立:
+      （不攔截，交給瀏覽器執行原生表單送出，整頁重新載入）
+  7a. [MERGE]
+
+8. 系統 決定這筆加購的分潤歸屬
+  -> features/profit-shop/attribute-cart-item-to-shop.feature @command
+  8a. [DECISION] 四道閘門
+    8a-A. 賣場存在 且 為 publish 且 在販售期間內 且 商品屬於該賣場:
+      （寫入賣場識別，進入定價階段）
+    8a-B. 任一道不成立:
+      （不寫入賣場識別；**加購仍然成功**，走商品原價、無分潤紀錄）
+      -> 11
+  8a. [MERGE]
+
+9. 系統 解析覆寫價、寫入分潤 meta 並簽章
+  -> features/profit-shop/apply-cart-override-price.feature @command
+  9a. [NOTE] 這一階段會**重新驗證同樣四道閘門**——上游若以程式直接帶入賣場識別，
+      加購階段的閘門會被整段跳過，這裡是唯一還會檢查的地方
+  9a. [DECISION] 該商品在賣場是否有可用的覆寫價
+    9a-A. 有:
+      （寫入六筆分潤 meta 並產生 v3 簽章）
+    9a-B. 沒有 / 政策不允許救援:
+      （不寫入任何分潤 meta）
+      -> 11
+  9a. [MERGE]
+
+10. 系統 在每次結算總額前驗章並套價
+  -> features/profit-shop/apply-cart-override-price.feature @command
+  10a. [DECISION] 簽章驗證結果
+    10a-A. 通過:
+      （依簽章版本套用 price / regular / sale，購物車三處價格一致）
+    10a-B. 失敗:
+      （清除分潤 meta 並退回商品原價；若該商品自身無價格則移除該品項，
+        WooCommerce 自己會加一則錯誤提示告知顧客）
+  10a. [MERGE]
+
+11. 系統 於每次載入購物車時逐筆確認品項是否仍可購買
+  -> features/profit-shop/authorize-priceless-cart-item.feature @command
+  11a. [DECISION] 該品項的價格來源
+    11a-A. 商品自身有價格:
+      （不介入；賣場之後下架也不撤銷——「加入購物車 = 價格已鎖定」）
+    11a-B. 只靠賣場覆寫價才有價格:
+      （驗章後另回查賣場仍存在 / 仍 publish / 仍在販售期間 / 商品仍在賣場內；
+        任一不成立即移除該品項——它在賣場之外根本不是商品）
+  11a. [MERGE]
+
+12. 顧客 前往購物車與結帳頁完成付款
+  12a. [NOTE] 賣場前台**沒有任何自訂購物車 API**；購物車與結帳一律由 WooCommerce
+      自己的頁面負責。前台也不顯示「來自賣場 XXX」的分潤標記（站長要求）
+
+13. 系統 訂單成立後寫入 line item 級的分潤結算紀錄
+  13a. [NOTE] 🔴 **這一步目前沒有實作**（2026-08-06 覆核）。
+      `OrderItemSettlementRepository` 存在且有整合測試，但**從未被註冊或呼叫**——
+      全 domain 沒有任何 `woocommerce_checkout_create_order_line_item` 之類的訂單 hook，
+      購物車上的 `_profit_*` meta 不會被複製到 `wc_order_itemmeta`，
+      `_profit_amount` / `_settlement_status` 也從來沒有任何程式寫入。
+      連帶後果：夥伴報表（步驟見 partner-authentication.activity）的資料來源
+      永遠是空的。設計文件規劃的「退款回沖 / 訂閱續訂 / 站長撥款結算」同樣未實作。
+      ⇒ 本步驟屬於**待實作**，不是既有行為的描述
+</content>

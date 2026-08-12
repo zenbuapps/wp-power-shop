@@ -2,10 +2,12 @@ import {
 	RadarChartOutlined,
 	LineChartOutlined,
 	ProductOutlined,
-	SettingOutlined,
 	UserOutlined,
 	MailOutlined,
 	TagsOutlined,
+	ShopOutlined,
+	ImportOutlined,
+	WalletOutlined,
 } from '@ant-design/icons'
 import { ResourceProps } from '@refinedev/core'
 import { Tag } from 'antd'
@@ -122,6 +124,46 @@ export const resources: ResourceProps[] = [
 					</span>
 				</>
 			),
+		},
+	},
+	{
+		parentName: 'marketing',
+		name: 'profit-shop',
+		list: '/profit-shop',
+		create: '/profit-shop/create',
+		edit: '/profit-shop/edit/:id',
+		meta: {
+			label: '分潤賣場',
+			icon: <ShopOutlined />,
+		},
+	},
+	{
+		parentName: 'marketing',
+		name: 'profit-partner',
+		list: '/profit-partner',
+		create: '/profit-partner/create',
+		edit: '/profit-partner/edit/:id',
+		meta: {
+			label: '分潤夥伴',
+			icon: <UserOutlined />,
+		},
+	},
+	{
+		parentName: 'marketing',
+		name: 'profit-settlement',
+		list: '/profit-settlements',
+		meta: {
+			label: '分潤結算',
+			icon: <WalletOutlined />,
+		},
+	},
+	{
+		parentName: 'marketing',
+		name: 'profit-migration',
+		list: '/profit-migration',
+		meta: {
+			label: '遷入舊版',
+			icon: <ImportOutlined />,
 		},
 	},
 	{

@@ -1,0 +1,109 @@
+/**
+ * Partner Auth REST API wrappers
+ *
+ * 對應後端 V2Api 的 partner-auth endpoint（spec §4.4 / wordpress.rule.md Phase 3-C 表）：
+ * - POST /partner-auth/login    （public，回傳 token + Set-Cookie）
+ * - POST /partner-auth/logout   （public，idempotent）
+ * - GET  /partner-auth/me       （partner_token，由 cookie 驗證）
+ *
+ * 注意：partner endpoint 不裹 `{code, data}`，body 直接是 payload。
+ *
+ * 4-B3 重構（reviewer m-2）：apiClient 已內建 baseURL，不再傳 apiUrl 參數。
+ */
+
+import {
+	apiClient,
+	SKIP_AUTH_REDIRECT_HEADER,
+	SKIP_AUTH_REDIRECT_VALUE,
+} from '../api/client'
+
+/** /partner-auth/login 輸入 */
+export type TLoginInput = {
+	slug: string
+	password: string
+}
+
+/**
+ * /partner-auth/login 後端回傳 payload
+ *
+ * 注意：token 欄位前端**永不**儲存（cookie 已自動帶上）。
+ */
+export type TLoginOutput = {
+	token: string
+	expires_at: number
+	partner_id: number
+	partner_name: string
+}
+
+/** /partner-auth/me 後端回傳 payload */
+export type TMeOutput = {
+	partner_id: number
+	partner_slug: string
+	partner_name: string
+	contact_email: string | null
+	expires_at: number
+}
+
+/**
+ * 登入 partner（POST /partner-auth/login）
+ *
+ * @param input { slug, password }
+ */
+export const login = (input: TLoginInput) =>
+	apiClient.post<TLoginOutput>('/partner-auth/login', input)
+
+/**
+ * 登出 partner（POST /partner-auth/logout，idempotent）
+ *
+ * 5-A.2：帶 X-Skip-Auth-Redirect header，告訴 axios interceptor
+ * 即使後端回 401（例如 cookie 已過期），也不要再自動導到 /login——
+ * 因為 logout 本來就要走 local cleanup + 前端自行決定下一步。
+ */
+export const logout = () =>
+	apiClient.post(
+		'/partner-auth/logout',
+		{},
+		{
+			headers: { [SKIP_AUTH_REDIRECT_HEADER]: SKIP_AUTH_REDIRECT_VALUE },
+		}
+	)
+
+/**
+ * 取得當前 partner 資訊（GET /partner-auth/me）
+ *
+ * 依靠 HttpOnly cookie 自動帶入；無有效 cookie 時後端回 401。
+ */
+export const fetchMe = () => apiClient.get<TMeOutput>('/partner-auth/me')
+
+/** /partner-auth/change-password 輸入 */
+export type TChangePasswordInput = {
+	current_password: string
+	new_password: string
+}
+
+/** /partner-auth/change-password 後端成功回傳 payload */
+export type TChangePasswordOutput = {
+	success: boolean
+	password_changed_at: number
+}
+
+/**
+ * 修改密碼（POST /partner-auth/change-password，Phase 6-A1 後端 / 6-A2 前端）
+ *
+ * 安全紀律：
+ * - 兩個密碼欄位**禁止**前端 trim / normalize / sanitize，原樣送（避免 server-side
+ *   雜湊不一致）
+ * - 帶 X-Skip-Auth-Redirect：成功後伺服器會立即 expire cookie（password_changed_at
+ *   撤銷），下一次請求即會 401，但這時 UI 已經要顯示「請重新登入」並導頁，不該
+ *   再被 axios interceptor 自動跳一次 /login（會干擾 notification.success 顯示）
+ *
+ * @param input { current_password, new_password }
+ */
+export const changePassword = (input: TChangePasswordInput) =>
+	apiClient.post<TChangePasswordOutput>(
+		'/partner-auth/change-password',
+		input,
+		{
+			headers: { [SKIP_AUTH_REDIRECT_HEADER]: SKIP_AUTH_REDIRECT_VALUE },
+		}
+	)

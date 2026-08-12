@@ -118,10 +118,10 @@ jobs:
             echo "### 任務"
             MODE="${{ steps.check_keyword.outputs.mode }}"
             if [ "$MODE" = "dev" ]; then
-              echo "1. 使用 /wp-workflows:issue-creator skill（DEV 開發者模式）將上方粗略需求展開為結構化的完整需求文件"
+              echo "1. 使用 /zenbu-powers:issue-creator skill（DEV 開發者模式）將上方粗略需求展開為結構化的完整需求文件"
               echo "   ⚠️ 重要：此為 DEV 模式，產出內容面向開發者，需包含技術細節、影響檔案範圍、API 規格等"
             else
-              echo "1. 使用 /wp-workflows:issue-creator skill（PM 客服模式）將上方粗略需求展開為結構化的完整需求文件"
+              echo "1. 使用 /zenbu-powers:issue-creator skill（PM 客服模式）將上方粗略需求展開為結構化的完整需求文件"
               echo "   ⚠️ 重要：此為 PM 模式（預設），產出內容面向非技術人員，使用用戶旅程、業務價值描述"
             fi
             echo "2. issue-creator 會自動讀取 ./specs 目錄下的既有規格作為專案上下文"
@@ -150,6 +150,12 @@ jobs:
           } >> $GITHUB_ENV
 
       # ── 8. Run Claude Code（3 次重試）─────────────────────
+      # Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin)
+      - name: "確保 ~/.local/bin 存在 (attempt 1)"
+        if: steps.check_keyword.outputs.matched == 'true' && steps.guard.outputs.already_expanded != 'true'
+        shell: bash
+        run: mkdir -p ~/.local/bin
+
       - name: "Run Claude Code (attempt 1/3)"
         id: claude_attempt_1
         if: steps.check_keyword.outputs.matched == 'true' && steps.guard.outputs.already_expanded != 'true'
@@ -159,9 +165,9 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           settings: .claude/settings.json
           plugin_marketplaces: |
-            https://github.com/j7-dev/wp-workflows.git
+            https://github.com/zenbuapps/zenbu-powers.git
           plugins: |
-            wp-workflows@wp-workflows
+            zenbu-powers@zenbu-powers
           prompt: ${{ env.EXPAND_PROMPT }}
           claude_args: |
             --dangerously-skip-permissions
@@ -177,6 +183,15 @@ jobs:
           echo "⚠️ 第 1 次嘗試失敗，等待 30 秒後重試..."
           sleep 30
 
+      # Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin)
+      - name: "確保 ~/.local/bin 存在 (attempt 2)"
+        if: >-
+          steps.check_keyword.outputs.matched == 'true' &&
+          steps.guard.outputs.already_expanded != 'true' &&
+          steps.claude_attempt_1.outcome == 'failure'
+        shell: bash
+        run: mkdir -p ~/.local/bin
+
       - name: "Run Claude Code (attempt 2/3)"
         id: claude_attempt_2
         if: >-
@@ -189,9 +204,9 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           settings: .claude/settings.json
           plugin_marketplaces: |
-            https://github.com/j7-dev/wp-workflows.git
+            https://github.com/zenbuapps/zenbu-powers.git
           plugins: |
-            wp-workflows@wp-workflows
+            zenbu-powers@zenbu-powers
           prompt: ${{ env.EXPAND_PROMPT }}
           claude_args: |
             --dangerously-skip-permissions
@@ -208,6 +223,16 @@ jobs:
           echo "⚠️ 第 2 次嘗試失敗，等待 60 秒後重試..."
           sleep 60
 
+      # Workaround for claude-code-action#1290 (ENOENT on ~/.local/bin)
+      - name: "確保 ~/.local/bin 存在 (attempt 3)"
+        if: >-
+          steps.check_keyword.outputs.matched == 'true' &&
+          steps.guard.outputs.already_expanded != 'true' &&
+          steps.claude_attempt_1.outcome == 'failure' &&
+          steps.claude_attempt_2.outcome == 'failure'
+        shell: bash
+        run: mkdir -p ~/.local/bin
+
       - name: "Run Claude Code (attempt 3/3 - final)"
         if: >-
           steps.check_keyword.outputs.matched == 'true' &&
@@ -219,9 +244,9 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           settings: .claude/settings.json
           plugin_marketplaces: |
-            https://github.com/j7-dev/wp-workflows.git
+            https://github.com/zenbuapps/zenbu-powers.git
           plugins: |
-            wp-workflows@wp-workflows
+            zenbu-powers@zenbu-powers
           prompt: ${{ env.EXPAND_PROMPT }}
           claude_args: |
             --dangerously-skip-permissions

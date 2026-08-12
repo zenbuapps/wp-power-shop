@@ -49,7 +49,7 @@ jobs:
           composer --version
 
       - name: 安裝 Composer 依賴
-        run: composer install --no-interaction --prefer-dist --ignore-platform-reqs
+        run: composer install --no-interaction --prefer-dist
 
       - name: 建置前端（驗證 TypeScript 編譯正常）
         run: pnpm run build
@@ -109,7 +109,7 @@ jobs:
           composer --version
 
       - name: 安裝 Composer 依賴（主機端）
-        run: composer install --no-interaction --prefer-dist --ignore-platform-reqs
+        run: composer install --no-interaction --prefer-dist
 
       # ── 新步驟：LC Bypass 驗證 ────────────────────────
       - name: 套用 LC Bypass（跳過外掛授權驗證）

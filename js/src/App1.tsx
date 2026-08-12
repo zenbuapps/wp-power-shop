@@ -1,7 +1,20 @@
 /* eslint-disable quote-props */
 import { ThemedLayoutV2, ThemedSiderV2, ErrorComponent } from '@refinedev/antd'
 import { Refine } from '@refinedev/core'
-import '@refinedev/antd/dist/reset.css'
+/*
+ * ⚠ 本檔刻意**不 import 任何 CSS**（原有 `@refinedev/antd/dist/reset.css` 與
+ * `@/assets/styles/tailwind.css` 皆已移除）。全部樣式由 powerhouse 統一提供：
+ *
+ *   - antd reset + antd 元件：powerhouse `js/dist/css/style.css`
+ *   - Tailwind utility + daisyUI：powerhouse `js/dist/css/admin.min.css`
+ *
+ * 兩支都由 powerhouse `Bootstrap::enqueue_admin_assets()` 在 `in_url(['power-','powerhouse'])`
+ * 時載入（`admin.php?page=power-shop` 會命中 `power-`），且 powerhouse 的 admin-layout
+ * template 另外硬編了兩個 `<link>`。
+ *
+ * ⚠ powerhouse 的 Tailwind utility 全部帶 `#tw` 前綴（`important: '#tw'`），
+ * 因此 admin-layout 的 `<body>` 必須有 `id="tw"` 這些 class 才會生效。
+ */
 import routerBindings, {
 	UnsavedChangesNotifier,
 	NavigateToResource,
@@ -30,6 +43,14 @@ import {
 	ProductAttributes,
 	Summary,
 	OneShop,
+	ProfitShopList,
+	ProfitShopEdit,
+	ProfitShopCreate,
+	ProfitPartnerList,
+	ProfitPartnerEdit,
+	ProfitPartnerCreate,
+	ProfitSettlementList,
+	ProfitMigrationList,
 } from '@/pages/admin'
 import { resources } from '@/resources'
 
@@ -119,6 +140,26 @@ function App() {
 						<Route path="marketing">
 							<Route index element={<ProductList />} />
 							<Route path="one-shop" element={<OneShop />} />
+						</Route>
+
+						<Route path="profit-shop">
+							<Route index element={<ProfitShopList />} />
+							<Route path="create" element={<ProfitShopCreate />} />
+							<Route path="edit/:id" element={<ProfitShopEdit />} />
+						</Route>
+
+						<Route path="profit-partner">
+							<Route index element={<ProfitPartnerList />} />
+							<Route path="create" element={<ProfitPartnerCreate />} />
+							<Route path="edit/:id" element={<ProfitPartnerEdit />} />
+						</Route>
+
+						<Route path="profit-settlements">
+							<Route index element={<ProfitSettlementList />} />
+						</Route>
+
+						<Route path="profit-migration">
+							<Route index element={<ProfitMigrationList />} />
 						</Route>
 
 						<Route path="analytics" element={<Analytics />} />

@@ -8,7 +8,7 @@
     {{MAIN_CONTENT}}   - 主要報告內容（processedReport 或 fallback 媒體區塊）
     {{RUN_ID}}         - GitHub Actions run ID
 -->
-## 🖥️ AI 驗收 {{STATUS_EMOJI}} {{STATUS_TEXT}} — wp-workflows:browser-tester
+## 🖥️ AI 驗收 {{STATUS_EMOJI}} {{STATUS_TEXT}} — zenbu-powers:browser-tester
 {{MAIN_CONTENT}}
 ---
 *🤖 Smoke Test 由 CI 自動執行（run `{{RUN_ID}}`）*

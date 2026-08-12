@@ -14,5 +14,6 @@ final class Loader {
 	/** Constructor */
 	public function __construct() {
 		Report\Dashboard\Core\V2Api::instance();
+		ProfitShop\Loader::instance();
 	}
 }

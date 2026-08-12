@@ -14,7 +14,7 @@ Clarifier 已完成需求釐清，Planner 已制定實作計畫。
 
 ### 重要規則
 - 在 CI 環境中直接在當前分支工作
-- 每個有意義的實作步驟都要 commit
+- 每個有意義的實作步驟都要 commit（commit message 必須使用繁體中文）
 - 遇到問題時自行判斷最佳解法，不要停下來等用戶確認
 - 動態組裝你需要的 agent team（使用 Agent tool），根據規格內容決定：
   - PHP 後端：使用 aibdd.auto.php.it.* skills
