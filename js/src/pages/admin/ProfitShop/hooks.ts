@@ -331,9 +331,21 @@ export type TShopVariationInfo = Omit<TProductVariation, 'attributes'> & {
 /**
  * 佈景主題的頁面 / 文章範本清單
  *
- * 供賣場編輯頁「頁面範本」下拉使用。清單由後端 `wp_get_theme()->get_page_templates()`
+ * 供賣場編輯頁「頁面範本」下拉使用。清單由後端 `ThemeTemplateWhitelist::allowed()`
  * 產出，同一份清單也是 `ProfitShopRenderer::resolve_theme_template()` 的白名單——
  * 站長選不到、也送不出清單以外的檔名。
+ *
+ * ⚠️ **`templates` 為空陣列與 `isError` 是兩件不同的事，呼叫端必須分開呈現。**
+ * 兩者都會讓下拉是空的，但成因與處置完全相反：
+ *
+ * | 狀態 | 意思 | 站長該做什麼 |
+ * |---|---|---|
+ * | `templates.length === 0` | 這個佈景主題**確實沒有**可用範本 | 什麼都不用做，賣場走內建版型 |
+ * | `isError` | **還不知道**有哪些範本 | 重新整理再試 |
+ *
+ * 空清單是**正常且可能的**結果：後端只列 `locate_template()` 真的找得到實體檔案的
+ * 項目，頁面建構器（如 Elementor）註冊的虛擬範本沒有檔案、選了也載不動，會被濾掉。
+ * 把載入失敗說成「沒有範本」會讓站長以為問題出在佈景主題而白跑一趟。
  */
 export const useThemeTemplates = (enabled = true) => {
 	const apiUrl = useApiUrl('power-shop')
@@ -358,7 +370,21 @@ export const useThemeTemplates = (enabled = true) => {
 		[query.data]
 	)
 
-	return { templates, isLoading: enabled && query.isLoading }
+	/*
+	 * `isLoading` 必須用 `enabled &&` 收口：query 的初始 status 是
+	 * `hasData ? 'success' : 'loading'`（@tanstack/query-core 4.43.0
+	 * `build/lib/query.js:473`），而 `isLoading = status === 'loading'`
+	 * （同版 `build/lib/queryObserver.js:372`）——disabled query 永遠不會取得資料，
+	 * 於是恆為 `true`。不加守門的話 Shortcode 模式（不發查詢）會一直回報「載入中」。
+	 *
+	 * `isError` 同樣加守門只是為了對稱與可預期（disabled query 不會進 error 狀態），
+	 * 讓呼叫端不必去記「哪一個旗標在 disabled 時可信」。
+	 */
+	return {
+		templates,
+		isLoading: enabled && query.isLoading,
+		isError: enabled && query.isError,
+	}
 }
 
 /**

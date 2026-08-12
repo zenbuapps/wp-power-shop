@@ -63,6 +63,7 @@ use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpProductVariatio
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementStatusMutator;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementSummaryProvider;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\SystemClock;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\ThemeTemplateWhitelist;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpAdminEmailNotifier;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpProductLookup;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\WpSaltProvider;
@@ -513,10 +514,12 @@ final class V2Api extends ApiBase {
 	/**
 	 * GET /theme-templates
 	 *
-	 * 回傳佈景主題登記過的頁面 / 文章範本，供賣場編輯頁選擇。
+	 * 回傳佈景主題登記過、且 renderer **確定載得動**的頁面 / 文章範本，供賣場編輯頁選擇。
 	 *
-	 * 清單是**白名單的唯一來源**：`ProfitShopRenderer::resolve_theme_template()`
-	 * 只接受出現在這份清單裡的檔名，站長（或竄改過的請求）因此指不到任意 PHP 檔。
+	 * 清單與 `ProfitShopRenderer::resolve_theme_template()` 的白名單同源
+	 * （`ThemeTemplateWhitelist`），站長因此不會選到一個 renderer 拒絕的值——
+	 * 那在畫面上看起來就是「設定沒生效」，而且沒有任何錯誤訊息。
+	 * 兩者為何必須再經 `locate_template()` 過濾，見 `ThemeTemplateWhitelist` 的 docblock。
 	 *
 	 * @param \WP_REST_Request $request Request.
 	 * @return \WP_REST_Response
@@ -526,11 +529,7 @@ final class V2Api extends ApiBase {
 		unset( $request );
 
 		try {
-			$theme = \wp_get_theme();
-
-			// 頁面與文章範本合併：站長要的是「用哪一個版型包住賣場」，
-			// 那個版型是登記給 page 還是 post 對他來說沒有差別。
-			$templates = $theme->get_page_templates( null, 'page' ) + $theme->get_page_templates( null, 'post' );
+			$templates = ThemeTemplateWhitelist::allowed();
 
 			$items = [];
 			foreach ( $templates as $file => $label ) {
