@@ -1242,6 +1242,38 @@ components:
         - partner_name
         - partner_slug
 
+    PartnerShop:
+      type: object
+      description: |
+        夥伴報表可篩選的單一賣場。
+
+        `shop_name` 已由後端解析完成——賣場被刪除或已移入回收桶時一律回
+        `[已刪除賣場]`（與後台結算頁的 `WpAdminSettlementQuery::DELETED_SHOP_LABEL`
+        同一個常數）。呼叫端**不需要**也**不應該**再自己查一次 post title，
+        否則「已刪除」的判斷會出現兩份定義。
+      properties:
+        shop_id:
+          type: integer
+          description: 賣場 post ID（結算紀錄中凍結的值）
+        shop_name:
+          type: string
+          description: 賣場名稱；已刪除時為 `[已刪除賣場]`
+      required:
+        - shop_id
+        - shop_name
+
+    PartnerShopsOutput:
+      type: object
+      description: |
+        `GET /partner-reports/shops` 的裸 payload。依 `shop_name` 排序。
+      properties:
+        shops:
+          type: array
+          items:
+            $ref: '#/components/schemas/PartnerShop'
+      required:
+        - shops
+
     KpiOutput:
       type: object
       description: |
@@ -1751,7 +1783,12 @@ components:
       in: header
       description: |
         `profit_partner_token={token}`；Set-Cookie 屬性：
-        HttpOnly + Secure + SameSite=Lax + Path=/wp-json/power-shop/ + Max-Age=3600。
+        HttpOnly + Secure + SameSite=Lax + Path=/wp-json/power-shop/ + Max-Age=1209600。
+
+        Max-Age = 14 天，對齊 WordPress `wp_set_auth_cookie()` 在「保持登入」時的
+        `14 * DAY_IN_SECONDS`（2026-08 由 1 小時調整）。站台可掛
+        `power_shop_partner_token_ttl` filter 調整；token transient 與此 Max-Age
+        取自同一個來源，避免「cookie 還在但 token 已過期」的認知不一致。
       required: false
       schema:
         type: string
@@ -3844,7 +3881,7 @@ paths:
   # 重要慣例（與 admin endpoint 不同）：
   #   - Response **不裹** `{code, data}`，body 直接是 payload
   #   - 認證走 partner_token（X-Partner-Token / Bearer / Cookie 三條路徑）
-  #   - login 設置 Cookie：HttpOnly + Secure + SameSite=Lax + Path=/wp-json/power-shop/ + Max-Age=3600
+  #   - login 設置 Cookie：HttpOnly + Secure + SameSite=Lax + Path=/wp-json/power-shop/ + Max-Age=1209600
   # ────────────────────────────
 
   /power-shop/partner-auth/login:
@@ -3862,7 +3899,7 @@ paths:
 
         **Set-Cookie**：
           - 名稱 `profit_partner_token`
-          - 屬性 `HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=3600`
+          - 屬性 `HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=1209600`
 
         失敗回應對未知 slug **不** record_failure（避免 timing oracle 暴露 slug 存在性）。
       operationId: partnerLogin
@@ -3881,7 +3918,7 @@ paths:
               required: true
               schema:
                 type: string
-                example: 'profit_partner_token=abc...; HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=3600'
+                example: 'profit_partner_token=abc...; HttpOnly; Secure; SameSite=Lax; Path=/wp-json/power-shop/; Max-Age=1209600'
           content:
             application/json:
               schema:
@@ -4229,6 +4266,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SettlementListOutput'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfitShopExceptionError'
+
+  /power-shop/partner-reports/shops:
+    get:
+      tags:
+        - ProfitShopPartnerReports
+      summary: Partner 可篩選的賣場清單
+      description: |
+        供夥伴報表的「賣場」篩選器建立選項。
+
+        partner_term_id 由 token 鎖死，**禁止**作為 query parameter 出現——
+        本端點尤其不可，否則「別人有哪些賣場」會變成可列舉的資訊。
+
+        清單是**兩個來源的聯集**，缺任一邊夥伴都會少看到自己的賣場：
+        - A：目前指派給他且已發佈的賣場（powershop CPT）→ 涵蓋零業績的新賣場
+        - B：結算紀錄中出現過的 shop_id → 涵蓋已刪除 / 已改派、但業績仍屬於他的賣場
+          （名稱回傳為 `[已刪除賣場]`）
+
+        選了零業績的賣場會得到 0，那是誠實的答案；看不到選項才是資訊缺失
+        （夥伴無從分辨「沒業績」與「系統漏了」）。
+
+        本端點**不吃任何篩選條件**（日期 / 狀態皆不吃）：選單內容若隨期間變動，
+        使用者切一下日期、目前選中的賣場就可能從選單消失。
+      operationId: listPartnerShops
+      security:
+        - PartnerToken: []
+        - PartnerBearer: []
+        - PartnerCookie: []
+      responses:
+        '200':
+          description: 賣場清單（裸 payload）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartnerShopsOutput'
         '401':
           description: unauthorized
           content:

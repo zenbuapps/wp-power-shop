@@ -4,6 +4,7 @@ import {
 	DeleteOutlined,
 	EditOutlined,
 	ExportOutlined,
+	KeyOutlined,
 	PlusOutlined,
 } from '@ant-design/icons'
 import { CreateButton } from '@refinedev/antd'
@@ -33,8 +34,15 @@ import { FilterTags } from 'antd-toolkit/refine'
 import dayjs from 'dayjs'
 import { memo, useMemo, useState } from 'react'
 
-import { useProfitPartnerList } from '@/pages/admin/ProfitPartner/hooks'
-import type { TProfitPartner } from '@/pages/admin/ProfitPartner/types'
+import {
+	useCopyPartnerPassword,
+	useProfitPartnerList,
+} from '@/pages/admin/ProfitPartner/hooks'
+import type {
+	TPartnerQueryState,
+	TProfitPartner,
+} from '@/pages/admin/ProfitPartner/types'
+import { resolveCopyPartnerPasswordBlockedReason } from '@/pages/admin/ProfitPartner/utils'
 import {
 	useProfitShopDelete,
 	useProfitShopList,
@@ -45,6 +53,7 @@ import {
 } from '@/pages/admin/ProfitShop/List/Filter'
 import {
 	buildProfitShopShortcode,
+	buildReportUrlWithShop,
 	PROFIT_SHOP_MODE,
 	PROFIT_SHOP_STATUS,
 	PROFIT_SHOP_URL_PREFIX,
@@ -76,7 +85,9 @@ const MODE_TAG: Record<TProfitShopMode, { color: string; label: string }> = {
  * 只負責獨立頁面模式 —— Shortcode 模式的操作欄改渲染「複製」按鈕，
  * 不再走這個函式（見 columns 的 actions 欄註解）。
  */
-export const resolveOpenShopBlockedReason = (shop: TProfitShop): string | null => {
+export const resolveOpenShopBlockedReason = (
+	shop: TProfitShop
+): string | null => {
 	if (!shop.slug) {
 		return '此賣場尚未設定永久連結，無法組出前台網址'
 	}
@@ -115,17 +126,30 @@ export const resolveCopyShortcodeBlockedReason = (
  * `resolveCopyShortcodeBlockedReason` 的關鍵差異——三個函式看起來很像，
  * 別為了 DRY 併成一個，那會讓草稿 / 已刪除賣場白白失去夥伴報表的入口。
  *
- * @param partner   該賣場的分潤夥伴（找不到時為 undefined）
- * @param isLoading 夥伴列表是否仍在載入（載入中不可判定為「找不到」）
+ * ⚠️ 第二參數是**三態**而非 `isLoading: boolean`：react-query v4 在查詢失敗時
+ * `isLoading` 會變回 false 而 `data` 仍是 undefined，用兩態判斷會讓
+ * 「`GET /profit-partners` 回 500」被誤報成「**每一個**賣場的夥伴都被刪除了」。
+ * 完整推導見 `TPartnerQueryState` 的 docblock。同一列的「複製密碼」按鈕
+ * （`resolveCopyPartnerPasswordBlockedReason`）吃同一個三態，兩顆按鈕對同一個狀況
+ * 才會給出逐字相同的說法。
+ *
+ * @param partner 該賣場的分潤夥伴（找不到時為 undefined）
+ * @param state   夥伴列表查詢的三態（載入中 / 失敗都不可判定為「找不到」）
  */
 export const resolveViewReportBlockedReason = (
 	partner: TProfitPartner | undefined,
-	isLoading: boolean
+	state: TPartnerQueryState
 ): string | null => {
 	// 載入中先停用，但訊息要與「真的找不到」區分——否則每次進頁面都會閃一次
 	// 「夥伴已被刪除」的假警告
-	if (isLoading) {
+	if ('loading' === state) {
 		return '分潤夥伴資料載入中，請稍候'
+	}
+
+	// 查詢失敗 ≠ 資料不存在。說成「已被刪除」會讓站長對著一批其實好好的資料
+	// 採取補救動作（重建夥伴、懷疑資料損毀）。
+	if ('error' === state) {
+		return '分潤夥伴資料載入失敗，請重新整理頁面'
 	}
 
 	if (!partner) {
@@ -142,12 +166,55 @@ export const resolveViewReportBlockedReason = (
 }
 
 /**
+ * 把 react-query 的兩個布林旗標收斂成夥伴列表查詢的三態
+ *
+ * ⚠️ 這裡不能只看 `isLoading`：react-query v4 在查詢失敗後會把 `isLoading` 設回
+ * `false`，而 `data` 仍是 `undefined` —— 用兩態判斷的話，`GET /profit-partners`
+ * 回 500 / 403 時**每一列**都會落進「找不到夥伴」分支，站長看到的是
+ * 「全部賣場的分潤夥伴都被刪除了」。完整推導見 `TPartnerQueryState` 的 docblock。
+ *
+ * 兩者不會同時為真（初次載入 loading、失敗後 error），先判 loading 是為了語意清楚。
+ *
+ * @param {boolean} isLoading react-query 的 isLoading
+ * @param {boolean} isError   react-query 的 isError
+ * @return {TPartnerQueryState} 夥伴列表查詢的三態
+ */
+export const resolvePartnerQueryState = (
+	isLoading: boolean,
+	isError: boolean
+): TPartnerQueryState => {
+	if (isLoading) return 'loading'
+	if (isError) return 'error'
+	return 'ready'
+}
+
+/**
  * Table `scroll.x`：各欄 width 總和
  *
  * 名稱 260 + 呈現模式 120 + 狀態 100 + 分潤夥伴 160 + 分潤 90 + 商品數 90
- * + 更新時間 170 + 操作 300。改動任一欄寬度時要一起更新，否則橫向捲軸會算錯。
+ * + 更新時間 170 + 操作 420。改動任一欄寬度時要一起更新，否則橫向捲軸會算錯。
  */
-const COLUMNS_TOTAL_WIDTH = 1290
+const COLUMNS_TOTAL_WIDTH = 1410
+
+/**
+ * 操作欄寬度：[開啟/複製][報表][複製密碼][編輯][刪除] 五顆
+ * type="link" size="small" 按鈕
+ *
+ * 依 antd 5.26.1 實算：paddingInline 7×2 + icon 14 + gap 8 + 14px×字數
+ *   → 2 字 = 64px、4 字 = 92px
+ * 加總：64×4（開啟/複製、報表、編輯、刪除）+ 92（複製密碼）
+ *     + Space size="small" 的 4×8 gap + Table size="small" 的 cell padding 16
+ *     = 396 → 取 420，留一顆 2 字按鈕的餘裕（不是留 4px 這種一加東西就爆的餘裕）。
+ *
+ * ⚠️ 算不夠時的實際行為（不是自動換行、也不是欄位自己變寬）：
+ * rc-table 在 `fixed` 欄配數字 `scroll.x` 時解析為 `table-layout: fixed`，
+ * colgroup 寬度是硬的；`Space` 是 inline-flex 且未設 `flex-wrap` ⇒ 不換行；
+ * `<td>` 沒有 `overflow: hidden` ⇒ 內容直接向右溢出 `position: sticky; right: 0`
+ * 的儲存格，被捲動容器裁掉 ⇒ **「刪除」被切一半、點不到**。
+ * 而且只在「容器寬度 < scroll.x」時才會出現（1440px 筆電配 WP 側邊欄就會踩到），
+ * 開發者在寬螢幕上完全看不到。
+ */
+const ACTIONS_COLUMN_WIDTH = 420
 
 /** FilterTags 的欄位名稱對映 */
 const keyLabelMapper = (key: keyof TProfitShopFilterValues): string =>
@@ -167,9 +234,24 @@ const ListComponent = () => {
 	const [applied, setApplied] = useState<TProfitShopFilterValues>({})
 
 	const { data, isLoading, isFetching } = useProfitShopList()
-	const { data: partnerData, isLoading: isPartnerLoading } =
-		useProfitPartnerList()
+	const {
+		data: partnerData,
+		isLoading: isPartnerLoading,
+		isError: isPartnerError,
+	} = useProfitPartnerList()
 	const deleter = useProfitShopDelete()
+	const copyPartnerPassword = useCopyPartnerPassword()
+
+	/**
+	 * 夥伴列表查詢的三態
+	 *
+	 * 同時餵給「報表」與「複製密碼」兩顆按鈕的停用判定，
+	 * 讓同一列的兩顆按鈕對同一個狀況給出逐字一致的說法。
+	 */
+	const partnerQueryState = resolvePartnerQueryState(
+		isPartnerLoading,
+		isPartnerError
+	)
 
 	// 後端 V2Api 統一裹 {code, data} → axios body 在 result.data 裡 → 真正資料在 result.data.data
 	const shops: TProfitShop[] = useMemo(() => {
@@ -391,25 +473,48 @@ const ListComponent = () => {
 	}
 
 	/**
-	 * 操作欄的「查看報表」：開啟該賣場所屬**分潤夥伴**的報表頁
+	 * 操作欄的「報表」：開啟該賣場所屬**分潤夥伴**的報表頁，並預先篩選到這個賣場
 	 *
-	 * 網址一律取自後端衍生的 `partner.report_url`，前端零拼接 —— 前綴的真相來源只有
-	 * PHP 端（`RewriteRules::get_report_slug()`，即註冊 rewrite rule 所用的同一個來源），
-	 * 在前端複製一份遲早分家（詳見 `TProfitPartner.report_url`）。
+	 * 網址的 path 與前綴仍**完全由後端衍生**（`partner.report_url`）—— 前綴的真相來源
+	 * 只有 PHP 端（`RewriteRules::get_report_slug()`，即註冊 rewrite rule 所用的
+	 * 同一個來源），在前端複製一份遲早分家（詳見 `TProfitPartner.report_url`）。
+	 * 前端只用 `buildReportUrlWithShop()` 在既有網址上**附加一段 query string**
+	 * （`?shop_ids={id}`），不參與網址結構的組成；組不出來時 fallback 回原始網址，
+	 * 退化成「報表開得起來、只是沒有預先篩選」。
 	 *
 	 * ⚠️ 報表頁是 **partner 自助入口**（cookie 認證），站長點進去會看到夥伴的登入畫面，
-	 * 而不是報表內容 —— 這是預期行為，此按鈕的用途是「確認網址 / 把連結交給夥伴」。
-	 * 站長端若要看分潤數據，目前沒有對應頁面（partner-reports/* 三個 endpoint
-	 * 全部鎖 partner_token，admin nonce 走不了，見 `profit-shop.rule.md` §6 雙軌制）。
+	 * 而不是報表內容 —— 這是預期行為（partner-reports/* 三個 endpoint 全部鎖
+	 * partner_token，admin nonce 走不了，見 `profit-shop.rule.md` §6 雙軌制）。
+	 * 這也是本列「複製密碼」按鈕存在的理由：站長的完整動線是
+	 * 「複製密碼 → 開報表（已帶賣場篩選）→ 用夥伴身分登入 → 看該賣場數字」。
+	 *
+	 * 📌 站長端若只是要看分潤數據，**另有 `#/profit-settlements` 結算頁**
+	 * （Phase 17，走 admin 權限、不需要夥伴密碼）。本按鈕刻意仍連向 partner portal，
+	 * 因為它服務的是上面那條「以夥伴身分驗證他看到什麼」的動線。
 	 *
 	 * 停用 / 可用拆兩條 render 分支的理由與「開啟」完全相同（antd v5 的兩個陷阱），
-	 * 見下方 `renderPrimaryAction` 的註解。
+	 * 見**上方** `renderPrimaryAction` 的註解。
+	 *
+	 * ── tooltip：可用分支不掛、停用分支保留（站長指定，2026-08-13）──────
+	 *
+	 * **可用分支不掛 tooltip** 是站長明確要求的——滑過每一列都彈出說明很吵。
+	 * 連帶接受兩點資訊不再主動揭露（**已知取捨，不是遺漏**）：
+	 *   1. 連結帶了 `?shop_ids=`，夥伴登入後只看得到這一個賣場的數字。
+	 *      若站長把連結交出去卻沒說，夥伴可能誤以為那是他該期間的**全部**收入。
+	 *      緩解：夥伴端 Dashboard 有一條常駐 Alert 明寫「目前只顯示 N 個指定賣場的數字」
+	 *      並附「顯示全部賣場」按鈕（見 `profit-shop.rule.md` §12.7），
+	 *      也就是說**接收端看得到，只有發送端不再被提醒**。
+	 *   2. 站長自己點進去會看到夥伴的登入畫面（那是預期行為，見上方 ⚠️ 段）。
+	 *
+	 * **停用分支仍然保留 tooltip**：那是「為什麼這顆是灰的」的唯一揭露管道，
+	 * 拿掉就只剩一顆沒有理由的灰按鈕（`admin-list-ui.rule.md` §1「8 的補充」明文反對）。
+	 * 兩條分支因此刻意不對稱——不是漏改。
 	 */
 	const renderReportAction = (record: TProfitShop) => {
 		const partner = partnerMap.get(record.partner_term_id)
 		const blockedReason = resolveViewReportBlockedReason(
 			partner,
-			isPartnerLoading
+			partnerQueryState
 		)
 
 		return blockedReason ? (
@@ -427,16 +532,81 @@ const ListComponent = () => {
 				</span>
 			</Tooltip>
 		) : (
-			<Tooltip title={`開啟「${partner?.name}」的分潤報表頁（夥伴需自行登入）`}>
+			<Button
+				type="link"
+				size="small"
+				icon={<BarChartOutlined />}
+				href={
+					partner?.report_url
+						? buildReportUrlWithShop(partner.report_url, record.id)
+						: undefined
+				}
+				target="_blank"
+				rel="noopener noreferrer"
+			>
+				報表
+			</Button>
+		)
+	}
+
+	/**
+	 * 操作欄的「複製密碼」：複製該賣場所屬**分潤夥伴**的報表登入密碼
+	 *
+	 * 與「報表」按鈕成套服務同一條動線（見 `renderReportAction`）：報表頁需要夥伴
+	 * 自行登入，站長要驗證夥伴看到的數字就得先拿到那組密碼。
+	 *
+	 * ⚠️ 一列是**賣場**、密碼卻屬於**夥伴** —— 同一個夥伴有 N 個賣場時，這一欄會出現
+	 * N 顆複製到**同一組密碼**的按鈕。因此 tooltip 與成功訊息都必須帶出夥伴名稱
+	 * （成功訊息另帶賣場名稱），否則站長連按兩列不同夥伴後，剪貼簿裡那串字
+	 * 沒有任何身分標記可供核對。訊息與秒數見 `useCopyPartnerPassword`。
+	 *
+	 * 停用判定與 `#/profit-partner` 共用同一個函式（兩頁複製的是同一個東西），
+	 * 理由見 `resolveCopyPartnerPasswordBlockedReason` 的 docblock。
+	 *
+	 * ⚠️ onClick 內仍保留 `partner &&` 守門：`blockedReason` 為 null 已保證 partner
+	 * 存在且有明文密碼，但型別上它仍是 `T | undefined`，用 `!` 斷言等於把正確性
+	 * 押在「兩個函式的判斷永遠一致」這個假設上。
+	 */
+	const renderCopyPasswordAction = (record: TProfitShop) => {
+		const partner = partnerMap.get(record.partner_term_id)
+		const blockedReason = resolveCopyPartnerPasswordBlockedReason(
+			partner,
+			partnerQueryState
+		)
+
+		/*
+		 * icon 用 KeyOutlined 而非 CopyOutlined：shortcode 模式下本欄第一顆按鈕
+		 * 也是「複製」（CopyOutlined），兩顆同 icon、同「複製…」開頭、中間只隔一顆
+		 * 「報表」。而誤觸的代價**不對稱**：
+		 *   - 誤按短碼 → 貼出一段無害的短碼
+		 *   - 誤按密碼 → 剪貼簿是**明文密碼**，而站長此刻的下一步正是
+		 *     「貼進頁面編輯器並發佈」⇒ 密碼公開在網路上
+		 * 短碼與密碼看起來都是一串亂碼，沒有任何一步會提示他貼錯。
+		 * `#/profit-partner` 的同一顆按鈕必須同步用這個 icon。
+		 */
+		return blockedReason ? (
+			<Tooltip title={blockedReason}>
+				<span className="inline-block cursor-not-allowed">
+					<Button
+						type="link"
+						size="small"
+						icon={<KeyOutlined />}
+						className="pointer-events-none"
+						disabled
+					>
+						複製密碼
+					</Button>
+				</span>
+			</Tooltip>
+		) : (
+			<Tooltip title={`複製此賣場的分潤夥伴「${partner?.name}」的報表登入密碼`}>
 				<Button
 					type="link"
 					size="small"
-					icon={<BarChartOutlined />}
-					href={partner?.report_url ?? undefined}
-					target="_blank"
-					rel="noopener noreferrer"
+					icon={<KeyOutlined />}
+					onClick={() => partner && copyPartnerPassword(partner, record.title)}
 				>
-					報表
+					複製密碼
 				</Button>
 			</Tooltip>
 		)
@@ -518,15 +688,26 @@ const ListComponent = () => {
 				),
 		},
 		{
+			/*
+			 * 按鈕順序：[開啟/複製][報表][複製密碼][編輯][刪除]
+			 *
+			 * 與 `#/profit-partner` 共用同一條不變量——**分享群組在前、編輯次之、
+			 * 刪除永遠最後**。兩頁的「編輯與刪除永遠是最後兩顆」是站長最容易記住、
+			 * 也最不會因未來再加按鈕而位移的錨點（新按鈕一律往前面的群組加）。
+			 *
+			 * 「複製密碼」緊接在「報表」右邊是刻意的：兩者服務同一條動線
+			 *（複製密碼 → 開報表 → 以夥伴身分登入），放在一起才讀得出先後關係。
+			 */
 			title: '操作',
 			key: 'actions',
-			width: 300,
+			width: ACTIONS_COLUMN_WIDTH,
 			fixed: 'right',
 			render: (_: unknown, record: TProfitShop) => {
 				return (
 					<Space size="small">
 						{renderPrimaryAction(record)}
 						{renderReportAction(record)}
+						{renderCopyPasswordAction(record)}
 						<Button
 							type="link"
 							size="small"

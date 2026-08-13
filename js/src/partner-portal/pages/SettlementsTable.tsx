@@ -31,9 +31,13 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 
-import { type TSettlementItem, type TSettlementStatus } from '../api/reports'
+import {
+	toShopIdsKey,
+	type TSettlementItem,
+	type TSettlementStatus,
+} from '../api/reports'
 import { useSettlements } from '../hooks/useSettlements'
 import { formatAmount } from '../utils/format'
 import { mapPartnerException } from '../utils/partnerExceptionMapper'
@@ -44,6 +48,9 @@ const { useBreakpoint } = Grid
 type TSettlementsTableProps = {
 	dateStart: number
 	dateEnd: number
+
+	/** 賣場篩選；空陣列 = 全部賣場 */
+	shopIds?: number[]
 }
 
 /** Status → 顯示文字 + Tag color */
@@ -68,6 +75,7 @@ const formatCreatedAt = (value: string | undefined): string => {
 const SettlementsTableComponent: React.FC<TSettlementsTableProps> = ({
 	dateStart,
 	dateEnd,
+	shopIds,
 }) => {
 	const screens = useBreakpoint()
 	const isMobile = !screens.md // xs / sm 視為 mobile
@@ -75,6 +83,23 @@ const SettlementsTableComponent: React.FC<TSettlementsTableProps> = ({
 	const [page, setPage] = useState(1)
 	const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE)
 	const [statusFilter, setStatusFilter] = useState<TSettlementStatus[]>([])
+
+	/*
+	 * 條件變動時回到第一頁。
+	 *
+	 * 狀態篩選走 `handleStatusChange` 自己 reset，但**賣場與期間的 state 住在
+	 * Dashboard**，變動時只是 props 換過來，這裡沒有任何 handler 會被呼叫。
+	 * 少了這個 effect：夥伴翻到第 3 頁後改選賣場，`page` 仍是 3，
+	 * 新條件很可能不足 3 頁 → 表格空白 → 第一印象是「這個賣場沒有結算紀錄」。
+	 *
+	 * ⚠️ 依賴用 `toShopIdsKey(shopIds)` 這個**字串**，不能直接放 `shopIds`：
+	 *    父層每次 render 都可能給出新的陣列 reference，用它當依賴會讓 effect
+	 *    每次 render 都跑一次，夥伴永遠翻不到第 2 頁（一翻就被打回第 1 頁）。
+	 */
+	const shopIdsKey = toShopIdsKey(shopIds)
+	useEffect(() => {
+		setPage(1)
+	}, [shopIdsKey, dateStart, dateEnd])
 
 	const { data, isLoading, isError, error, refetch, isFetching } =
 		useSettlements({
@@ -85,6 +110,7 @@ const SettlementsTableComponent: React.FC<TSettlementsTableProps> = ({
 			statuses: statusFilter.length > 0 ? statusFilter : undefined,
 			date_start: dateStart,
 			date_end: dateEnd,
+			shop_ids: shopIds,
 		})
 
 	const items = useMemo<TSettlementItem[]>(() => data?.items ?? [], [data])

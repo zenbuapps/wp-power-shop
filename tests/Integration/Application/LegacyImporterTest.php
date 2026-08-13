@@ -373,4 +373,249 @@ final class LegacyImporterTest extends TestCase {
 			'post_content' => (string) $post->post_content,
 		];
 	}
+
+	// ====================================================================
+	//  Rule: 商品必須真的被搬進新賣場（端到端）
+	// ====================================================================
+
+	/**
+	 * 建立一個「帶真實 legacy 商品資料」的舊版賣場
+	 *
+	 * ⚠️ 本檔先前所有 fixture 都**沒有** `power_shop_meta`（＝零商品），
+	 * 因此「商品有沒有被帶過去」從來沒有被任何一條 IT 碰到——`items` 寫死成空陣列
+	 * 也照樣全綠。這個 helper 就是補上那個盲區。
+	 *
+	 * @param array<int, int> $product_ids 要放進 legacy 商品清單的商品 ID
+	 * @param array<string, mixed> $args    覆寫 post 欄位
+	 *
+	 * @return int legacy post ID
+	 */
+	private function create_legacy_shop_with_products( array $product_ids, array $args = [] ): int {
+		$legacy_id = $this->create_legacy_shop( $args );
+
+		$rows = [];
+		foreach ( $product_ids as $i => $product_id ) {
+			$rows[] = [
+				'productId'       => $product_id,
+				'productType'     => 'simple',
+				'regularPrice'    => 100 + $i,
+				// 第二筆刻意用 0，鎖住「0 = 沒有特價」而不是「賣 0 元」。
+				'salesPrice'      => 0 === $i ? 80 : 0,
+				'extraBuyerCount' => 0 === $i ? 5 : 0,
+			];
+		}
+
+		\update_post_meta( $legacy_id, 'power_shop_meta', \wp_slash( (string) \wp_json_encode( $rows ) ) );
+		\update_post_meta( $legacy_id, 'power_shop_settings', \wp_slash( (string) \wp_json_encode( [ 'btnColor' => '#ff0000' ] ) ) );
+		\update_post_meta( $legacy_id, 'power_shop_report_password', 'MWMwMDllMjYwMg==' );
+
+		return $legacy_id;
+	}
+
+	/**
+	 * 🔴 匯入必須把 legacy 的商品與價格覆寫帶進新賣場
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_import_carries_legacy_products_into_new_shop(): void {
+		$p1        = (int) self::factory()->post->create( [ 'post_type' => 'product' ] );
+		$p2        = (int) self::factory()->post->create( [ 'post_type' => 'product' ] );
+		$legacy_id = $this->create_legacy_shop_with_products( [ $p1, $p2 ], [ 'post_name' => 'legacy-with-products' ] );
+
+		$response = $this->do_import( $legacy_id, [ 'rate' => 12 ] );
+
+		$this->assertSame( 201, $response->get_status() );
+		$data = $response->get_data()['data'] ?? [];
+
+		$this->assertCount( 2, $data['items'] ?? [], '舊版的 2 個商品都必須被帶入' );
+		$this->assertSame( $p1, $data['items'][0]['product_id'] );
+		$this->assertSame( '100', $data['items'][0]['override']['regular_price'] );
+		$this->assertSame( '80', $data['items'][0]['override']['sale_price'] );
+		$this->assertSame( 5, $data['items'][0]['inflated_count'] );
+
+		$this->assertSame( '101', $data['items'][1]['override']['regular_price'] );
+		$this->assertNull(
+			$data['items'][1]['override']['sale_price'],
+			'legacy 的 salesPrice=0 代表沒有特價；轉成 "0" 會讓商品變 0 元'
+		);
+
+		$this->assertSame( 12, $data['rate'] ?? null, '分潤比例由匯入時指定' );
+
+		// 落地驗證：不只看回應，也確認 DB 內的 post_meta 真的寫進去了。
+		$stored = \get_post_meta( (int) $data['id'], '_profit_shop_items', true );
+		$this->assertNotEmpty( $stored );
+		$decoded = json_decode( (string) $stored, true );
+		$this->assertCount( 2, $decoded );
+	}
+
+	/**
+	 * 🔴 settings 只帶白名單欄位——舊版報表密碼不得被複製進新賣場
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_import_does_not_leak_legacy_report_password_into_settings(): void {
+		$p1        = (int) self::factory()->post->create( [ 'post_type' => 'product' ] );
+		$legacy_id = $this->create_legacy_shop_with_products( [ $p1 ], [ 'post_name' => 'legacy-settings-allowlist' ] );
+
+		$response = $this->do_import( $legacy_id );
+		$this->assertSame( 201, $response->get_status() );
+
+		$settings = $response->get_data()['data']['settings'] ?? [];
+
+		$this->assertSame( '#ff0000', $settings['btnColor'] ?? null );
+		$this->assertArrayNotHasKey( 'power_shop_report_password', $settings );
+		$this->assertArrayNotHasKey( 'power_shop_meta', $settings );
+		$this->assertArrayNotHasKey( '_edit_lock', $settings );
+	}
+
+	/**
+	 * 🔴 同一筆 legacy 不得被重複匯入成兩個同 slug 的賣場
+	 *
+	 * 走正常建立路徑（POST /profit-shops）時同名 slug 會被 409 擋下，匯入路徑
+	 * 先前完全繞過 SlugConflictDetector，可以無限次匯入。
+	 *
+	 * @test
+	 * @group error
+	 */
+	public function test_second_import_of_same_legacy_is_rejected_by_slug_conflict(): void {
+		$p1        = (int) self::factory()->post->create( [ 'post_type' => 'product' ] );
+		$legacy_id = $this->create_legacy_shop_with_products( [ $p1 ], [ 'post_name' => 'legacy-dup-guard' ] );
+
+		$this->assertSame( 201, $this->do_import( $legacy_id )->get_status() );
+
+		$second = $this->do_import( $legacy_id );
+		$this->assertSame( 409, $second->get_status() );
+		$this->assertSame( 'slug_conflict', $second->get_data()['code'] ?? null );
+
+		$this->assertCount(
+			1,
+			\get_posts(
+				[
+					'post_type'      => CptRegistrar::POST_TYPE,
+					'post_status'    => 'any',
+					'name'           => 'legacy-dup-guard',
+					'posts_per_page' => -1,
+					'fields'         => 'ids',
+				]
+			),
+			'第二次匯入不得建出第二個同 slug 的賣場'
+		);
+	}
+
+	/**
+	 * 列表必須帶出前端契約需要的欄位，且不得外洩 legacy 原始 post_meta
+	 *
+	 * 前端 `TLegacyShop` 讀的是 legacy_id / importable / reason / product_count。
+	 * 這些欄位曾經完全不存在（後端只回 id / title / slug / meta），導致「遷入」按鈕
+	 * 永久 disabled、站長完全無法使用此功能。
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_legacy_list_exposes_frontend_contract_fields(): void {
+		$p1 = (int) self::factory()->post->create( [ 'post_type' => 'product' ] );
+		$this->create_legacy_shop_with_products( [ $p1 ], [ 'post_name' => 'legacy-contract-check' ] );
+
+		$response = \rest_do_request( new \WP_REST_Request( 'GET', '/power-shop/profit-migration/legacy-shops' ) );
+		$this->assertSame( 200, $response->get_status() );
+
+		$rows = $response->get_data()['data'] ?? [];
+		$row  = null;
+		foreach ( $rows as $candidate ) {
+			if ( 'legacy-contract-check' === ( $candidate['slug'] ?? '' ) ) {
+				$row = $candidate;
+				break;
+			}
+		}
+
+		$this->assertNotNull( $row, '列表中應找得到剛建立的 legacy 賣場' );
+		$this->assertArrayHasKey( 'legacy_id', $row );
+		$this->assertGreaterThan( 0, $row['legacy_id'] );
+		$this->assertTrue( $row['importable'], '沒有衝突時應可匯入' );
+		$this->assertNull( $row['reason'] );
+		$this->assertSame( 1, $row['product_count'] );
+
+		$this->assertArrayNotHasKey(
+			'meta',
+			$row,
+			'不得把 legacy 原始 post_meta（含報表密碼）附在列表回應裡'
+		);
+	}
+
+	/**
+	 * 已匯入過的 legacy 在列表上必須被標成不可匯入，並說明原因
+	 *
+	 * @test
+	 * @group happy
+	 */
+	public function test_legacy_list_marks_already_imported_shop_as_not_importable(): void {
+		$p1        = (int) self::factory()->post->create( [ 'post_type' => 'product' ] );
+		$legacy_id = $this->create_legacy_shop_with_products( [ $p1 ], [ 'post_name' => 'legacy-already-imported' ] );
+
+		$this->assertSame( 201, $this->do_import( $legacy_id )->get_status() );
+
+		$response = \rest_do_request( new \WP_REST_Request( 'GET', '/power-shop/profit-migration/legacy-shops' ) );
+		$rows     = $response->get_data()['data'] ?? [];
+
+		$row = null;
+		foreach ( $rows as $candidate ) {
+			if ( 'legacy-already-imported' === ( $candidate['slug'] ?? '' ) ) {
+				$row = $candidate;
+				break;
+			}
+		}
+
+		$this->assertNotNull( $row );
+		$this->assertFalse( $row['importable'], '已匯入過（slug 被佔用）應標為不可匯入' );
+		$this->assertNotNull( $row['reason'], '不可匯入時必須說明原因，否則站長不知道為什麼按不下去' );
+	}
+
+	/**
+	 * 已刪除的商品跳過而非讓整筆匯入失敗，並在回應中誠實回報
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_import_skips_deleted_products_and_reports_them(): void {
+		$p1        = (int) self::factory()->post->create( [ 'post_type' => 'product' ] );
+		$ghost     = 99887766;
+		$legacy_id = $this->create_legacy_shop_with_products( [ $p1, $ghost ], [ 'post_name' => 'legacy-with-ghost' ] );
+
+		$response = $this->do_import( $legacy_id );
+
+		$this->assertSame( 201, $response->get_status(), '單一失效商品不應讓整筆匯入失敗' );
+		$data = $response->get_data()['data'] ?? [];
+
+		$this->assertCount( 1, $data['items'] ?? [] );
+		$this->assertSame( $p1, $data['items'][0]['product_id'] );
+		$this->assertSame( [ $ghost ], $data['skipped_product_ids'] ?? null );
+	}
+
+	/**
+	 * 送出一次匯入請求
+	 *
+	 * @param int                  $legacy_id legacy post ID
+	 * @param array<string, mixed> $extra     額外 body 欄位
+	 *
+	 * @return \WP_REST_Response
+	 */
+	private function do_import( int $legacy_id, array $extra = [] ): \WP_REST_Response {
+		$request = new \WP_REST_Request( 'POST', '/power-shop/profit-migration/import' );
+		$request->set_header( 'Content-Type', 'application/json' );
+		$request->set_body(
+			(string) \wp_json_encode(
+				\array_merge(
+					[
+						'legacy_id'       => $legacy_id,
+						'partner_term_id' => $this->partner_term_id,
+					],
+					$extra
+				)
+			)
+		);
+
+		return \rest_do_request( $request );
+	}
 }

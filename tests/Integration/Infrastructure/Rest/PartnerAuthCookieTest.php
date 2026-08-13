@@ -11,7 +11,8 @@
  *     - Secure
  *     - SameSite=Lax
  *     - Path=/
- *     - Max-Age=3600
+ *     - Max-Age：不斷言字面值，改斷言「與 body 的 expires_at 同源」+「至少天級」
+ *       （2026-08 TTL 由 1 小時改為 14 天，理由見 V2Api::PARTNER_TOKEN_TTL_DEFAULT_SECONDS）
  *
  * @group profit_shop
  * @group rest
@@ -73,7 +74,37 @@ final class PartnerAuthCookieTest extends TestCase {
 		$this->assertStringContainsStringIgnoringCase( 'Secure', $set_cookie_str );
 		$this->assertStringContainsStringIgnoringCase( 'SameSite=Lax', $set_cookie_str );
 		$this->assertStringContainsStringIgnoringCase( 'Path=/', $set_cookie_str );
-		$this->assertStringContainsStringIgnoringCase( 'Max-Age=3600', $set_cookie_str );
+
+		/*
+		 * Max-Age 刻意**不斷言字面值**。
+		 *
+		 * 這裡原本寫死 `Max-Age=3600`，2026-08 把 TTL 調整為 14 天（對齊 WordPress
+		 * 「保持登入」）時它就轉紅了——但那個數字從來不是這條測試要保護的東西，
+		 * 寫死只會讓每次調整 TTL 都得回來改測試，而真正該守的性質反而沒被測到。
+		 *
+		 * 改為斷言兩件更重要的事：
+		 *   1. Max-Age 與 response body 的 expires_at **同源**——兩者若脫鉤，
+		 *      會出現「瀏覽器以為還登入著、後端卻已經不認」的 401 認知落差。
+		 *   2. 至少是天級——防止有人把 partner session 改回小時級而沒有人發現
+		 *      （那正是這次調整要解決的問題：唯讀報表卻要一小時重登一次）。
+		 */
+		preg_match( '/Max-Age=(\d+)/i', $set_cookie_str, $matches );
+		$this->assertNotEmpty( $matches, 'Set-Cookie 必須含 Max-Age' );
+
+		$max_age    = (int) $matches[1];
+		$body       = $response->get_data();
+		$expires_in = (int) $body['expires_at'] - time();
+
+		$this->assertGreaterThanOrEqual(
+			DAY_IN_SECONDS,
+			$max_age,
+			'partner session 至少應為天級（唯讀報表不該一小時就要重新登入）'
+		);
+		$this->assertLessThanOrEqual(
+			5,
+			abs( $max_age - $expires_in ),
+			'Cookie Max-Age 必須與 token expires_at 同源，否則會出現 401 認知落差'
+		);
 	}
 
 	/**

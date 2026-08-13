@@ -317,7 +317,7 @@ const isEditing = useIsEditing()
 | `/products/taxonomies` | `Product/Taxonomies` | `wc-rest` |
 | `/products/attributes` | `Product/Attributes` | `wc-rest` |
 | `/marketing` | `Product/List` | `wc-rest` |
-| `/marketing/one-shop` | `Marketing/OneShop` | — (Phase 4-A3：雙入口 placeholder) |
+| ~~`/marketing/one-shop`~~ | ~~`Marketing/OneShop`~~ | **已於 2026-08-13 移除**（連同 `pages/admin/Marketing/` 整個目錄）。原本是「新版 Profit Shop / 舊版 wp-admin」雙入口導覽頁；「介紹新版」對已經在後台選單裡的站長沒有價值，真正有用的「舊版管理介面在哪」與「為什麼該遷移」已併進 `ProfitMigration/List/index.tsx` 上方的說明卡片。`marketing` 這個 resource 仍在，但已是純選單分組（無 `list`、無自有頁面） |
 | `/profit-shop` | `ProfitShop/List` | `power-shop`（useCustom）|
 | `/profit-shop/create` | `ProfitShop/Create` | `power-shop` |
 | `/profit-shop/edit/:id` | `ProfitShop/Edit` | `power-shop` |

@@ -42,7 +42,6 @@ import {
 	ProductTaxonomies,
 	ProductAttributes,
 	Summary,
-	OneShop,
 	ProfitShopList,
 	ProfitShopEdit,
 	ProfitShopCreate,
@@ -137,9 +136,9 @@ function App() {
 							<Route path="attributes" element={<ProductAttributes />} />
 						</Route>
 
+						{/* `one-shop` 子路由已移除，內容併入「遷入舊版」——見 resources/index.tsx 的說明 */}
 						<Route path="marketing">
 							<Route index element={<ProductList />} />
-							<Route path="one-shop" element={<OneShop />} />
 						</Route>
 
 						<Route path="profit-shop">

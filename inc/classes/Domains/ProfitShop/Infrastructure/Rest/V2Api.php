@@ -34,6 +34,7 @@ use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\ListPartners;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\GetPartnerKpiUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\GetPartnerTrendUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\ListPartnerSettlementsUseCase;
+use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\Report\ListPartnerShopsUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Partner\UpdatePartner;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\ExportSettlementsUseCase;
 use J7\PowerShop\Domains\ProfitShop\Application\UseCase\Settlement\GetSettlementSummaryUseCase;
@@ -85,7 +86,10 @@ use J7\WpUtils\Classes\WP;
  * Permission 策略（spec §4 對齊）：
  *  - profit-shops/* GET/POST/PUT/DELETE / publish / unpublish / duplicate：
  *    permission_callback = null（= ApiBase 預設 manage_options OR manage_woocommerce）
- *  - profit-partners GET / GET-by-id：null（同上，讀取類允許 shop manager）
+ *  - profit-partners GET / GET-by-id：null（同上，讀取類允許 shop manager）；
+ *    ⚠️ 但 `PartnerOutput` 含**明文密碼**，因此兩個 callback 的輸出一律再經
+ *    `mask_partner_password_for_current_user()`——非 manage_options 者拿到的
+ *    `password` 為 null。見該方法的 docblock。
  *  - profit-partners POST / PUT / DELETE：admin_only_permission（manage_options，
  *    因 partner 涉及密碼系統與身分發放，僅 admin 可操作）
  *  - profit-migration/*：admin_only_permission（manage_options）
@@ -113,17 +117,91 @@ final class V2Api extends ApiBase {
 	private const PARTNER_RAW_FIELDS = [ 'password' ];
 
 	/**
-	 * Partner token TTL（秒）
+	 * `shop_ids` 清洗後為空時塞入的哨符 ID（fail-closed）
 	 *
-	 * 此常數同時用於：
-	 *   - PartnerTokenStore::issue 的 transient 過期時間
-	 *   - login response 的 Set-Cookie Max-Age
+	 * 🔴 **這不是資料，是一個「保證匹配不到任何東西」的哨符值。**
 	 *
-	 * 兩處必須一致，避免 cookie 還在但 transient 已過期（或反之）造成 401 認知不一致。
+	 * 背景：`?shop_ids=`（連結被通訊軟體截斷）、`?shop_ids=abc`、`?shop_ids=0`、
+	 * `?shop_ids=-1` 這類輸入，會讓「有指定 shop_ids」與「清洗後一個都不剩」同時成立。
+	 * 若此時退回空陣列，`WpSettlementSummaryProvider::build_extra_where()` 的
+	 * `! empty( $shop_ids_clean )` 判斷不成立 ⇒ 整段 shop 條件被跳過 ⇒
+	 * **回傳該夥伴「全部賣場」的合計**。夥伴看到的數字會比他要求的範圍大，
+	 * 而且**沒有任何錯誤訊息**——他無從得知自己看的不是單一賣場。
+	 * 因此改為 fail-closed：塞一個不可能存在的 shop id，讓 EXISTS 子查詢恆假、誠實回 0。
+	 *
+	 * ⚠️ **為何是 `PHP_INT_MAX` 而不是直覺上的 `0`**：唯一的 SQL 消費端
+	 * `WpSettlementSummaryProvider::build_extra_where()`（該檔 :590-595，已實測）
+	 * 會先跑 `array_filter( array_map( 'intval', ... ), fn( $id ) => $id > 0 )`——
+	 * `0` 與負數會被**濾掉**，濾完又變回空陣列，等於哨符完全沒有作用、上述缺陷原樣存在。
+	 * 哨符因此**必須是正整數**才穿得過那道過濾。`PHP_INT_MAX`（2^63-1）是 signed bigint
+	 * 的上限，而 `wp_posts.ID` 是 AUTO_INCREMENT 且遠不可能成長到這個值，
+	 * 因此 `meta_value IN (9223372036854775807)` 在實務上恆為 false。
 	 *
 	 * @var int
 	 */
-	private const PARTNER_TOKEN_TTL_SECONDS = 3600;
+	private const SHOP_IDS_FAIL_CLOSED_SENTINEL = PHP_INT_MAX;
+
+	/**
+	 * `shop_ids` 單次請求的數量上限
+	 *
+	 * 與同函式既有的 `page` cap（10000）/ `per_page` cap（100）同一套紀律：
+	 * 每個 id 都會展開成一個 `%d` placeholder 併進 EXISTS 子查詢的 `IN (...)`，
+	 * 不設上限時 `?shop_ids=1,2,3,...`（任意長度）可組出極大的 prepared statement。
+	 *
+	 * @var int
+	 */
+	private const SHOP_IDS_MAX = 100;
+
+	/**
+	 * Partner token TTL 預設值（秒）——對齊 WordPress「保持登入」的 14 天
+	 *
+	 * 2026-08 由 1 小時調整為 14 天。原本的 1 小時對唯讀報表而言過短：
+	 * 夥伴每次想看業績都要重新登入，而 token 過期本身**沒有任何前端提示**
+	 * （沒有計時器，要等下一次 API 請求回 401 才會被導回登入頁）。
+	 *
+	 * 為什麼是 14 天：`wp_set_auth_cookie()` 在 `$remember = true` 時用
+	 * `14 * DAY_IN_SECONDS`（wp-includes/pluggable.php），這是站長在後台
+	 * 勾「保持登入」時得到的時長，也是站長對「一次登入能撐多久」的既有預期。
+	 *
+	 * 🔴 **刻意不呼叫 WordPress 的 `auth_cookie_expiration` filter**：
+	 * 那個 filter 的第二個參數是 `$user_id`，而分潤夥伴是 taxonomy term、**不是 WP user**。
+	 * 傳 0 進去會讓任何依 user 判斷的第三方 filter（「管理員 1 天、訂閱者 14 天」這類）
+	 * 落到錯誤分支，甚至對 `get_userdata(0)` 產生非預期行為。
+	 * 要調整改用下方本外掛自己的 filter，語意才對得上。
+	 *
+	 * ⚠️ 安全取捨（已知並接受）：partner portal 的登入表單**沒有**「保持登入」勾選框，
+	 * 因此所有登入一律拿到 14 天。緩解是這組憑證的能力邊界極小——
+	 * 唯讀的自己的分潤報表 + 改自己的密碼，不涉及金流與任何寫入；
+	 * 且「改密碼」會立即撤銷該夥伴所有既有 token（見 PartnerTokenStore::verify）。
+	 *
+	 * @var int
+	 */
+	private const PARTNER_TOKEN_TTL_DEFAULT_SECONDS = 14 * DAY_IN_SECONDS;
+
+	/**
+	 * 取得 partner token TTL（秒）
+	 *
+	 * 同時用於：
+	 *   - PartnerTokenStore::issue 的 transient 過期時間
+	 *   - login response 的 Set-Cookie Max-Age
+	 *
+	 * 兩處**必須取自同一個來源**，否則會出現「cookie 還在但 transient 已過期」
+	 * （或反之）這種 401 認知不一致——瀏覽器以為還登入著、後端卻已經不認。
+	 *
+	 * 站台要調整時掛 `power_shop_partner_token_ttl` filter；
+	 * 回傳非正整數一律退回預設值（防呆：0 在 transient API 的語意是「永不過期」，
+	 * 那會讓 token 變成永久有效）。
+	 *
+	 * @return int
+	 */
+	private static function partner_token_ttl(): int {
+		$ttl = (int) \apply_filters(
+			'power_shop_partner_token_ttl',
+			self::PARTNER_TOKEN_TTL_DEFAULT_SECONDS
+		);
+
+		return $ttl > 0 ? $ttl : self::PARTNER_TOKEN_TTL_DEFAULT_SECONDS;
+	}
 
 	/**
 	 * Partner token cookie 路徑
@@ -358,6 +436,11 @@ final class V2Api extends ApiBase {
 			],
 			[
 				'endpoint' => 'partner-reports/settlements',
+				'method' => 'get',
+				'permission_callback' => $partner_token,
+			],
+			[
+				'endpoint' => 'partner-reports/shops',
 				'method' => 'get',
 				'permission_callback' => $partner_token,
 			],
@@ -739,6 +822,9 @@ final class V2Api extends ApiBase {
 	/**
 	 * GET /profit-partners
 	 *
+	 * ⚠️ 輸出前一律經過 `mask_partner_password_for_current_user()`——本 endpoint 的
+	 * permission 只要求 `manage_woocommerce`，但 `PartnerOutput` 含明文密碼。
+	 *
 	 * @param \WP_REST_Request $request Request.
 	 * @return \WP_REST_Response
 	 * @phpstan-ignore-next-line
@@ -747,7 +833,10 @@ final class V2Api extends ApiBase {
 		try {
 			$useCase = new ListPartners( partnerRepo: PartnerTermRepository::instance() );
 			$outputs = $useCase->execute();
-			$data    = array_map( static fn( $o ): array => $o->to_array(), $outputs );
+			$data    = array_map(
+				static fn( $o ): array => self::mask_partner_password_for_current_user( $o->to_array() ),
+				$outputs
+			);
 			return self::ok( $data );
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
@@ -777,6 +866,9 @@ final class V2Api extends ApiBase {
 	/**
 	 * GET /profit-partners/{id}
 	 *
+	 * ⚠️ 輸出前一律經過 `mask_partner_password_for_current_user()`——本 endpoint 的
+	 * permission 只要求 `manage_woocommerce`，但 `PartnerOutput` 含明文密碼。
+	 *
 	 * @param \WP_REST_Request $request Request.
 	 * @return \WP_REST_Response
 	 * @phpstan-ignore-next-line
@@ -786,7 +878,7 @@ final class V2Api extends ApiBase {
 			$id = (int) $request->get_param( 'id' );
 			$useCase = new GetPartner( partnerRepo: PartnerTermRepository::instance() );
 			$output  = $useCase->execute( $id );
-			return self::ok( $output->to_array() );
+			return self::ok( self::mask_partner_password_for_current_user( $output->to_array() ) );
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}
@@ -847,8 +939,11 @@ final class V2Api extends ApiBase {
 	 */
 	public function get_profit_migration_legacy_shops_callback( $request ): \WP_REST_Response {
 		try {
-			$useCase = new ListImportableLegacyShops( legacyRepo: LegacyOnePageShopRepository::instance() );
-			$data    = $useCase->execute();
+			$useCase = new ListImportableLegacyShops(
+				legacyRepo: LegacyOnePageShopRepository::instance(),
+				slugDetector: new SlugConflictDetector( WpSlugConflictLookup::instance() )
+			);
+			$data = $useCase->execute();
 			return self::ok( $data );
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
@@ -867,14 +962,23 @@ final class V2Api extends ApiBase {
 			$body            = self::read_json_body( $request );
 			$legacy_id       = isset( $body['legacy_id'] ) ? (int) $body['legacy_id'] : 0;
 			$partner_term_id = isset( $body['partner_term_id'] ) ? (int) $body['partner_term_id'] : 0;
+			// legacy 沒有分潤概念，比例由站長於匯入時指定；未帶時維持 0（等同改版前行為）。
+			$rate = isset( $body['rate'] ) ? (int) $body['rate'] : 0;
 
 			$useCase = new ImportLegacyShop(
 				legacyRepo: LegacyOnePageShopRepository::instance(),
 				shopRepo: CptProfitShopRepository::instance(),
-				partnerRepo: PartnerTermRepository::instance()
+				partnerRepo: PartnerTermRepository::instance(),
+				slugDetector: new SlugConflictDetector( WpSlugConflictLookup::instance() ),
+				productLookup: WpProductLookup::instance()
 			);
-			$output = $useCase->execute( $legacy_id, $partner_term_id );
-			return self::created( $output->to_array() );
+			$output = $useCase->execute( $legacy_id, $partner_term_id, $rate );
+
+			// 已刪除的商品會被跳過而非讓整筆匯入失敗，必須誠實回報給 UI 顯性告知站長。
+			$payload                        = $output->to_array();
+			$payload['skipped_product_ids'] = $useCase->skipped_product_ids();
+
+			return self::created( $payload );
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}
@@ -1061,7 +1165,8 @@ final class V2Api extends ApiBase {
 	 *
 	 * Set-Cookie 透過 `WP_REST_Response::header()` 直接寫 raw header（避免使用 setcookie，
 	 * REST API 已 buffer output）。Cookie 屬性：HttpOnly + Secure + SameSite=Lax +
-	 * Path=PARTNER_COOKIE_PATH（/wp-json/power-shop/）+ Max-Age=PARTNER_TOKEN_TTL_SECONDS（3600）。
+	 * Path=PARTNER_COOKIE_PATH（/wp-json/power-shop/）+ Max-Age=partner_token_ttl()（預設 14 天，
+	 * 對齊 WordPress「保持登入」；見 PARTNER_TOKEN_TTL_DEFAULT_SECONDS）。
 	 *
 	 * @param \WP_REST_Request $request Request.
 	 * @return \WP_REST_Response
@@ -1105,7 +1210,7 @@ final class V2Api extends ApiBase {
 				'profit_partner_token=%s; HttpOnly; Secure; SameSite=Lax; Path=%s; Max-Age=%d',
 				rawurlencode( $output->token ),
 				self::PARTNER_COOKIE_PATH,
-				self::PARTNER_TOKEN_TTL_SECONDS
+				self::partner_token_ttl()
 			);
 			$response->header( 'Set-Cookie', $cookie );
 
@@ -1361,6 +1466,34 @@ final class V2Api extends ApiBase {
 			$output  = $useCase->execute( $partner_term_id, $criteria );
 
 			return new \WP_REST_Response( $output->to_array(), 200 );
+		} catch ( \Throwable $e ) {
+			return ExceptionMapper::map( $e );
+		}
+	}
+
+	/**
+	 * GET /partner-reports/shops
+	 *
+	 * 回傳該 partner 曾產生過業績的賣場清單，供報表的「賣場」篩選器建立選項。
+	 *
+	 * Partner_term_id 來源：permission_callback 已從 token 解出並寫入 `_partner_term_id`，
+	 * 永不從 query string 取——本 endpoint 尤其不可，否則「別人有哪些賣場」會變成可列舉。
+	 *
+	 * 回應為裸 payload（partner endpoint 慣例，不裹 `{code, data}`）：
+	 * `{ shops: [ { shop_id, shop_name }, ... ] }`
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 * @phpstan-ignore-next-line
+	 */
+	public function get_partner_reports_shops_callback( $request ): \WP_REST_Response {
+		try {
+			$partner_term_id = (int) $request->get_param( '_partner_term_id' );
+
+			$useCase = new ListPartnerShopsUseCase( summary: WpSettlementSummaryProvider::instance() );
+			$shops   = $useCase->execute( $partner_term_id );
+
+			return new \WP_REST_Response( [ 'shops' => $shops ], 200 );
 		} catch ( \Throwable $e ) {
 			return ExceptionMapper::map( $e );
 		}
@@ -1678,7 +1811,7 @@ final class V2Api extends ApiBase {
 			clock: SystemClock::instance(),
 			partners: PartnerTermRepository::instance(),
 			salt_provider: new WpSaltProvider(),
-			ttl: self::PARTNER_TOKEN_TTL_SECONDS,
+			ttl: self::partner_token_ttl(),
 			key_prefix: 'ps_partner_token_',
 		);
 	}
@@ -1717,6 +1850,19 @@ final class V2Api extends ApiBase {
 	/**
 	 * 從 query string 建構 FilterCriteria（不接受 partner_term_id；安全鎖死）
 	 *
+	 * `shop_ids` 的三態語意（改動前先讀懂，第三態是 fail-closed 的關鍵）：
+	 *
+	 * | query string | `$shop_ids` | 下游行為 |
+	 * |---|---|---|
+	 * | 完全沒帶 `shop_ids` | `[]` | 不過濾 ⇒ 該夥伴全部賣場合計（**正確**，這是預設檢視） |
+	 * | 帶了且至少一個合法 | `[1932, ...]` | 只算這些賣場 |
+	 * | 帶了但清洗後一個都不剩 | `[SHOP_IDS_FAIL_CLOSED_SENTINEL]` | EXISTS 恆假 ⇒ 誠實回 0 |
+	 *
+	 * 第一態與第三態**都是空輸入、語意卻相反**：前者是「使用者沒有要求篩選」，
+	 * 後者是「使用者要求了篩選、但要求的內容無效」。兩者若共用空陣列，
+	 * 後者會靜默退化成前者、回傳比要求範圍更大的數字。見
+	 * `SHOP_IDS_FAIL_CLOSED_SENTINEL` 的 docblock。
+	 *
 	 * @param \WP_REST_Request $request Request.
 	 * @phpstan-param \WP_REST_Request<array<string, mixed>> $request
 	 *
@@ -1739,6 +1885,17 @@ final class V2Api extends ApiBase {
 				if ( $id > 0 ) {
 					$shop_ids[] = $id;
 				}
+			}
+
+			// 去重後再 cap（見 SHOP_IDS_MAX）。去重必須在 cap 之前，否則
+			// `?shop_ids=5,5,5,...` 會用重複值把額度吃光，把合法的後段 id 擠出上限。
+			$shop_ids = array_slice( array_values( array_unique( $shop_ids ) ), 0, self::SHOP_IDS_MAX );
+
+			// 🔴 fail-closed：有指定 shop_ids 但清洗後一個都不剩時，**絕不可**退回空陣列
+			// （空陣列在下游的語意是「不過濾」＝回傳全部賣場合計）。
+			// 完整推導見 SHOP_IDS_FAIL_CLOSED_SENTINEL 的 docblock。
+			if ( [] === $shop_ids ) {
+				$shop_ids = [ self::SHOP_IDS_FAIL_CLOSED_SENTINEL ];
 			}
 		}
 
@@ -1765,6 +1922,38 @@ final class V2Api extends ApiBase {
 			page: $page,
 			per_page: $per_page,
 		);
+	}
+
+	/**
+	 * 依當前使用者權限遮蔽 PartnerOutput 的明文密碼（縱深防禦）
+	 *
+	 * ⚠️ **真正的授權邊界是 endpoint 的 permission_callback，本方法是第二道防線。**
+	 * 不要因為有這一層就放寬任何 endpoint 的權限設定。
+	 *
+	 * 背景（既有缺陷，非本次改動引入）：`GET /profit-partners` 與
+	 * `GET /profit-partners/{id}` 的 permission_callback 是 `null`
+	 * （＝ ApiBase 預設，`manage_woocommerce` 即可通過），而 `PartnerOutput` 依
+	 * `profit-shop.rule.md` §6「明文密碼並存」**含 `password` 明文欄位**；
+	 * 但同一組資源的 POST / PUT / DELETE 走 `admin_only_permission`（`manage_options`）。
+	 * ⇒ shop_manager **讀得到全站夥伴的明文報表密碼，卻不能改密碼**——
+	 * 讀與寫兩側的權限邊界不一致，且沒有任何錯誤訊息會提示這件事。
+	 *
+	 * 修法刻意收斂在 Presentation 層（輸出前遮蔽），不動 DTO 與 Domain：
+	 * `password` 對 UseCase / Repository 而言仍是同一個欄位，只有「送給誰看」
+	 * 受權限影響，而那本來就是 Presentation 的職責。
+	 *
+	 * 連帶行為（正確且刻意）：遮蔽後 `#/profit-partner` 與 `#/profit-shop` 兩頁的
+	 * 「複製密碼」按鈕，對 shop_manager 會自然落進既有的「無明文密碼」停用分支。
+	 *
+	 * @param array<string, mixed> $row `PartnerOutput::to_array()` 的結果.
+	 *
+	 * @return array<string, mixed> `password` 已依權限遮蔽的陣列
+	 */
+	private static function mask_partner_password_for_current_user( array $row ): array {
+		if ( ! \current_user_can( 'manage_options' ) ) {
+			$row['password'] = null;
+		}
+		return $row;
 	}
 
 	/**

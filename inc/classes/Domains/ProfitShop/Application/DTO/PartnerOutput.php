@@ -13,8 +13,20 @@ namespace J7\PowerShop\Domains\ProfitShop\Application\DTO;
  * 對應規格：specs/2026-05-06-profit-shop-design.md §3 / §6.3
  *
  * ⚠️ **本 DTO 含明文密碼**（`password`），僅供站長在後台查看 / 複製後轉交夥伴。
- * 因此它只能出現在 **admin-only endpoint** 的 response：
- *   - `GET|POST /profit-partners`、`GET|PUT /profit-partners/{id}`（permission：manage_woocommerce / manage_options）
+ *
+ * 🔴 **`password` 欄位的可見範圍是 `manage_options`，不是「所有能打到這個 endpoint 的人」**——
+ * 這兩者在本專案**並不相同**，過去這段 docblock 曾把它們混為一談：
+ *
+ * | endpoint | permission_callback | 誰通得過 |
+ * |---|---|---|
+ * | `GET /profit-partners`、`GET /profit-partners/{id}` | `null` | **`manage_woocommerce`**（含 shop_manager） |
+ * | `POST|PUT|DELETE /profit-partners{/id}` | `admin_only_permission` | `manage_options` |
+ *
+ * 也就是說兩個 GET 的權限**比寫入側寬**，光靠 endpoint 權限並擋不住 shop_manager 讀到明文。
+ * 因此那兩個 GET callback 在輸出前會再跑一次
+ * `V2Api::mask_partner_password_for_current_user()`，非 `manage_options` 者拿到的
+ * `password` 一律為 null。**新增任何回傳本 DTO 的 endpoint 時必須照做**——
+ * 「這個 endpoint 是後台的」不等於「它的讀取者都是站長」。
  *
  * **絕不可**用於任何 partner-facing endpoint。`GET /partner-auth/me` 刻意不使用本 DTO、
  * 而是在 V2Api callback 內明確列舉四個欄位輸出——新增 partner-facing endpoint 時請照做，

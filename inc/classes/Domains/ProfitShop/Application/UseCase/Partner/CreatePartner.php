@@ -39,7 +39,10 @@ final class CreatePartner {
 	 *
 	 * @param PartnerInput $input Partner 輸入 DTO
 	 *
-	 * @return PartnerOutput 建立後輸出 DTO（不含密碼）
+	 * @return PartnerOutput 建立後輸出 DTO，**含明文密碼**；只能回給 `manage_options`，
+	 *                       經權限較寬的 endpoint 輸出前必須套
+	 *                       `V2Api::mask_partner_password_for_current_user()`
+	 *                       （見 `PartnerOutput` 的 class docblock）
 	 *
 	 * @throws InvalidPartnerSlug 當 slug 不合法（PartnerSlug VO 觸發）
 	 * @throws PartnerNotFound    當建立後找不到（理論上不應發生）

@@ -49,6 +49,7 @@ use J7\PowerShop\Domains\ProfitShop\Domain\Entity\SettlementRecord;
 use J7\PowerShop\Domains\ProfitShop\Domain\ValueObject\ProfitRate;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\OrderItemSettlementRepository;
 use J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence\WpSettlementSummaryProvider;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\Rest\V2Api;
 use Tests\Integration\TestCase;
 
 /**
@@ -1172,6 +1173,21 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 	 *
 	 * 額外條件會往 args 追加元素，是 placeholder/args 最容易不同步的路徑。
 	 *
+	 * ═══ 🔴 為何斷言必須是**精確值**，`assertNotSame('0.00', ...)` 不夠 ═══
+	 *
+	 * 本條原本只斷言 `profit_pending !== '0.00'`。實測（2026-08-13）：把
+	 * `build_extra_where()` 裡整段 `shop_ids` 條件**刪掉**，完整 PHPUnit **仍然全綠**——
+	 * 因為 partner_A 在 shop_A 有 pending 200、在 shop_B 有 pending 300，
+	 * 篩選正確時是 `200.00`、篩選整段失效時是 `500.00`，**兩者都通過 `!== '0.00'`**。
+	 *
+	 * ⇒ 這條當時是**假綠燈**：它宣稱在守 prepare 的 placeholder/args 同步，
+	 *   實際上連「shop_ids 條件有沒有被送進 SQL」都分辨不出來。
+	 *   `shop_ids` 的 args 正是最容易不同步的那一段（一個 `%s` + N 個 `%d`），
+	 *   偏偏就是它被漏掉也不會紅。
+	 *
+	 * 現在三個查詢各自鎖死精確結果：任何一段 SQL 少了 shop 條件，
+	 * 數字會從 `200.00` 變 `500.00`、筆數會從 1 變 2 ⇒ 必然轉紅。
+	 *
 	 * @test
 	 * @group edge
 	 */
@@ -1184,16 +1200,234 @@ final class WpSettlementSummaryProviderRealAggregationTest extends TestCase {
 			per_page: 100,
 		);
 
+		// partner_A ∩ shop_A ∩ pending = 只有 order_2（profit 200 / actual 660）。
+		// shop_ids 條件若失效 → 併入 shop_B 的 order_3 → 500.00 / 1100.00。
 		$kpi = $this->provider->summary_for_partner( $this->partner_a_id, $criteria );
-		$this->assertNotSame( '0.00', $kpi['profit_pending'], '帶完整過濾條件時 summary 不得因 prepare 失敗而歸零' );
-
-		$this->assertNotEmpty(
-			$this->provider->trend_for_partner( $this->partner_a_id, $criteria, 'day' ),
-			'帶完整過濾條件時 trend 不得因 prepare 失敗而回空'
+		$this->assertSame(
+			'200.00',
+			$kpi['profit_pending'],
+			'只有 order_2 符合（partner_A + shop_A + pending）；變 500.00 代表 shop_ids 條件沒進 SQL'
 		);
-		$this->assertNotEmpty(
-			$this->provider->find_by_partner( $this->partner_a_id, $criteria ),
-			'帶完整過濾條件時 list 不得因 prepare 失敗而回空'
+		$this->assertSame( '660.00', $kpi['total_sales'], 'total_sales 同樣只該含 order_2；變 1100.00 代表 shop_ids 條件沒進 SQL' );
+		$this->assertSame( '0.00', $kpi['profit_paid'], 'status filter 已排除 paid' );
+		$this->assertSame( '0.00', $kpi['profit_refunded'], 'status filter 已排除 refunded' );
+
+		$trend = $this->provider->trend_for_partner( $this->partner_a_id, $criteria, 'day' );
+		$this->assertCount( 1, $trend, 'order_2 與 order_3 日期不同，shop 條件失效會多一個 bucket' );
+		$this->assertSame( 1, $trend[0]['count'], '該 bucket 只該有 1 筆' );
+		$this->assertSame( '200.00', $trend[0]['profit'], '該 bucket 的分潤只該是 order_2 的 200' );
+
+		$list = $this->provider->find_by_partner( $this->partner_a_id, $criteria );
+		$this->assertCount( 1, $list, '結算明細只該列出 order_2' );
+		$this->assertSame(
+			$this->item_ids['order_2'],
+			$list[0]['order_item_id'],
+			'列出來的必須是 order_2 那筆 line item'
+		);
+	}
+
+	// ============================================================
+	// K. 🔴 shop_ids 篩選：精確範圍 + fail-closed
+	// ============================================================
+
+	/**
+	 * 🔴 shop_ids 必須真的把結果收斂到指定賣場（而非「有帶就不管」）
+	 *
+	 * 兩個方向都斷言（shop_A / shop_B），因為只鎖一邊的話，
+	 * 「條件寫死成永遠命中 shop_A」這種實作仍會通過。
+	 *
+	 * fixture 對照（見 build_fixture 的表）：
+	 *   shop_A：order_1 paid 100 / order_2 pending 200 / order_5 refunded 50，actual 880+660+220 = 1760
+	 *   shop_B：order_3 pending 300，actual 440
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_shop_ids_filter_scopes_result_to_the_requested_shop(): void {
+		$only_a = $this->provider->summary_for_partner(
+			$this->partner_a_id,
+			new FilterCriteria( shop_ids: [ $this->shop_a_id ] )
+		);
+
+		$this->assertSame( '100.00', $only_a['profit_paid'], 'shop_A：order_1' );
+		$this->assertSame( '200.00', $only_a['profit_pending'], 'shop_A 只有 order_2；含 shop_B 的 order_3 會變 500.00' );
+		$this->assertSame( '50.00', $only_a['profit_refunded'], 'shop_A：order_5' );
+		$this->assertSame( '1760.00', $only_a['total_sales'], '880 + 660 + 220；未過濾會是 2200.00' );
+
+		$only_b = $this->provider->summary_for_partner(
+			$this->partner_a_id,
+			new FilterCriteria( shop_ids: [ $this->shop_b_id ] )
+		);
+
+		$this->assertSame( '300.00', $only_b['profit_pending'], 'shop_B 只有 order_3' );
+		$this->assertSame( '0.00', $only_b['profit_paid'], 'order_1 屬於 shop_A，不得出現在 shop_B 的結果' );
+		$this->assertSame( '0.00', $only_b['profit_refunded'], 'order_5 屬於 shop_A' );
+		$this->assertSame( '440.00', $only_b['total_sales'], 'shop_B 只有 order_3 的 440' );
+
+		// 兩者聯集必須等於未過濾的全量——否則代表某一邊漏算了。
+		$all = $this->provider->summary_for_partner( $this->partner_a_id, new FilterCriteria() );
+		$this->assertSame(
+			$all['total_sales'],
+			bcadd( $only_a['total_sales'], $only_b['total_sales'], 2 ),
+			'shop_A + shop_B 應恰好等於全量；對不起來代表過濾把某些資料吃掉或重複計入'
+		);
+	}
+
+	/**
+	 * 🔴 fail-closed：指定一個不存在的賣場，必須誠實回 0，不得退化成「全部賣場合計」
+	 *
+	 * 這是 `WpSettlementSummaryProvider` 這一側的守門。API 那一側的三態語意
+	 * （沒帶 / 帶了合法 / 帶了但清洗後全空）另由
+	 * `PartnerReportShopFilterTest` 端到端鎖住。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_shop_ids_with_unknown_shop_returns_zero_not_everything(): void {
+		$unknown  = ( max( $this->shop_a_id, $this->shop_b_id ) + 100000 );
+		$criteria = new FilterCriteria( shop_ids: [ $unknown ], per_page: 100 );
+
+		$kpi = $this->provider->summary_for_partner( $this->partner_a_id, $criteria );
+
+		$this->assertSame( '0.00', $kpi['profit_pending'], '不存在的賣場不該有任何待撥款；500.00 代表過濾整段被跳過' );
+		$this->assertSame( '0.00', $kpi['profit_paid'] );
+		$this->assertSame( '0.00', $kpi['profit_refunded'] );
+		$this->assertSame( '0.00', $kpi['total_sales'], '2200.00 代表 shop 條件沒生效，夥伴會看到比要求範圍更大的數字' );
+
+		$this->assertSame( [], $this->provider->trend_for_partner( $this->partner_a_id, $criteria, 'day' ) );
+		$this->assertSame( [], $this->provider->find_by_partner( $this->partner_a_id, $criteria ) );
+	}
+
+	/**
+	 * 🔴 V2Api 的 fail-closed 哨符值，必須在**這一段 SQL 裡**真的匹配不到任何東西
+	 *
+	 * 這條測的不是「哨符等於某個字面值」，而是**兩個檔案之間的相容性**：
+	 *
+	 *   `V2Api::build_filter_criteria_from_request()` 在「使用者指定了 shop_ids、
+	 *   但清洗後一個都不剩」時塞入 `SHOP_IDS_FAIL_CLOSED_SENTINEL`，
+	 *   而唯一的 SQL 消費端是 `WpSettlementSummaryProvider::build_extra_where()`——
+	 *   它會先跑 `array_filter( array_map( 'intval', ... ), fn( $id ) => $id > 0 )`。
+	 *
+	 * ⇒ 哨符若是 `0` 或負數，會被那道過濾**吃掉**、陣列變回空、
+	 *   `! empty()` 不成立 ⇒ 整段 shop 條件被跳過 ⇒ **回傳全部賣場合計**。
+	 *   哨符「看起來有設」但完全是 no-op，而且沒有任何錯誤訊息。
+	 *
+	 * 所以這裡刻意用 reflection 讀**產品程式碼當下的**哨符值再送進 provider：
+	 * 任何人改動哨符（或改動那道 `> 0` 過濾）而破壞相容性時，這條必然轉紅。
+	 * 寫死 `PHP_INT_MAX` 的話，改哨符的人不會被攔住——那正是要防的事。
+	 *
+	 * ⚠️ 常數被改名時本條會以「找不到常數」紅燈，這是刻意的：
+	 *    改名的人必須回來確認這個跨檔案不變量仍然成立。
+	 *
+	 * @test
+	 * @group security
+	 */
+	public function test_v2api_fail_closed_sentinel_matches_nothing_in_this_query(): void {
+		$constants = ( new \ReflectionClass( V2Api::class ) )->getConstants();
+
+		$this->assertArrayHasKey(
+			'SHOP_IDS_FAIL_CLOSED_SENTINEL',
+			$constants,
+			'V2Api 的 fail-closed 哨符常數不見了（被改名或刪除）——請確認 shop_ids 的第三態仍然 fail-closed'
+		);
+
+		$sentinel = $constants['SHOP_IDS_FAIL_CLOSED_SENTINEL'];
+		$this->assertIsInt( $sentinel );
+
+		// 診斷用的快速失敗：非正整數會被 build_extra_where() 的 `> 0` 過濾吃掉，
+		// 哨符變成 no-op。真正的鎖是下面那組行為斷言（哨符若是 0，profit_pending 會是 500.00）。
+		$this->assertGreaterThan(
+			0,
+			$sentinel,
+			'哨符必須是正整數才穿得過 build_extra_where() 的 `$id > 0` 過濾；0 或負數會讓 fail-closed 靜默失效'
+		);
+
+		$criteria = new FilterCriteria( shop_ids: [ $sentinel ], per_page: 100 );
+
+		$kpi = $this->provider->summary_for_partner( $this->partner_a_id, $criteria );
+
+		$this->assertSame( '0.00', $kpi['profit_pending'], '哨符必須讓 EXISTS 恆假；500.00 代表哨符被過濾掉、條件整段沒下' );
+		$this->assertSame( '0.00', $kpi['profit_paid'] );
+		$this->assertSame( '0.00', $kpi['profit_refunded'] );
+		$this->assertSame( '0.00', $kpi['total_sales'] );
+
+		$this->assertSame( [], $this->provider->trend_for_partner( $this->partner_a_id, $criteria, 'day' ) );
+		$this->assertSame( [], $this->provider->find_by_partner( $this->partner_a_id, $criteria ) );
+	}
+
+	/**
+	 * 🔴 實測記錄：非正整數的 shop_id 會被**整段吃掉**，退化成「不過濾」
+	 *
+	 * 這條不是在讚許現況，而是把「為什麼 `SHOP_IDS_FAIL_CLOSED_SENTINEL` 不能是 `0`」
+	 * 這個**唯一的理由**變成可執行的量測，而不是留在註解裡的一句宣稱
+	 * （本 repo 已因「註解宣稱與實際行為相反」吃過三次虧，見 CLAUDE.md Pitfall #34）。
+	 *
+	 * `build_extra_where()` 先跑 `array_filter( array_map( 'intval', ... ), fn( $id ) => $id > 0 )`，
+	 * `[0]` 濾完變回空陣列 ⇒ `! empty()` 不成立 ⇒ shop 條件整段不下 ⇒ 回全部賣場合計。
+	 *
+	 * ⚠️ **這條之後可能會、也應該會轉紅**：若有人採納「讓 `build_extra_where()` 在
+	 * criteria 給了非空陣列時一定下條件」這個更根本的修法，`[0]` 就會變成 `0.00`。
+	 * **那是進步，不是回歸**——屆時請把本條改為斷言 `0.00`，並回到
+	 * `V2Api::SHOP_IDS_FAIL_CLOSED_SENTINEL` 把哨符換回語意最清楚的 `0`。
+	 * 這條紅燈的用途就是提醒那個人「哨符也要一起改」。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_non_positive_shop_id_is_silently_dropped_and_degrades_to_no_filter(): void {
+		$baseline = $this->provider->summary_for_partner( $this->partner_a_id, new FilterCriteria() );
+
+		foreach ( [ 0, -1 ] as $non_positive ) {
+			$kpi = $this->provider->summary_for_partner(
+				$this->partner_a_id,
+				new FilterCriteria( shop_ids: [ $non_positive ] )
+			);
+
+			$this->assertSame(
+				$baseline,
+				$kpi,
+				"shop_ids=[{$non_positive}] 目前等同於「不過濾」——這正是哨符必須是正整數的原因。"
+				. '若本條轉紅，代表 build_extra_where() 已改為 fail-closed，請一併把哨符換回 0'
+			);
+		}
+
+		// 釘住 baseline 本身，避免「兩邊同時歸零所以相等」的假綠燈。
+		$this->assertSame( '500.00', $baseline['profit_pending'] );
+	}
+
+	/**
+	 * edge：重複的 shop_id 不得讓金額重複計入
+	 *
+	 * `EXISTS` 子查詢理論上不會因為 `IN (5,5,5)` 而放大結果，但這條把它鎖成契約——
+	 * 日後若有人把 EXISTS 改寫成 `JOIN`（很自然的「優化」），重複值就會讓同一筆
+	 * line item 被 join 出多列、金額直接翻倍，而且沒有任何錯誤訊息。
+	 *
+	 * @test
+	 * @group edge
+	 */
+	public function test_duplicate_shop_ids_do_not_multiply_amounts(): void {
+		$single = $this->provider->summary_for_partner(
+			$this->partner_a_id,
+			new FilterCriteria( shop_ids: [ $this->shop_a_id ], per_page: 100 )
+		);
+		$repeated = $this->provider->summary_for_partner(
+			$this->partner_a_id,
+			new FilterCriteria( shop_ids: [ $this->shop_a_id, $this->shop_a_id, $this->shop_a_id ], per_page: 100 )
+		);
+
+		$this->assertSame( $single, $repeated, '重複的 shop_id 不得改變任何一個 KPI 欄位' );
+
+		// 明確釘住數值，避免「兩邊同時壞掉所以相等」的假綠燈。
+		$this->assertSame( '200.00', $repeated['profit_pending'] );
+		$this->assertSame( '1760.00', $repeated['total_sales'] );
+
+		$this->assertCount(
+			3,
+			$this->provider->find_by_partner(
+				$this->partner_a_id,
+				new FilterCriteria( shop_ids: [ $this->shop_a_id, $this->shop_a_id ], per_page: 100 )
+			),
+			'shop_A 有 order_1 / order_2 / order_5 三筆；重複 shop_id 讓它變 6 筆就是 JOIN 放大'
 		);
 	}
 }

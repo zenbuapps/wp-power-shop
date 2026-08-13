@@ -51,6 +51,13 @@ final class InMemorySettlementSummaryProvider implements SettlementSummaryProvid
 	private array $list_by_partner = [];
 
 	/**
+	 * 預埋：partner_term_id => 賣場清單
+	 *
+	 * @var array<int, array<int, array{shop_id: int, shop_name: string}>>
+	 */
+	private array $shops_by_partner = [];
+
+	/**
 	 * 紀錄被呼叫過的 (method, partner_term_id, criteria) — 驗證 partner_term_id 鎖定行為
 	 *
 	 * @var array<int, array{method: string, partner_term_id: int, criteria: FilterCriteria|null, extra: array<string, mixed>}>
@@ -121,6 +128,23 @@ final class InMemorySettlementSummaryProvider implements SettlementSummaryProvid
 		return $this->list_by_partner[ $partner_term_id ] ?? [];
 	}
 
+	/**
+	 * 回傳指定 partner 出現過的賣場清單
+	 *
+	 * @param int $partner_term_id partner term ID
+	 *
+	 * @return array<int, array{shop_id: int, shop_name: string}>
+	 */
+	public function shops_for_partner( int $partner_term_id ): array {
+		$this->invocations[] = [
+			'method'          => 'shops_for_partner',
+			'partner_term_id' => $partner_term_id,
+			'criteria'        => null,
+			'extra'           => [],
+		];
+		return $this->shops_by_partner[ $partner_term_id ] ?? [];
+	}
+
 	// ========== test seeding ==========
 
 	/**
@@ -151,6 +175,16 @@ final class InMemorySettlementSummaryProvider implements SettlementSummaryProvid
 	 */
 	public function seed_list( int $partner_term_id, array $list ): void {
 		$this->list_by_partner[ $partner_term_id ] = $list;
+	}
+
+	/**
+	 * 預埋指定 partner 的賣場清單
+	 *
+	 * @param int                                            $partner_term_id partner term ID
+	 * @param array<int, array{shop_id: int, shop_name: string}> $shops       賣場清單
+	 */
+	public function seed_shops( int $partner_term_id, array $shops ): void {
+		$this->shops_by_partner[ $partner_term_id ] = $shops;
 	}
 
 	// ========== assertions helper ==========

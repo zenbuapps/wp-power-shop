@@ -56,4 +56,44 @@ interface SettlementSummaryProviderInterface {
 	 * @return array<int, array<string, mixed>> 每筆 settlement 的鍵值陣列
 	 */
 	public function find_by_partner( int $partner_term_id, FilterCriteria $criteria ): array;
+
+	/**
+	 * 回傳該 partner 報表可篩選的賣場清單
+	 *
+	 * 🔴 **必須是兩個來源的聯集**，缺任一邊都會讓夥伴少看到自己的賣場：
+	 *
+	 *   A. **目前指派給他的賣場**（powershop CPT，`status = publish`）
+	 *      → 涵蓋「站長指派了但還沒出單」的新賣場。
+	 *   B. **結算紀錄中出現過的 shop_id**（order itemmeta 凍結值）
+	 *      → 涵蓋「賣場已被刪除 / 已改派給別人」但歷史業績仍屬於他的情況。
+	 *
+	 * 兩者互不包含，所以不能只取其一：
+	 *
+	 *   | 情況 | 只有 A | 只有 B |
+	 *   |---|---|---|
+	 *   | 新賣場、零業績 | ✅ 列得到 | ❌ 消失 |
+	 *   | 賣場已刪除、業績還在 | ❌ 消失（但總計仍含它 ⇒ 數字對不起來） | ✅ 列得到 |
+	 *   | 賣場改派給別人、舊業績仍是他的 | ❌ 消失 | ✅ 列得到 |
+	 *
+	 * ⚠️ 曾經只用 B 而漏掉 A：夥伴名下兩個賣場只顯示出一個，而且他**無從分辨**
+	 *    「那個賣場這期間沒業績」與「系統漏了它」——後者才是使用者實際回報的困惑。
+	 *    「選了看到 0」不是缺點，那是誠實的答案；看不到選項才是資訊缺失。
+	 *
+	 * ⚠️ A 只取 `publish`：`draft` 賣場沒有可用的前台網址，對夥伴而言還不存在，
+	 *    列出來只會讓人以為已經上線。若它曾經上線並產生過業績，B 會涵蓋它。
+	 *
+	 * 🔴 **IDOR 在結構上不可能**：A 查 `_profit_partner_term_id = $partner_term_id` 的 postmeta、
+	 *    B 查同名 order itemmeta，兩者都鎖在該 partner 上；而真正的資料過濾另外由
+	 *    `FilterCriteria::$shop_ids` 疊在已鎖 partner 的主查詢上——就算清單被竄改，
+	 *    拿別人的 shop_id 去篩也只會得到空集合。
+	 *
+	 * ⚠️ 回傳的 `shop_name` 已由實作端解析完成（查不到或已 trash 一律給明確的佔位文字），
+	 *    呼叫端**不需要**也**不應該**再自己查一次 post title——那會讓「已刪除」的判斷
+	 *    出現兩份定義。
+	 *
+	 * @param int $partner_term_id partner term ID
+	 *
+	 * @return array<int, array{shop_id: int, shop_name: string}> 依賣場名稱排序
+	 */
+	public function shops_for_partner( int $partner_term_id ): array;
 }

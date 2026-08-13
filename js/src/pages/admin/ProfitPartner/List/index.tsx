@@ -1,7 +1,8 @@
 import {
-	CopyOutlined,
+	BarChartOutlined,
 	DeleteOutlined,
 	EditOutlined,
+	KeyOutlined,
 	PictureOutlined,
 	PlusOutlined,
 } from '@ant-design/icons'
@@ -32,6 +33,7 @@ import dayjs from 'dayjs'
 import { memo, useMemo, useState } from 'react'
 
 import {
+	useCopyPartnerPassword,
 	useProfitPartnerDelete,
 	useProfitPartnerList,
 } from '@/pages/admin/ProfitPartner/hooks'
@@ -40,6 +42,7 @@ import {
 	type TProfitPartnerFilterValues,
 } from '@/pages/admin/ProfitPartner/List/Filter'
 import type { TProfitPartner } from '@/pages/admin/ProfitPartner/types'
+import { resolveCopyPartnerPasswordBlockedReason } from '@/pages/admin/ProfitPartner/utils'
 import { mapProfitShopException } from '@/utils/profitShopExceptionMapper'
 
 const { Text } = Typography
@@ -63,26 +66,60 @@ const valueLabelMapper = (
 }
 
 /**
- * 判斷「複製密碼」不可用的原因
+ * 「報表」的停用原因；回傳 null 代表可開啟
  *
- * 回傳 null 代表可用。分離成獨立函式是為了讓「停用」與「停用原因」永遠成套——
- * 只有一顆灰掉的按鈕而沒有原因，站長只會以為功能壞了。
+ * ⚠️ 這一頁的報表按鈕**不帶賣場篩選**——本列就是夥伴本人，涵蓋他名下所有賣場。
+ * （`#/profit-shop` 那一頁的報表按鈕會附掛 `shop_ids` 預先篩選到該賣場，
+ * 見 `ProfitShop/List` 的 `renderReportAction`。）
+ *
+ * `report_url` 是後端唯讀衍生欄位；理論上有 slug 就一定組得出來，
+ * 但契約是 nullable，仍照實處理而非用 `!` 斷言掉。
  *
  * @param {TProfitPartner} record 夥伴資料
  * @return {string|null} 不可用的原因；可用時回 null
  */
-const resolveCopyPasswordBlockedReason = (
+const resolveOpenReportBlockedReason = (
 	record: TProfitPartner
 ): string | null => {
-	if (!record.password) {
-		return '此夥伴建立於舊版，資料庫僅存不可逆的雜湊，無法還原密碼。請進編輯頁重設一次密碼。'
+	if (!record.report_url) {
+		return '此分潤夥伴尚未產生報表網址'
 	}
 	return null
 }
 
+/**
+ * Table `scroll.x`：各欄 width 總和
+ *
+ * 夥伴圖片 100 + 名稱 260 + Slug 200 + 聯絡 Email 220 + 建立時間 170 + 操作 340。
+ * 改動任一欄寬度時要一起更新，否則橫向捲軸會算錯。
+ *
+ * ⚠️ 改動前先讀 `ACTIONS_COLUMN_WIDTH` 的註解——操作欄寬度算錯的後果不是「有點擠」，
+ * 是最右邊的按鈕被裁掉、點不到，而且沒有任何錯誤訊息。
+ */
+const COLUMNS_TOTAL_WIDTH = 1290
+
+/**
+ * 操作欄寬度：[報表][複製密碼][編輯][刪除] 四顆 type="link" size="small" 按鈕
+ *
+ * 依 antd 5.26.1 實算：paddingInline 7×2 + icon 14 + gap 8 + 14px×字數
+ *   → 2 字 = 64px、4 字 = 92px
+ * 加總：64（報表）+ 92（複製密碼）+ 64（編輯）+ 64（刪除）
+ *     + Space size="small" 的 3×8 gap + Table size="small" 的 cell padding 16
+ *     = 324 → 取 340，留一顆 2 字按鈕的餘裕（不是留 4px 這種一加東西就爆的餘裕）。
+ *
+ * ⚠️ 算不夠時的實際行為（不是自動換行、也不是欄位自己變寬）：
+ * rc-table 在 `fixed` 欄配數字 `scroll.x` 時解析為 `table-layout: fixed`，
+ * colgroup 寬度是硬的；`Space` 是 inline-flex 且未設 `flex-wrap` ⇒ 不換行；
+ * `<td>` 沒有 `overflow: hidden` ⇒ 內容直接向右溢出 `position: sticky; right: 0`
+ * 的儲存格，被捲動容器裁掉 ⇒ **「刪除」被切一半、點不到**。
+ * 而且只在「容器寬度 < scroll.x」時才會出現（1440px 筆電配 WP 側邊欄就會踩到），
+ * 開發者在寬螢幕上完全看不到。
+ */
+const ACTIONS_COLUMN_WIDTH = 340
+
 const ListComponent = () => {
 	const go = useGo()
-	const { notification, message } = App.useApp()
+	const { notification } = App.useApp()
 	const [form] = Form.useForm<TProfitPartnerFilterValues>()
 
 	/** 已按下「篩選」的條件（打字當下不即時過濾，與 useTable 的 submit 行為一致） */
@@ -90,6 +127,7 @@ const ListComponent = () => {
 
 	const { data, isLoading, isFetching } = useProfitPartnerList()
 	const deleter = useProfitPartnerDelete()
+	const copyPartnerPassword = useCopyPartnerPassword()
 
 	// V2Api 統一裹 {code, data}
 	const partners: TProfitPartner[] = useMemo(() => {
@@ -127,21 +165,6 @@ const ListComponent = () => {
 			return true
 		})
 	}, [partners, applied])
-
-	/** 複製該夥伴的報表登入密碼到剪貼簿 */
-	const handleCopyPassword = async (record: TProfitPartner) => {
-		if (!record.password) return
-
-		try {
-			// Clipboard API 需要 secure context（https / localhost）。
-			// 不做 document.execCommand fallback：那個 API 已廢棄，且失敗時
-			// 明確要求站長手動複製，比靜默失敗（以為複製到了、貼出空白）好。
-			await navigator.clipboard.writeText(record.password)
-			message.success(`已複製「${record.name}」的密碼`)
-		} catch {
-			message.warning('瀏覽器拒絕剪貼簿存取，請進編輯頁手動複製')
-		}
-	}
 
 	const handleDelete = async (id: number) => {
 		try {
@@ -233,15 +256,116 @@ const ListComponent = () => {
 				),
 		},
 		{
+			/*
+			 * 按鈕順序：[報表][複製密碼][編輯][刪除]
+			 *
+			 * 與 `#/profit-shop` 共用同一條不變量——**分享群組在前、編輯次之、
+			 * 刪除永遠最後**。兩頁的「編輯與刪除永遠是最後兩顆」是站長最容易記住、
+			 * 也最不會因未來再加按鈕而位移的錨點（新按鈕一律往前面的群組加）。
+			 */
 			title: '操作',
 			key: 'actions',
-			width: 240,
+			width: ACTIONS_COLUMN_WIDTH,
 			fixed: 'right',
 			render: (_: unknown, record: TProfitPartner) => {
-				const copyBlockedReason = resolveCopyPasswordBlockedReason(record)
+				const reportBlockedReason = resolveOpenReportBlockedReason(record)
+
+				// 本頁一列就是一個夥伴，record 必然存在（沒資料時不會 render 任何列），
+				// 因此查詢狀態恆為 'ready'。三態是為了跨頁共用同一個判定函式
+				// （`#/profit-shop` 需要區分載入中 / 查詢失敗 / 真的找不到），
+				// 見 resolveCopyPartnerPasswordBlockedReason 的 docblock。
+				const copyBlockedReason = resolveCopyPartnerPasswordBlockedReason(
+					record,
+					'ready'
+				)
 
 				return (
 					<Space size="small">
+						{/*
+						 * ⚠️ antd v5 的 <Tooltip> 直接包 disabled <Button> **不會顯示**
+						 * （v5 拿掉了 v4 的 disabled 相容包裝，瀏覽器又不對 disabled button
+						 * 派發滑鼠事件）。停用分支必須外包一層 <span> 承接事件，
+						 * 按鈕本身加 pointer-events-none 讓事件穿透上去。
+						 * 詳見 .claude/rules/react.rule.md §2。
+						 *
+						 * 停用分支也**整顆不帶 href** —— DOM 裡沒有網址，左鍵 / 中鍵 /
+						 * Ctrl 點擊 / 右鍵「在新分頁開啟」全都無從觸發。antd 雖然目前
+						 * 會在 disabled 時自行拿掉 href，但那是內部實作，
+						 * 版本行為一變就是個安靜的「停用卻仍可點開」漏洞。
+						 *
+						 * ⚠️ 「報表」的兩條分支**刻意不對稱**（站長指定，2026-08-13）：
+						 * 可用分支**不掛 Tooltip**（滑過每一列都彈說明很吵），
+						 * 停用分支**保留**——那是「為什麼這顆是灰的」的唯一揭露管道，
+						 * 拿掉就只剩一顆沒有理由的灰按鈕（`admin-list-ui.rule.md`
+						 * §1「8 的補充」明文反對）。**不是漏改。**
+						 *
+						 * 範圍僅限「報表」：`#/profit-shop` 的「報表」同此處理，
+						 * 但**同一列「複製密碼」的 tooltip 兩條分支都保留**——
+						 * 站長只指定了報表，而複製密碼的可用分支 tooltip 帶著夥伴名稱，
+						 * 在賣場列表上是必要的身分揭露（一列是賣場、密碼卻屬於夥伴）。
+						 */}
+						{reportBlockedReason ? (
+							<Tooltip title={reportBlockedReason}>
+								<span className="inline-block cursor-not-allowed">
+									<Button
+										type="link"
+										size="small"
+										disabled
+										icon={<BarChartOutlined />}
+										className="pointer-events-none"
+									>
+										報表
+									</Button>
+								</span>
+							</Tooltip>
+						) : (
+							<Button
+								type="link"
+								size="small"
+								icon={<BarChartOutlined />}
+								href={record.report_url ?? undefined}
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								報表
+							</Button>
+						)}
+
+						{/*
+						 * 密碼鈕用 KeyOutlined 而非 CopyOutlined：`#/profit-shop` 的操作欄
+						 * 第一顆在 shortcode 模式下也是「複製」（CopyOutlined），
+						 * 兩顆同 icon、同「複製…」開頭只隔一顆按鈕，按錯的代價**不對稱**——
+						 * 誤按短碼只是貼出無害短碼，誤按密碼則是把明文密碼放進剪貼簿，
+						 * 而站長當下的下一步正是「貼進公開頁面並發佈」。
+						 * 兩頁必須用同一個 icon，否則同一個動作在兩頁長得不一樣。
+						 */}
+						{copyBlockedReason ? (
+							<Tooltip title={copyBlockedReason}>
+								<span className="inline-block cursor-not-allowed">
+									<Button
+										type="link"
+										size="small"
+										disabled
+										icon={<KeyOutlined />}
+										className="pointer-events-none"
+									>
+										複製密碼
+									</Button>
+								</span>
+							</Tooltip>
+						) : (
+							<Tooltip title={`複製「${record.name}」的報表登入密碼`}>
+								<Button
+									type="link"
+									size="small"
+									icon={<KeyOutlined />}
+									onClick={() => copyPartnerPassword(record)}
+								>
+									複製密碼
+								</Button>
+							</Tooltip>
+						)}
+
 						<Button
 							type="link"
 							size="small"
@@ -259,39 +383,6 @@ const ListComponent = () => {
 							編輯
 						</Button>
 
-						{/*
-						 * ⚠️ antd v5 的 <Tooltip> 直接包 disabled <Button> **不會顯示**
-						 * （v5 拿掉了 v4 的 disabled 相容包裝，瀏覽器又不對 disabled button
-						 * 派發滑鼠事件）。停用分支必須外包一層 <span> 承接事件，
-						 * 按鈕本身加 pointer-events-none 讓事件穿透上去。
-						 * 詳見 .claude/rules/react.rule.md §2。
-						 */}
-						{copyBlockedReason ? (
-							<Tooltip title={copyBlockedReason}>
-								<span className="inline-block cursor-not-allowed">
-									<Button
-										type="link"
-										size="small"
-										disabled
-										icon={<CopyOutlined />}
-										className="pointer-events-none"
-									>
-										複製密碼
-									</Button>
-								</span>
-							</Tooltip>
-						) : (
-							<Tooltip title="複製此夥伴的報表登入密碼">
-								<Button
-									type="link"
-									size="small"
-									icon={<CopyOutlined />}
-									onClick={() => handleCopyPassword(record)}
-								>
-									複製密碼
-								</Button>
-							</Tooltip>
-						)}
 						<Popconfirm
 							title="確定刪除此夥伴？"
 							description={
@@ -353,7 +444,7 @@ const ListComponent = () => {
 						pageSize: 20,
 						...getDefaultPaginationProps({ label: '夥伴' }),
 					}}
-					scroll={{ x: 1180 }}
+					scroll={{ x: COLUMNS_TOTAL_WIDTH }}
 					locale={{
 						emptyText: (
 							<Empty

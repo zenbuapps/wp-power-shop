@@ -117,6 +117,19 @@ pnpm release:major
 
     後果：`render_via_theme_template()` 的 `get_the_ID() !== $shop_id` 閘門**兩次都成立** ⇒ 商品 grid 一次都沒附加 ⇒ **賣場網址改印兩篇不相干文章，HTTP 200、零錯誤訊息**。三組對照（唯一變因是範本內有沒有 loop，數字依序是前台 HTML 內 `.ps-profit-shop-front` / `data-ps-product-id` / `data-ps-modal-for` 的出現次數）：baseline `1/7/6`、**有 loop `0/0/0`**、無 loop `1/7/6`。⇒ `setup_shop_post_context()` 這類自訂渲染流程必須把主查詢**整組**改寫成那一篇（`posts` / `post_count` / `current_post` + `queried_object`），不能只設全域 `$post`。
 
+42. **Don't** 在 HashRouter 的 SPA 裡用 react-router 的 `useLocation().search` 去讀「外部連結帶進來的 query string」——**那兩個 search 是不同的東西**，兩支 SPA（admin 與 partner portal）都是 HashRouter：
+
+    | 讀法 | 讀到的是 | 例 |
+    |---|---|---|
+    | `window.location.search` | hash **之前** 的 query（外部連結帶進來的） | `/profit-report/alpha/?shop_ids=1932` → `?shop_ids=1932` |
+    | `useLocation().search`（react-router） | hash **之內** 的 query（SPA 自己導航時寫的） | `#/login?reason=password_changed` → `?reason=password_changed` |
+
+    ⚠️ **同一個檔案裡兩種都存在，所以「照抄隔壁那行」正好會出錯**：`partner-portal/pages/Login.tsx` 讀 `?reason=` 用的是後者（那個參數確實在 hash 內，由 `forceLogoutAndRedirect()` 寫進 `window.location.hash`），而賣場深連結 `?shop_ids=` 在 hash **之前**。照抄的症狀是**讀到空字串、功能靜默失效、畫面完全正常、零錯誤訊息**。
+
+    **外部參數能在登入流程中存活，是靠一條必須主動維持的性質**：partner portal 內所有導頁——`handleLogout` / `forceLogoutAndRedirect`（`AuthContext.tsx`）、401 interceptor（`api/client.ts`）、登入成功的 `navigate('/')`——**一律只寫 `window.location.hash`，從不碰 `window.location.search`**，也沒有任何 `location.href` / `assign` / `replace` 的全頁導向。因此「未登入 → `#/login` → 登入 → Dashboard」整條路徑上 query string 原封不動。**新增任何導頁邏輯前先確認沒有破壞這條性質**（用 `location.href = ...` 就會整組洗掉）。
+
+    連帶三條（完整推導見 `profit-shop.rule.md` §12.7「賣場深連結」）：解析一律回 **`number[]` 而非原始字串**（portal 網址是公開的，回顯原字串等於讓攻擊者在夥伴已登入的頁面裡放文案）；**不在清單內的合法 id 絕不 prune**（濾成空陣列 ⇒ 不送參數 ⇒ 後端不過濾 ⇒ 顯示**全部**合計，比正解大且無線索）；初始值用 **lazy initializer** 而非 useEffect 延後套用（三個 report hook 都沒有 `enabled` 閘門，會先閃一輪偏大的數字）。
+
 ## Profit Shop Domain（v1 開發中）
 
 > 全新「分潤賣場」系統，與舊版 legacy 一頁商店共存。

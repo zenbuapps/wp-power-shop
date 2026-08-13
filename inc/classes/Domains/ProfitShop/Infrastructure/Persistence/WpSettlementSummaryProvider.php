@@ -10,6 +10,7 @@ namespace J7\PowerShop\Domains\ProfitShop\Infrastructure\Persistence;
 use J7\PowerShop\Domains\ProfitShop\Application\Service\SettlementSummaryProviderInterface;
 use J7\PowerShop\Domains\ProfitShop\Domain\Criteria\FilterCriteria;
 use J7\PowerShop\Domains\ProfitShop\Domain\Entity\SettlementRecord;
+use J7\PowerShop\Domains\ProfitShop\Infrastructure\WordPress\CptRegistrar;
 
 /**
  * Partner Report 用的 WP 真實聚合實作
@@ -435,6 +436,127 @@ final class WpSettlementSummaryProvider implements SettlementSummaryProviderInte
 			];
 		}
 		return $list;
+	}
+
+	/**
+	 * 回傳該 partner 報表可篩選的賣場清單（指派中的 ∪ 有過業績的）
+	 *
+	 * 兩個來源為何缺一不可、以及 IDOR 為何在結構上不可能，完整推導見
+	 * `SettlementSummaryProviderInterface::shops_for_partner()`。
+	 *
+	 * ⚠️ **刻意不吃 FilterCriteria**：選單內容若隨日期區間變動，使用者切一下期間，
+	 * 目前選中的賣場就可能從選單裡消失（畫面上還顯示著它、篩選卻已失效）。
+	 * 「這個賣場在這段期間沒有業績」該由 KPI / 圖表的空狀態表達，不是讓選項自己消失。
+	 *
+	 * ⚠️ 結算紀錄那一半**必須**保留訂單型別（`shop_order`）與排除狀態兩道過濾——
+	 * 少了它們，一張被取消的訂單就足以讓某個賣場進入選單。
+	 * （但賣場本來就在 A 來源裡時仍會出現，那是正確的：它確實是他的賣場。）
+	 *
+	 * @param int $partner_term_id partner term ID
+	 *
+	 * @return array<int, array{shop_id: int, shop_name: string}>
+	 */
+	public function shops_for_partner( int $partner_term_id ): array {
+		if ( $partner_term_id <= 0 ) {
+			return [];
+		}
+
+		global $wpdb;
+
+		/*
+		* 來源 A：目前指派給該夥伴、且已發佈的賣場（涵蓋零業績的新賣場）。
+		*
+		* 複用 CptProfitShopRepository::find_by_partner()（同 namespace）而不是自己寫一份
+		* meta_query——「賣場屬於誰」的查法只該有一個定義。它回 publish + draft，
+		* 這裡只取 publish（draft 沒有可用的前台網址，對夥伴而言還不存在）。
+		*/
+		$assigned_ids = [];
+		foreach ( CptProfitShopRepository::instance()->find_by_partner( $partner_term_id ) as $shop ) {
+			if ( 'publish' === $shop->status() ) {
+				$assigned_ids[] = $shop->id;
+			}
+		}
+
+		$is_hpos = self::is_hpos_enabled();
+
+		$sql_join_orders = $is_hpos
+		? "INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id"
+		: "INNER JOIN {$wpdb->posts} o ON o.ID = oi.order_id";
+
+		$order_status_col = $is_hpos ? 'o.status' : 'o.post_status';
+		$order_type_col   = $is_hpos ? 'o.type' : 'o.post_type';
+
+		$status_placeholders = implode( ',', array_fill( 0, count( self::EXCLUDED_ORDER_STATUSES ), '%s' ) );
+
+		$sql = "SELECT DISTINCT oim_shop.meta_value AS shop_id
+			FROM {$wpdb->prefix}woocommerce_order_itemmeta oim_partner
+			INNER JOIN {$wpdb->prefix}woocommerce_order_items oi ON oi.order_item_id = oim_partner.order_item_id
+			{$sql_join_orders}
+			INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim_shop
+				ON oim_shop.order_item_id = oim_partner.order_item_id
+				AND oim_shop.meta_key = %s
+			WHERE oim_partner.meta_key = %s
+				AND oim_partner.meta_value = %d
+				AND {$order_type_col} = %s
+				AND {$order_status_col} NOT IN ({$status_placeholders})";
+
+		$args = array_merge(
+			[
+				self::META_SHOP_ID,
+				self::META_PARTNER_TERM_ID,
+				$partner_term_id,
+				OrderItemSettlementRepository::ORDER_POST_TYPE,
+			],
+			self::EXCLUDED_ORDER_STATUSES
+		);
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared
+		$rows = $wpdb->get_col( $wpdb->prepare( $sql, $args ) );
+		// phpcs:enable
+
+		// 來源 B：結算紀錄中出現過的 shop_id（涵蓋已刪除 / 已改派的賣場）
+		$settled_ids = is_array( $rows ) ? array_map( 'intval', $rows ) : [];
+
+		// A ∪ B —— 缺任一邊都會讓夥伴少看到自己的賣場（見 interface docblock 的對照表）
+		$ids = array_values(
+			array_unique(
+				array_filter(
+					array_merge( $assigned_ids, $settled_ids ),
+					static fn( int $id ): bool => $id > 0
+				)
+			)
+		);
+
+		if ( empty( $ids ) ) {
+			return [];
+		}
+
+		\_prime_post_caches( $ids, false, false );
+
+		$shops = [];
+		foreach ( $ids as $id ) {
+			$post = \get_post( $id );
+
+			$is_live = $post instanceof \WP_Post
+			&& CptRegistrar::POST_TYPE === $post->post_type
+			&& 'trash' !== $post->post_status;
+
+			/*
+			* 「已刪除」的顯示文字直接引用 admin 端的常數（同 namespace，無需 use）。
+			* 複製一份字面值的話，站長在後台結算頁與夥伴在自己報表上會看到不同的字，
+			* 而兩邊指的是同一件事——這種漂移沒有任何自動化檢查攔得住。
+			*/
+			$shops[] = [
+				'shop_id'   => $id,
+				'shop_name' => $is_live
+					? (string) $post->post_title
+					: WpAdminSettlementQuery::DELETED_SHOP_LABEL,
+			];
+		}
+
+		usort( $shops, static fn( array $a, array $b ): int => strcmp( $a['shop_name'], $b['shop_name'] ) );
+
+		return $shops;
 	}
 
 	// ============================================================

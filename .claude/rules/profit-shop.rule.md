@@ -135,8 +135,20 @@ public function __construct(
 
 - Token 永不存明文：transient key 為 `sha256(token)`，value 含 `partner_term_id` + `expires_at`
 - `PartnerTokenStore::issue/verify/revoke` 是唯一管道
-- TTL 抽常數 `PARTNER_TOKEN_TTL_SECONDS`（目前 3600）
-- Cookie：`HttpOnly` + `Secure` + `SameSite=Lax` + `Path=/wp-json/power-shop/`（常數 `PARTNER_COOKIE_PATH`）
+- TTL 走 `V2Api::partner_token_ttl()`，預設 `PARTNER_TOKEN_TTL_DEFAULT_SECONDS = 14 * DAY_IN_SECONDS`
+  （2026-08 由 3600 調整，對齊 WordPress `wp_set_auth_cookie()` 在「保持登入」時的 14 天）。
+  站台可掛 `power_shop_partner_token_ttl` filter 覆寫；非正整數退回預設值
+  （0 在 transient API 的語意是「永不過期」，會讓 token 變成永久有效）。
+  🔴 **刻意不呼叫 WordPress 的 `auth_cookie_expiration` filter**——那個 filter 的第二參數是
+  `$user_id`，而分潤夥伴是 taxonomy term、不是 WP user，傳 0 會讓依 user 判斷的第三方 filter
+  落到錯誤分支。
+  ⚠️ **改動 TTL 時必須連帶檢查 `PartnerTokenStore::SNAPSHOT_KEY` 與 `verify()` 的 docblock**：
+  那兩處原本用「TTL 3600，一小時內自然汰換」論證 legacy 分支可以不永久保留，
+  TTL 一改那個推導就不成立（現行依據已改寫為「該欄位上線時 TTL 仍是 1 小時，
+  上線至今遠超過 1 小時」）。
+- Cookie：`HttpOnly` + `Secure` + `SameSite=Lax` + `Path=/wp-json/power-shop/`（常數 `PARTNER_COOKIE_PATH`），
+  `Max-Age` 與 token transient **取自同一個來源**（`partner_token_ttl()`），
+  否則會出現「cookie 還在但 transient 已過期」的 401 認知不一致
 
 ### Rate Limit
 
@@ -153,7 +165,7 @@ public function __construct(
 | termmeta | 用途 | 誰可以讀 |
 |---|---|---|
 | `_partner_password` | `wp_hash_password` 雜湊，**`verify_password()` 的唯一依據** | 只有驗證路徑 |
-| `_partner_password_plain` | 明文，**只供顯示**（後台查看 / 複製） | 只有 admin-only endpoint |
+| `_partner_password_plain` | 明文，**只供顯示**（後台查看 / 複製） | 只有 `manage_options`（見紀律 4） |
 
 **四條紀律：**
 
@@ -165,10 +177,32 @@ public function __construct(
 3. **明文寫入前必須 `wp_slash()`**。`update_metadata()` 內部會對值跑一次 `wp_unslash()`，
    不先 slash 的話密碼裡的 `\` / `'` / `"` 會被靜默吃掉，而雜湊是用原始明文算的——
    後台顯示的密碼會比實際密碼少幾個字元。雜湊那一行不需要（其輸出字元集不含這些字元）。
-4. **`PartnerOutput` 因此含明文，只能用於 admin-only endpoint**。partner-facing 的
-   `GET /partner-auth/me` 刻意在 callback 內明確列舉四個欄位輸出，**不要**「順手」改成
-   回傳 `PartnerOutput::to_array()`，那會把明文送進夥伴的瀏覽器。
+4. **`PartnerOutput` 因此含明文，可見範圍必須收斂到 `manage_options`**。這裡有兩層，
+   缺任一層都不夠：
+
+   **(a) partner-facing endpoint 一律不得使用本 DTO。** `GET /partner-auth/me` 刻意在
+   callback 內明確列舉四個欄位輸出，**不要**「順手」改成回傳 `PartnerOutput::to_array()`，
+   那會把明文送進夥伴的瀏覽器。
    `PartnerCrudTest::test_partner_me_endpoint_never_exposes_plain_password` 是這道護欄。
+
+   **(b) 🔴 admin endpoint 之間的權限也不一致，光靠 endpoint 權限擋不住。**
+   本節先前寫的是「只能用於 admin-only endpoint」，**那句話把兩個不同的能力混為一談**：
+
+   | endpoint | permission_callback | 實際門檻 |
+   |---|---|---|
+   | `GET /profit-partners`、`GET /profit-partners/{id}` | `null` | **`manage_woocommerce`**（shop_manager 通得過） |
+   | `POST\|PUT\|DELETE /profit-partners{/id}` | `admin_only_permission` | `manage_options` |
+
+   兩個 GET 的門檻**比寫入側寬** ⇒ shop_manager **讀得到全站夥伴的明文報表密碼，
+   卻不能改密碼**，而且沒有任何錯誤訊息會提示這件事。修法是在那兩個 GET callback
+   輸出前跑 `V2Api::mask_partner_password_for_current_user()`，
+   非 `manage_options` 者拿到的 `password` 一律為 null。
+   **真正的授權邊界仍是 permission_callback，那個遮蔽是第二道防線**——
+   不要因為有遮蔽就放寬任何 endpoint 的權限。新增任何回傳 `PartnerOutput` 的
+   endpoint 時必須照做：**「這個 endpoint 在後台」不等於「它的讀取者都是站長」。**
+
+   連帶（正確且刻意）：遮蔽後 `#/profit-partner` 與 `#/profit-shop` 兩頁的「複製密碼」
+   按鈕，對 shop_manager 會自然落進既有的「無明文密碼」停用分支。
 
 **保留雜湊而非「只留明文」，是為了讓這個決定可逆**：日後若要收回明文功能，
 只需停止寫入並刪除該 meta，登入流程一行都不用改。
@@ -872,6 +906,72 @@ private const APPLIED_VERSION_OPTION = 'power_shop_profit_applied_rewrite_versio
 測試：`FlushRewriteTest`（IT，4 method）——全新安裝會 flush 並記錄版本 / 版本相同時
 early return 不 flush / 版本不同時重新 flush / 殘留設定不影響前綴常數。
 
+### 遷入舊版：legacy 一頁商店 → 分潤賣場（2026-08-13 修復）
+
+`POST /profit-migration/import` 在此之前是「**只搬殼、不搬內容**」：`ImportLegacyShop` 把
+`items` 寫死成空陣列、把 legacy 的**整包 flat post_meta** 塞進 `settings`。加上前端
+`TLegacyShop` 期待的欄位（`legacy_id` / `importable` / `reason`）後端**一個都沒回**，
+`disabled={!record.importable}` 於是恆為 true ⇒ **站長從 UI 完全按不下「遷入」**；
+就算繞過 UI 直接打 API，匯入後的賣場前台也只會顯示「此賣場暫無商品」。全程零錯誤訊息。
+
+**轉換規則收斂在 `Application/UseCase/Migration/Support/LegacyShopTranslator`**（純 PHP，
+可在 `tests/Unit` 直接測）。legacy 的兩個 meta 與新版的對應關係：
+
+| legacy | 新版 | 備註 |
+|---|---|---|
+| `power_shop_meta`（JSON list） | `items` | `productId` / `regularPrice` / `salesPrice` / `extraBuyerCount` 幾乎一對一 |
+| `power_shop_settings`（JSON object） | `settings` | **欄位名完全相同**（`btnColor` / `showConfetti` / `showStock` / `showBuyerCount` / `startTime` / `endTime`），只需白名單過濾 |
+| `power_shop_report_password` / `_edit_lock` / `_edit_last` | **丟棄** | 新版零消費者；舊版報表密碼先前會被複製進新賣場並經 `GET /profit-shops/{id}` 回傳 |
+
+**🔴 `salesPrice` / `regularPrice` 為 0 代表「不覆寫」，不是「賣 0 元」**
+
+這是本節唯一會直接造成金錢損失的規則，而且 `PriceOverride` **攔不到**
+（0 是合法非負數，`0 <= 90` 也成立）。legacy 兩端各自獨立地都用 falsy 判斷，互為佐證：
+
+- PHP：`legacy/inc/classes/Cart.php::price_refresh()`
+  `if (!empty($sales_price)) set_price($sales_price);`
+  `if (!empty($regular_price) && empty($sales_price)) set_price($regular_price);`
+  （PHP 的 `empty(0)` 與 `empty('0')` 皆為 true ⇒ `salesPrice=0` 時實收 `regularPrice`）
+- React：`legacy/js/.../PowerShopProducts/Cart/index.tsx`
+  `const price = !!salesPrice ? salesPrice : regularPrice`
+
+⇒ 轉換時 `<= 0` 一律正規化為 `null`。**不要**因為「0 也是數字，直接轉字串比較單純」而改掉。
+回歸鎖：`LegacyShopTranslatorTest::test_zero_sales_price_means_no_sale_not_free` +
+`ImportLegacyShopTest::test_imports_legacy_products_into_the_new_shop`（後者的 fixture 刻意
+放一筆 `salesPrice: 0`）。
+
+**變體的資料形狀兩邊不同**：legacy 是 **list**（每項帶 `variationId`，`Cart.php` 用
+`find($variations, ['variationId' => $id])` 線性查找），新版是以 variation_id 為**鍵的 map**。
+
+**四條連帶紀律：**
+
+1. **slug 推導必須共用 `LegacyShopTranslator::resolve_slug()`**。`ListImportableLegacyShops`
+   （判斷可不可以匯入）與 `ImportLegacyShop`（實際匯入）各寫一份的話，只要有一邊漏了
+   「slug 為空 → `legacy-import-{id}`」這個分支，就會出現「列表說可以匯入、按下去卻 409」
+   或反過來的分歧——而分歧正是本功能出包的根因。
+2. **`importable` 的判斷用 `ProfitShopHydrator::from_input()` 做 dry-run**，不自己另寫一套
+   「大概不會有問題吧」的檢查。實際匯入就是走這個 Hydrator，同一份輸入在這裡建得起來、
+   匯入時就一定建得起來。目前 dry-run 攔得到的實例：legacy 資料 `salesPrice > regularPrice`。
+3. **slug 衝突拋 `SlugConflictException`，不自動加後綴**。與 `CreateShop` 一致；自動改名會
+   靜默改掉賣場網址。列表的 `importable` 是事前告知，UseCase 內的檢查是擋「站長開著頁面時
+   別人剛好用掉同一個 slug」的第二道防線。修復前同一筆 legacy 可以**無限次匯入**，
+   每次都產生一個 slug 相同的賣場，而走 `POST /profit-shops` 的同名 slug 卻會被 409 擋下。
+4. **已刪除的商品跳過而非讓整筆失敗**，跳過的 id 經 `skipped_product_ids` 回傳給 UI 顯性告知
+   （`duration: 0` 不自動消失）。匯入不可逆，為一兩個失效商品讓整筆失敗、站長無從補救並不合理；
+   但靜默吞掉更糟。這與 Phase 7 的「三層錯誤處理分工」一致。
+
+**`rate` 由站長在匯入時指定**（`ImportModal` 的「分潤比例（%）」欄位，預設 0）。legacy 沒有
+分潤概念，後端不猜；未帶 `rate` 時維持 0，與改版前行為相同。
+
+**新相依刻意 optional**（`ImportLegacyShop` 的 `slugDetector` / `productLookup`、
+`ListImportableLegacyShops` 的 `slugDetector`）：既有呼叫端與大量既有測試只注入前幾個參數，
+未注入時分別退化為「不檢查衝突」「不過濾已刪商品」，行為與改版前一致。
+
+**回歸鎖**：`LegacyShopTranslatorTest`（11 method，純 Unit）+ `ImportLegacyShopTest`
+（4 → 12 method）+ `LegacyImporterTest`（6 → 12 method，IT）。⚠️ IT 先前所有 fixture 都
+**沒有** `power_shop_meta`（＝零商品），因此「商品有沒有被帶過去」從來沒有被任何一條測試碰到——
+`items` 寫死空陣列也照樣全綠。新增的 `create_legacy_shop_with_products()` 就是補上那個盲區。
+
 ---
 
 ## 8. Slug 衝突（spec §6.11）
@@ -1253,6 +1353,68 @@ partner 在瀏覽器訪問 /profit-report/{slug}/
           → UseCase 從 caller 取（永不從 query string）
         → 裸 payload 回前端（不裹 {code, data}）
 ```
+
+#### 賣場深連結 `?shop_ids=`（2026-08-13）
+
+站長在 `#/profit-shop` 點某一列的「報表」，會開啟該賣場**所屬夥伴**的 portal 並**預先篩選到這個賣場**：
+
+```
+https://{site}/profit-report/{partner-slug}/?shop_ids=1932
+```
+
+admin 端由 `buildReportUrlWithShop()`（`pages/admin/ProfitShop/types.ts`）組出，
+path 與前綴仍完全由後端衍生的 `partner.report_url` 提供，前端**只附加 query string**。
+
+**🔴 必須讀 `window.location.search`，不是 react-router 的 `useLocation().search`**
+
+portal 用 **HashRouter**，兩者是完全不同的東西：
+
+| 讀法 | 讀到的是 | 例 |
+|---|---|---|
+| `window.location.search` | hash **之前** 的 query | `?shop_ids=1932` ✅ |
+| `useLocation().search`（react-router） | hash **之內** 的 query | `#/login?reason=password_changed` |
+
+`Login.tsx` 讀 `?reason=` 用的是後者（那個參數確實在 hash 內，由
+`forceLogoutAndRedirect()` 寫進 `window.location.hash`）。**照抄它的寫法會讀到空字串、
+深連結靜默失效**，且畫面完全正常——沒有任何錯誤訊息。
+解析一律走 `partner-portal/utils/shopIdsParam.ts` 的 `readShopIdsFromLocation()`。
+
+**參數在登入流程中存活的依據**：portal 內所有導頁——`handleLogout` / `forceLogoutAndRedirect`
+（`AuthContext.tsx`）、401 interceptor（`api/client.ts`）、登入成功的 `navigate('/')`——
+**一律只寫 `window.location.hash`，從不碰 `window.location.search`**，也沒有任何
+`location.href` / `assign` / `replace` 的全頁導向。因此「未登入 → `#/login` → 登入 → Dashboard」
+整條路徑上 `?shop_ids=` 原封不動。**新增任何導頁邏輯時必須維持這條性質。**
+
+**五條紀律：**
+
+1. **解析必須嚴格**（`/^\d+$/` 後才 `parseInt`）。少了 regex，`1932abc` / `19px` / `1e3` / `1.9`
+   會被 `parseInt` 部分解析成**看起來合理的正整數**，夥伴被篩到不相干的賣場，畫面正常、數字錯誤。
+2. **🔴 回傳型別必須是 `number[]`，絕不保留原始字串**。portal 網址是公開的（站長本來就會交出去），
+   攻擊者可寄一條 `?shop_ids=1932,系統偵測異常請致電 02-xxx 核對您的密碼` 給夥伴——
+   若實作把 `searchParams.get()` 的原字串回顯進提示訊息，那段話會出現在夥伴**已登入、
+   信任的**報表頁上、樣式與系統警告一致。用型別把這條釘死，讓「不小心回顯原字串」變成 tsc 錯誤；
+   提示文案只能用 `droppedCount` 這個數字。
+3. **🔴 不在清單內的合法 id 絕不 prune**。直覺上想「濾掉」，但濾成空陣列 ⇒ 前端不送參數 ⇒
+   後端不過濾 ⇒ **顯示全部賣場合計**（比正解**大**且無線索）。原樣送給後端，EXISTS 找不到就誠實回 0——
+   那才是正確答案。ShopFilter 改為替這種 id 補一個「#1932（不在您的賣場清單中）」的合成選項
+   （不補的話 antd Select 會渲染裸數字 tag）。**草稿 / 零業績賣場必然走這條路**
+   （`shops_for_partner()` 的來源 A 限 publish、來源 B 需有業績）。
+4. **初始值用 lazy initializer**（`useState(() => readShopIdsFromLocation().ids)`）。
+   `useKpi` / `useTrend` / `useSettlements` **都沒有 `enabled` 閘門**，改用 useEffect 延後套用的話
+   render 1 會先以空篩選發 3 次查詢 ⇒ 畫面先閃一輪**偏大**的數字 ⇒ 再發 3 次。
+   夥伴若在跳動前讀數或截圖，拿到的是錯的且事後無跡可循。
+5. **揭露責任在 Dashboard，不能外包給 ShopFilter**。ShopFilter 有三條提早 return
+   （isLoading / isError / 清單為空）**都不渲染 `<Select>`**，但 `shopIds` 照樣送給三塊報表 ⇒
+   `/partner-reports/shops` 掛掉時，夥伴看到「清單載入失敗」+ 三塊**已被篩選**的數字，
+   沒有任何地方寫著「你正在看單一賣場」，也沒有控制項可以清除 ⇒ 會以為自己被少算了錢。
+   Dashboard 因此自帶一條**常駐 `<Alert>`**（`shopIds.length > 0` 就顯示）+「顯示全部賣場」按鈕。
+   ⚠️ 必須是 `<Alert>` 不是 notification（會自動消失）；且 portal **沒有 `<AntdApp>` provider**，
+   要用 notification 一律靜態 `import { notification } from 'antd'`，**禁用 `App.useApp()`**。
+
+**清除時機**：保留 query（重整仍成立），但夥伴**一改動篩選就** `clearShopIdsFromLocation()`
+（`history.replaceState` 移除該參數、不動 hash）。理由：Dashboard 掛在 `<Route path="/">`
+且自己有 `<Link to="/change-password">`，「清空篩選 → 點修改密碼 → 返回」會讓它 remount，
+不清 URL 的話篩選又被套回去，夥伴會認為「這個篩選器清不掉」。
 
 ### 12.8 賣場前台 + AddToCart 整合（Phase 4-C）
 

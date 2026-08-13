@@ -103,3 +103,18 @@ export type TPartnerFormValues = Omit<TProfitPartnerInput, 'image_id'> & {
 
 /** 前端「產生密碼」按鈕的長度（與後端 regenerate-password 的 12 字元一致） */
 export const GENERATED_PASSWORD_LENGTH = 12
+
+/**
+ * 夥伴列表查詢的三態
+ *
+ * ⚠️ 這裡刻意是**三態**而不是 `isLoading: boolean`。react-query v4 在查詢失敗時
+ * `isLoading` 會變回 `false` 而 `data` 仍是 `undefined`——用兩態判斷的話，
+ * `GET /profit-partners` 回 500 / 403 時每一列都會落進「找不到夥伴」分支，
+ * 站長看到的是「**全部**賣場的分潤夥伴都被刪除了」，可能因此去重建夥伴、
+ * 或懷疑資料損毀。實際上只是一次查詢失敗、重新整理就好。
+ *
+ * - `'loading'`：查詢進行中，**還不能**判定「找不到」
+ * - `'error'`：查詢失敗，`data` 為 undefined 但**不代表**資料不存在
+ * - `'ready'`：查詢成功，此時 `partner` 為 undefined 才真的是「找不到」
+ */
+export type TPartnerQueryState = 'loading' | 'error' | 'ready'

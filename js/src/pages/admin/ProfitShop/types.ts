@@ -37,8 +37,10 @@ export type TProfitShopMode =
 export const PROFIT_SHOP_DISPLAY_PART = {
 	/** 倒數計時盤（daisyUI countdown） */
 	COUNTDOWN: 'countdown',
+
 	/** 站長自訂文字 */
 	TEXT: 'text',
+
 	/** 商品列表（按鈕停用、不可購買） */
 	PRODUCTS: 'products',
 } as const
@@ -116,6 +118,58 @@ export const PROFIT_SHOP_SHORTCODE_TAG = 'power_shop_profit_shop'
  */
 export const buildProfitShopShortcode = (id: number): string =>
 	`[${PROFIT_SHOP_SHORTCODE_TAG} id="${id}"]`
+
+/**
+ * 夥伴報表頁「賣場篩選」的 query string 參數名
+ *
+ * ⚠️ 必須與後端 `GET /partner-reports/*` 接受的參數名逐字一致，也與 partner portal
+ * 前端解析 `window.location.search` 時讀的 key 一致。
+ *
+ * 用**複數** `shop_ids`（CSV）而非 `shop_id`：後端本來就收多值（報表的賣場篩選是多選），
+ * 用單數會讓「一個賣場」與「多個賣場」變成兩套參數，而深連結遲早要支援多選
+ * （例如日後從結算頁帶多個賣場過去）。現在就用複數，未來擴充不需要改契約。
+ */
+export const PROFIT_SHOP_REPORT_FILTER_PARAM = 'shop_ids'
+
+/**
+ * 在夥伴報表網址上附掛「預先篩選到某個賣場」的 query string
+ *
+ * ⚠️ 這**不是**在前端拼接報表網址：path 與前綴仍完全由後端衍生的
+ * `partner.report_url` 提供（見 `TProfitPartner.report_url`），本函式只在既有網址上
+ * 附加一段 query string，不參與網址結構的組成。
+ *
+ * ── 為什麼一定要包成函式、而不是在 render 裡直接 `new URL(...)` ────────
+ *
+ * `new URL(str)` 對任何**非絕對** URL 一律 throw `TypeError`（不是回傳 null）。
+ * `report_url` 的契約是 nullable、值由後端 `home_url()` 衍生，正常情況必為絕對網址；
+ * 但只要哪天站台設定異常、或後端改回傳相對路徑，在 antd Table 的 render callback 裡
+ * 裸呼叫就會**讓整個 `#/profit-shop` 白屏**（admin SPA 這段沒有 error boundary），
+ * 而改動前那行 `href={partner?.report_url ?? undefined}` 是零 throw 的——
+ * 等於為了一個附加功能把整頁的可用性賠進去。
+ *
+ * 因此組合失敗時**fallback 回原始 `reportUrl`**而不是 throw：
+ * 退化成「報表開得起來、只是沒有預先篩選」，那是使用者仍能自行操作篩選器的可用狀態。
+ *
+ * @param {string} reportUrl 後端衍生的夥伴報表網址（絕對網址）
+ * @param {number} shopId    要預先篩選的賣場 ID
+ * @return {string} 附掛 query 後的網址；無法組合時回傳原始 reportUrl
+ */
+export const buildReportUrlWithShop = (
+	reportUrl: string,
+	shopId: number
+): string => {
+	// 不合法的 id 寧可不附掛：`?shop_ids=NaN` 會讓後端走進「清洗後為空」的分支，
+	// 那條路的語意判定遠比「根本沒送這個參數」複雜，沒有理由主動製造它。
+	if (!Number.isInteger(shopId) || shopId <= 0) return reportUrl
+
+	try {
+		const url = new URL(reportUrl)
+		url.searchParams.set(PROFIT_SHOP_REPORT_FILTER_PARAM, String(shopId))
+		return url.toString()
+	} catch {
+		return reportUrl
+	}
+}
 
 /**
  * 價格覆寫（三欄皆 nullable，null 代表「不覆寫該欄位」＝沿用商品原價）

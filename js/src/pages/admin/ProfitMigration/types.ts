@@ -1,7 +1,12 @@
 /**
  * Profit Migration 前端型別定義
  *
- * 對齊 specs/api/api.yml 的 LegacyShopRef + import endpoint。
+ * 對齊後端 `ListImportableLegacyShops` / `ImportLegacyShop` 的實際回傳。
+ *
+ * ⚠️ 這份型別曾經與後端完全對不上（前端要 `legacy_id` / `importable`，後端回 `id` / `meta`），
+ * 造成「遷入」按鈕永久 disabled、站長完全無法使用此功能。改動任一端時，
+ * 請同步確認另一端——後端的欄位定義在
+ * `ListImportableLegacyShops::describe()` 的回傳型別註解。
  *
  * Migration 流程不可逆（spec §4.7）：
  *   - legacy 一頁商店資料會「轉換」成 ProfitShop CPT，原資料保留但不在標準 UI 上呈現
@@ -12,25 +17,36 @@
 /**
  * 可遷入的 legacy 一頁商店參照（profit-migration/legacy-shops 列表項）
  *
- * 對應 OpenAPI LegacyShopRef。
- * importable=false 時 reason 會說明原因（例：已遷入過 / slug 衝突 / 缺必要欄位）。
+ * `importable=false` 時 `reason` 會說明原因，目前有兩種：
+ *   1. 永久連結已被其他賣場／頁面／商品佔用（後端走 SlugConflictDetector 判定）
+ *   2. 舊版商品資料無法轉換（例如特價高於原價，會被 PriceOverride 擋下）
  */
 export type TLegacyShop = {
 	legacy_id: number
 	title: string
 	slug: string
 	importable: boolean
-	reason?: string
+	reason: string | null
+	/** 轉換後會被帶入新賣場的商品筆數 */
+	product_count: number
 }
 
 /**
- * 匯入成功回應 payload（responses.201.data，後端裹 {code, data}，data 是 ProfitShopOutput）
+ * 匯入成功回應 payload（responses.201.data）
  *
- * 此處只取「導頁需要的欄位」做最小耦合：
- *   - shop_id：新建立的 ProfitShop id（前端會 navigate 到 edit）
- *   - partner_term_id：對應 partner 的 term id（呈現提示用）
+ * 後端回的是完整 `ProfitShopOutput`（欄位名是 `id`，**不是** `shop_id`），
+ * 外加一個 `skipped_product_ids`。
+ *
+ * `skipped_product_ids`：legacy 引用了但商品已被刪除，因此沒有被帶入新賣場的 product_id。
+ * 匯入不可逆，這些被丟掉的項目**必須**在 UI 上顯性告知，不能靜默吞掉。
  */
 export type TImportResult = {
-	shop_id: number
+	id: number
+	title: string
+	slug: string
+	status: string
 	partner_term_id: number
+	rate: number
+	items: unknown[]
+	skipped_product_ids: number[]
 }

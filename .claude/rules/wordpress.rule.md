@@ -433,7 +433,7 @@ CI 的三個測試 cycle 現在各跑兩件事：
 | 跑什麼 | 指令 | 涵蓋 |
 |---|---|---|
 | PHPUnit | **不指定 `--testsuite`** ⇒ `phpunit.xml.dist` 宣告的全部 suite | `tests/Unit/**` + `tests/Integration/**`（實測 1017 筆） |
-| vitest | `pnpm test:js` | `tests/js/**`（實測 255 筆 / 17 檔） |
+| vitest | `pnpm test:js` | `tests/js/**`（實測 **326 筆 / 19 檔**，2026-08-13 現查） |
 
 兩者的 exit code 以 OR 合併，**vitest 失敗一樣會觸發既有的 Claude 自動修復迴圈**，不是二等公民。
 

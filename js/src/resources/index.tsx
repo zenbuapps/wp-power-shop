@@ -5,9 +5,6 @@ import {
 	UserOutlined,
 	MailOutlined,
 	TagsOutlined,
-	ShopOutlined,
-	ImportOutlined,
-	WalletOutlined,
 } from '@ant-design/icons'
 import { ResourceProps } from '@refinedev/core'
 import { Tag } from 'antd'
@@ -109,23 +106,24 @@ export const resources: ResourceProps[] = [
 	// 		label: '優惠碼',
 	// 	},
 	// },
-	{
-		parentName: 'marketing',
-		name: 'one-shop',
-		list: '/marketing/one-shop',
+	/*
+	 * 「一頁賣場」（`one-shop`）已於 2026-08-13 移除。
+	 *
+	 * 那頁是一個雙入口導覽頁：一邊介紹新版 Profit Shop、一邊連到舊版 wp-admin。
+	 * 但「介紹新版」對已經站在後台選單裡的站長沒有價值（分潤賣場就在隔壁），
+	 * 真正有用的只有「舊版管理介面在哪」與「為什麼該遷移」——兩者都已併進
+	 * 「遷入舊版」（`profit-migration`）頁面上方的說明卡片，元件檔一併刪除。
+	 */
 
-		// edit: '/one_shop/edit/:id',
-		meta: {
-			label: (
-				<>
-					一頁賣場
-					<span className="bg-orange-500 text-white rounded-full px-1 ml-1 text-[0.625rem]">
-						即將推出
-					</span>
-				</>
-			),
-		},
-	},
+	/*
+	 * 以下四個分潤 resource 刻意**不設 `meta.icon`**。
+	 *
+	 * 本檔的慣例是「icon 只掛在頂層 resource」——`dashboard` / `order-management` /
+	 * `product-management` / `users` / `marketing` / `analytics` / `wp-media-library`
+	 * 有 icon，而所有帶 `parentName` 的子項（`orders` / `products` / `taxonomies` /
+	 * `attributes`）一律沒有。這四個原本是唯一的例外，
+	 * 造成「行銷」展開後上半沒 icon、下半有 icon 的視覺斷層。
+	 */
 	{
 		parentName: 'marketing',
 		name: 'profit-shop',
@@ -134,7 +132,6 @@ export const resources: ResourceProps[] = [
 		edit: '/profit-shop/edit/:id',
 		meta: {
 			label: '分潤賣場',
-			icon: <ShopOutlined />,
 		},
 	},
 	{
@@ -145,7 +142,6 @@ export const resources: ResourceProps[] = [
 		edit: '/profit-partner/edit/:id',
 		meta: {
 			label: '分潤夥伴',
-			icon: <UserOutlined />,
 		},
 	},
 	{
@@ -154,7 +150,6 @@ export const resources: ResourceProps[] = [
 		list: '/profit-settlements',
 		meta: {
 			label: '分潤結算',
-			icon: <WalletOutlined />,
 		},
 	},
 	{
@@ -163,7 +158,6 @@ export const resources: ResourceProps[] = [
 		list: '/profit-migration',
 		meta: {
 			label: '遷入舊版',
-			icon: <ImportOutlined />,
 		},
 	},
 	{

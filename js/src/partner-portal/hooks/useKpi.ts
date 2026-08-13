@@ -14,27 +14,31 @@
 import { useQuery } from '@tanstack/react-query'
 import type { AxiosError } from 'axios'
 
-import { fetchKpi, type TKpiOutput } from '../api/reports'
+import { fetchKpi, toShopIdsKey, type TKpiOutput } from '../api/reports'
 
 /** useKpi 參數：unix timestamp（秒）起訖點 */
 type TUseKpiArgs = {
 	date_start: number
 	date_end: number
+
+	/** 賣場篩選；省略或空陣列 = 全部賣場 */
+	shop_ids?: number[]
 }
 
 /**
  * 取得 partner KPI 資料的 hook
  *
- * @param  args 期間範圍
+ * @param  args 期間範圍與賣場篩選
  * @return {Object} TanStack Query v4 result，含 data / isLoading / isError / refetch 等
  */
 export const useKpi = (args: TUseKpiArgs) => {
-	const { date_start, date_end } = args
+	const { date_start, date_end, shop_ids } = args
 
 	return useQuery<TKpiOutput, AxiosError>({
-		queryKey: ['partner-kpi', date_start, date_end],
+		// shop_ids 排序後序列化，避免選取順序不同造成同一組條件重打（見 toShopIdsKey）
+		queryKey: ['partner-kpi', date_start, date_end, toShopIdsKey(shop_ids)],
 		queryFn: async () => {
-			const res = await fetchKpi({ date_start, date_end })
+			const res = await fetchKpi({ date_start, date_end, shop_ids })
 			return res.data
 		},
 		retry: 0,

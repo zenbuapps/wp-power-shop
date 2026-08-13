@@ -3,6 +3,8 @@ import type { TImage } from 'antd-toolkit/wp'
 import {
 	GENERATED_PASSWORD_LENGTH,
 	type TPartnerFormValues,
+	type TPartnerQueryState,
+	type TProfitPartner,
 } from '@/pages/admin/ProfitPartner/types'
 
 /**
@@ -43,6 +45,69 @@ export const toImageId = (images?: TImage[]): number | null => {
 
 	const id = Number(rawId)
 	return Number.isFinite(id) && id > 0 ? id : null
+}
+
+/**
+ * 判斷「複製密碼」不可用的原因；回傳 null 代表可用
+ *
+ * ── 為什麼這個函式跨 `#/profit-partner` 與 `#/profit-shop` 兩頁共用 ──────
+ *
+ * 兩頁複製的是**同一個東西**：該分潤夥伴的報表登入明文密碼。
+ * `#/profit-shop` 那一列雖然是賣場，複製的仍是 `partner.password`，
+ * 停用條件（沒有明文可複製）與訊息因此逐字相同——共用才是正確的。
+ *
+ * ⚠️ 這**不違反** `admin-list-ui.rule.md` §1「各動作的停用條件要分開判斷、
+ * 不要為了 DRY 併成一個」。那條規則防的是「條件看似相同、但差異點才是關鍵」的情況
+ * （「開啟」要 slug、「複製短碼」不要 slug、「查看報表」連賣場狀態都不看——
+ * 三者檢查的根本是不同的東西）。這裡兩個呼叫端檢查的是**逐字相同**的條件，
+ * 反而是各寫一份會分家：改了一頁的措辭、另一頁沒改，同一個狀況兩頁說法不同。
+ *
+ * ── 訊息措辭必須兩頁都成立 ──────────────────────────────
+ *
+ * 舊訊息結尾是「請進編輯頁重設一次密碼」，在 `#/profit-shop` 上會把站長送到
+ * **賣場**編輯頁（四個 Tab 都沒有密碼欄位），他會翻遍找不到、認定系統壞了。
+ * 因此明確寫出「分潤夥伴編輯頁」。
+ *
+ * ── `state` 三態的必要性 ────────────────────────────────
+ *
+ * 見 `TPartnerQueryState` 的 docblock。同一列的「報表」與「複製密碼」兩顆按鈕
+ * 對同一個狀況必須給出一致的說法，因此兩者都吃這個三態
+ * （`ProfitShop/List` 的 `resolveViewReportBlockedReason` 同步改用）。
+ *
+ * ⚠️ `ProfitPartner/List` 呼叫時 `state` 恆為 `'ready'`——該頁一列就是一個夥伴，
+ * `record` 必然存在（列表沒資料時根本不會 render 任何列）。因此 `!partner` 分支
+ * 在該頁**不可達**，但**不可刪**：跨頁共用的另一端（`ProfitShop/List`，
+ * 以 `partner_term_id` 反查、查得到查不到都有可能）會走到。
+ *
+ * @param {TProfitPartner|undefined} partner 夥伴資料（查不到時為 undefined）
+ * @param {TPartnerQueryState}       state   夥伴列表查詢的三態
+ * @return {string|null} 不可用的原因；可用時回 null
+ */
+export const resolveCopyPartnerPasswordBlockedReason = (
+	partner: TProfitPartner | undefined,
+	state: TPartnerQueryState
+): string | null => {
+	// 載入中先停用，但訊息要與「真的找不到」區分——否則每次進頁面都會閃一次
+	// 「夥伴已被刪除」的假警告
+	if ('loading' === state) {
+		return '分潤夥伴資料載入中，請稍候'
+	}
+
+	// 查詢失敗時 data 為 undefined，但那不代表夥伴不存在——說成「已被刪除」
+	// 會讓站長對著一批其實好好的資料採取補救動作
+	if ('error' === state) {
+		return '分潤夥伴資料載入失敗，請重新整理頁面'
+	}
+
+	if (!partner) {
+		return '找不到此賣場的分潤夥伴（可能已被刪除）'
+	}
+
+	if (!partner.password) {
+		return '此夥伴建立於舊版，資料庫僅存不可逆的雜湊，無法還原密碼。請至分潤夥伴編輯頁重設一次密碼。'
+	}
+
+	return null
 }
 
 /**

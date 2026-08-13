@@ -48,6 +48,8 @@ export const useLegacyShopImport = () => {
 	const mutateAsync = (values: {
 		legacy_id: number
 		partner_term_id: number
+		/** 分潤比例（0-100）。legacy 沒有分潤概念，由站長於匯入時指定 */
+		rate: number
 	}) =>
 		mutation.mutateAsync(
 			{

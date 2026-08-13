@@ -37,7 +37,10 @@ final class UpdatePartner {
 	 * @param int          $id    Partner term ID
 	 * @param PartnerInput $input Partner 輸入 DTO
 	 *
-	 * @return PartnerOutput 更新後輸出 DTO（不含密碼）
+	 * @return PartnerOutput 更新後輸出 DTO，**含明文密碼**；只能回給 `manage_options`，
+	 *                       經權限較寬的 endpoint 輸出前必須套
+	 *                       `V2Api::mask_partner_password_for_current_user()`
+	 *                       （見 `PartnerOutput` 的 class docblock）
 	 *
 	 * @throws PartnerNotFound 當 partner 不存在（slug 不合法時 PartnerSlug 會額外拋 InvalidPartnerSlug）
 	 */

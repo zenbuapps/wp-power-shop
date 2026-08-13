@@ -14,6 +14,7 @@ import type { AxiosError } from 'axios'
 
 import {
 	fetchSettlements,
+	toShopIdsKey,
 	type TSettlementListOutput,
 	type TSettlementStatus,
 } from '../api/reports'
@@ -25,6 +26,9 @@ type TUseSettlementsArgs = {
 	statuses?: TSettlementStatus[]
 	date_start?: number
 	date_end?: number
+
+	/** 賣場篩選；省略或空陣列 = 全部賣場 */
+	shop_ids?: number[]
 }
 
 /**
@@ -34,7 +38,7 @@ type TUseSettlementsArgs = {
  * @return {Object} TanStack Query v4 result
  */
 export const useSettlements = (args: TUseSettlementsArgs) => {
-	const { page, per_page, statuses, date_start, date_end } = args
+	const { page, per_page, statuses, date_start, date_end, shop_ids } = args
 
 	return useQuery<TSettlementListOutput, AxiosError>({
 		queryKey: [
@@ -46,6 +50,9 @@ export const useSettlements = (args: TUseSettlementsArgs) => {
 			statuses ? [...statuses].sort().join(',') : '',
 			date_start ?? 0,
 			date_end ?? 0,
+
+			// 同一條紀律套用到賣場篩選（見 toShopIdsKey）
+			toShopIdsKey(shop_ids),
 		],
 		queryFn: async () => {
 			const res = await fetchSettlements({
@@ -54,6 +61,7 @@ export const useSettlements = (args: TUseSettlementsArgs) => {
 				statuses,
 				date_start,
 				date_end,
+				shop_ids,
 			})
 			return res.data
 		},

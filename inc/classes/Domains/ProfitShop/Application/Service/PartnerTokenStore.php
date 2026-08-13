@@ -54,7 +54,8 @@ final class PartnerTokenStore {
 	 * @param ClockInterface             $clock         時鐘抽象
 	 * @param PartnerRepositoryInterface $partners      Partner repository（用於讀 password_changed_at）
 	 * @param SaltProviderInterface      $salt_provider Salt 提供器（HMAC 用 key）
-	 * @param int                        $ttl           TTL 秒數（預設 3600）
+	 * @param int                        $ttl           TTL 秒數（預設 1 小時；正式路徑由 V2Api 顯式傳入，
+	 *                                                  2026-08 起為 14 天，見 V2Api::partner_token_ttl()）
 	 * @param string                     $key_prefix    Transient key prefix
 	 */
 	public function __construct(
@@ -70,7 +71,15 @@ final class PartnerTokenStore {
 	 * Payload 內「簽發當下的 password_changed_at 快照」欄位名
 	 *
 	 * 舊 token（本欄位上線前簽發）的 payload 沒有這個 key，`verify()` 會據此
-	 * 退回時間比較。TTL 為 3600 秒，一小時內全部自然汰換。
+	 * 退回時間比較（legacy 分支）。
+	 *
+	 * ⚠️ 這條 legacy 分支「已經沒有資料會走到」的依據，在 2026-08 把 TTL 從 1 小時
+	 * 改成 14 天之後**換了一個**——原本的說法是「TTL 3600 秒，一小時內全部自然汰換」，
+	 * 那句話從此不再成立，不要照抄。
+	 *
+	 * 現在的依據是：本欄位上線時 TTL 仍是 1 小時，而上線至今遠超過 1 小時
+	 * ⇒ 當時簽發的 token 早已全數過期；TTL 改為 14 天**之後**簽發的 token 一律含此欄位
+	 * ⇒ legacy 分支不會再被觸發。它保留下來只是防禦性殘留，不是還在服役的相容層。
 	 *
 	 * @var string
 	 */
@@ -161,9 +170,15 @@ final class PartnerTokenStore {
 	 *
 	 * ── 向後相容 ──────────────────────────────────────────────
 	 * 本機制上線前簽發的 token，payload 沒有 `SNAPSHOT_KEY`，會退回時間比較
-	 * （維持 M-1 契約，含它已知的誤殺）。TTL 為 3600 秒，一小時內自然全數汰換，
-	 * 因此那條 legacy 分支**不需要**永久保留——與 cart signature 的 v1 分支
+	 * （維持 M-1 契約，含它已知的誤殺）。
+	 *
+	 * ⚠️ 這裡原本寫的是「TTL 為 3600 秒，一小時內自然全數汰換」——2026-08 把 TTL
+	 * 改成 14 天之後那句話已不成立。**現在的依據**：本機制上線時 TTL 還是 1 小時，
+	 * 上線至今遠超過 1 小時，當時的 token 早已全數過期；之後簽發的一律含快照欄位。
+	 *
+	 * 結論不變：那條 legacy 分支**不需要**永久保留——與 cart signature 的 v1 分支
 	 * （持久化購物車無過期機制，必須永久保留）性質不同，不要混為一談。
+	 * 但推導過程換了，改動 TTL 時請連同這段一起檢查，不要只改數字。
 	 *
 	 * @param string $token 明文 token
 	 *

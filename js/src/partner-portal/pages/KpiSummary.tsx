@@ -33,6 +33,9 @@ import { mapPartnerException } from '../utils/partnerExceptionMapper'
 type TKpiSummaryProps = {
 	dateStart: number
 	dateEnd: number
+
+	/** 賣場篩選；空陣列 = 全部賣場 */
+	shopIds?: number[]
 }
 
 /** 4 張卡片資料源 */
@@ -46,10 +49,12 @@ type TStatCard = {
 const KpiSummaryComponent: React.FC<TKpiSummaryProps> = ({
 	dateStart,
 	dateEnd,
+	shopIds,
 }) => {
 	const { data, isLoading, isError, error, refetch, isFetching } = useKpi({
 		date_start: dateStart,
 		date_end: dateEnd,
+		shop_ids: shopIds,
 	})
 
 	const cards: TStatCard[] = useMemo(
